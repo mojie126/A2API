@@ -167,11 +167,10 @@
 .routing-live-foot > p { margin: 0; }
 .routing-live-foot > p + p { margin-top: 3px; }
 
-/* 路由页使用系统默认字体与字号，拖动期间不触发悬停或变更指针。 */
+/* 路由页使用系统默认字体，字号跟随样式表原有层级，拖动期间不触发悬停或变更指针 */
 .routing-config-shell,
 .routing-config-shell * {
   font-family: inherit !important;
-  font-size: inherit !important;
 }
 .routing-config-shell .routing-grip { cursor: default; }
 body.routing-drag-active,
