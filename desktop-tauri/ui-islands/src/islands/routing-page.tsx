@@ -11,7 +11,7 @@ import { RoutingLegacyWorkbench } from './routing-legacy-workbench'
 import { RoutingExecTimeline } from './routing-exec-timeline'
 import { RoutingRequestList } from './routing-request-list'
 import { useRoutingReplay } from './routing-replay-state'
-import { draftDirty, useRoutingEditor } from './routing-editor-state'
+import { useRoutingEditor } from './routing-editor-state'
 import { RouteIcon, stickyLabel, strategyLabel } from './routing-ui'
 import { isTraceRunning, requestKey } from './routing-trace-model'
 import { bridge, host, type ReplayRow, type RoutingWorkspace } from './routing-types'
@@ -24,8 +24,8 @@ let refreshWorkspace: (() => void) | undefined
 /**
  * 路由页保留两个视图：
  *
- *   配置：恢复 beta 版画布，模型轨道、提供商与账号列表、此刻队列
- *   请求回放：左栏最近请求，右栏回放单条请求的候选、跳过原因、尝试与配置快照。
+ *   路由配置：beta 版画布，模型轨道、网关、提供商与账号画布、已停用提供商分组
+ *   请求跟踪：左栏最近请求，右栏回放单条请求的候选、跳过原因、尝试与配置快照。
  *
  * 配置页的数据来自新版草稿状态：作用范围、策略、粘滞与版本校验仍是最新实现。
  */
@@ -78,11 +78,6 @@ export function RoutingPage() {
     } catch { /* 列表下次刷新会带回新状态 */ }
   }
   const close = () => { setModal(null); replay.refresh() }
-  const reloadConfig = async () => {
-    if (editor.draft && draftDirty(editor.draft)
-      && !await confirmDialog(t('重新读取会丢弃当前范围的未保存草稿，其他范围的草稿保留。'), { title: t('重新读取配置'), confirmText: t('重新读取') })) return
-    void editor.load(editor.scope, true)
-  }
   React.useEffect(() => {
     requestTrace = row => {
       if (!row) return
@@ -99,18 +94,18 @@ export function RoutingPage() {
         setMode(value as 'replay' | 'config')
         if (value === 'config' && !editor.draft && !editor.busy) void editor.load(editor.scope || '')
       }} options={[
-        { value: 'replay', label: <><RouteIcon name='requests' />{t('请求回放')}</> },
-        { value: 'config', label: <><RouteIcon name='route' />{t('配置')}{editor.dirtyCount ? <Badge variant='warning' shape='tag'>{editor.dirtyCount}</Badge> : null}</> },
+        { value: 'config', label: <><RouteIcon name='settings' />{t('路由配置')}{editor.dirtyCount ? <Badge variant='warning' shape='tag'>{editor.dirtyCount}</Badge> : null}</> },
+        { value: 'replay', label: <><RouteIcon name='requests' />{t('请求跟踪')}</> },
       ]} />
-      <span className='routing-page-policy'>{settings ? `${strategyLabel(settings.routingStrategy)} · ${t('粘滞 {mode}', { mode: stickyLabel(settings.routingSticky) })}` : ''}</span>
-      <div className='routing-page-actions'>
+      <span className='routing-page-policy'>{mode === 'config'
+        ? t('配置请求的参与范围与优先顺序')
+        : settings ? `${strategyLabel(settings.routingStrategy)} · ${t('粘滞 {mode}', { mode: stickyLabel(settings.routingSticky) })}` : ''}</span>
+      {mode === 'replay' ? <div className='routing-page-actions'>
         <Button variant='ghost' size='sm' onClick={() => setModal({ kind: 'sticky' })}>
           <RouteIcon name='lock' />{t('会话粘滞')}{replay.sticky.length ? ` · ${replay.sticky.length}` : ''}
         </Button>
-        {mode === 'replay'
-          ? <Button variant='ghost' size='sm' disabled={replay.loading} onClick={() => void refreshReplay()}><RouteIcon name='refresh' />{t('刷新')}</Button>
-          : <Button variant='ghost' size='sm' disabled={editor.loading || editor.busy} onClick={() => void reloadConfig()}><RouteIcon name='refresh' />{t('重新读取')}</Button>}
-      </div>
+        <Button variant='ghost' size='sm' disabled={replay.loading} onClick={() => void refreshReplay()}><RouteIcon name='refresh' />{t('刷新')}</Button>
+      </div> : null}
     </div>
 
     {replay.error && mode === 'replay' ? <div className='routing-page-error' role='alert'>
@@ -144,7 +139,7 @@ export function RoutingPage() {
       {editor.error && !editor.draft ? <div className='routing-page-error' role='alert'>
         <RouteIcon name='info' /><span>{editor.error}</span><Button variant='ghost' size='sm' onClick={() => void editor.load(editor.scope, true)}>{t('重新读取')}</Button>
       </div> : null}
-      <RoutingLegacyWorkbench editor={editor} now={replay.now}
+      <RoutingLegacyWorkbench editor={editor}
         onRequestTrace={() => setMode('replay')}
         onAccount={id => setModal({ kind: 'account', id })}
         onAddModel={() => setModal({ kind: 'model' })}

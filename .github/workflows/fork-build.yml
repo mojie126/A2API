@@ -165,13 +165,20 @@ jobs:
       - name: 校验 Release 附件
         run: |
           set -euo pipefail
-          mapfile -t files < <(find dist -maxdepth 1 -type f | sort)
-          if [[ ${#files[@]} -ne 3 ]]; then
-            echo "::error::Release 附件应为三个，实际 ${#files[@]} 个"
-            printf '%s\n' "${files[@]}"
+          mapfile -t desktop < <(find dist -maxdepth 1 -type f -name '*.exe' | sort)
+          mapfile -t server < <(find dist -maxdepth 1 -type f \( -name '*.zip' -o -name '*.sha256' \) | sort)
+          if [[ ${#desktop[@]} -ne 1 ]]; then
+            echo "::error::Windows 桌面端附件应为一个，实际 ${#desktop[@]} 个"
+            printf '%s\n' "${desktop[@]}"
             exit 1
           fi
-          for archive in dist/*.zip; do
+          if [[ ${#server[@]} -ne 2 ]]; then
+            echo "::error::Windows 服务端附件应为两个，实际 ${#server[@]} 个"
+            printf '%s\n' "${server[@]}"
+            exit 1
+          fi
+          for archive in "${server[@]}"; do
+            [[ "$archive" == *.zip ]] || continue
             sha256sum --check "$archive.sha256" --status
           done
 
@@ -210,4 +217,4 @@ jobs:
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" --title "$tag" --notes-file "$notes" --draft
           fi
-          gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$tag" "${desktop[@]}" "${server[@]}" --repo "$GITHUB_REPOSITORY" --clobber
