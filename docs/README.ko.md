@@ -115,7 +115,7 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 
 ### 요구 사항
 
-- Rust >= 1.88 와 Tauri 2 도구 체인(데스크톱 앱 본체 컴파일용. Windows 에서는 WebView2 런타임도 필요)
+- Rust 안정 버전과 Tauri 2 도구 체인(데스크톱 앱 본체 컴파일용. Windows 에서는 WebView2 런타임도 필요)
 - Node.js >= 18.17(`npm run tauri:*` 과 프런트엔드 빌드 스크립트 실행용. 데스크톱 앱은 실행 시 Node 에 의존하지 않습니다)
 - 대상 플랫폼: Windows / macOS / Linux 데스크톱(플랫폼별 bundle: Windows NSIS, macOS app+dmg, Linux deb+AppImage)과 Docker 서버
 

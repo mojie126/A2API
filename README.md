@@ -115,7 +115,7 @@ Trends: 24-hour **cache hit rate** (line) and **token consumption** (area) on tw
 
 ### Requirements
 
-- Rust >= 1.88 and the Tauri 2 toolchain (to compile the desktop app itself; Windows also needs the WebView2 runtime)
+- Rust stable and the Tauri 2 toolchain (to compile the desktop app itself; Windows also needs the WebView2 runtime)
 - Node.js >= 18.17 (only to run `npm run tauri:*` and frontend build scripts; the desktop app does not depend on Node at runtime)
 - Target platforms: Windows / macOS / Linux desktops, headless Windows / Linux servers, and a Docker server
 
