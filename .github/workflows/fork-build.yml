@@ -150,14 +150,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: 下载 Windows 资产
+      - name: 下载 Windows 桌面端资产
         uses: actions/download-artifact@v7
         with:
-          pattern: |
-            windows-nsis
-            windows-server-amd64
+          name: windows-nsis
           path: dist
-          merge-multiple: true
+
+      - name: 下载 Windows 服务端资产
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-server-amd64
+          path: dist
 
       - name: 校验 Release 附件
         run: |
