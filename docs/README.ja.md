@@ -115,7 +115,7 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 
 ### 動作環境
 
-- Rust >= 1.77 と Tauri 2 ツールチェーン（デスクトップアプリ本体のコンパイル用。Windows では WebView2 ランタイムも必要）
+- Rust >= 1.88 と Tauri 2 ツールチェーン（デスクトップアプリ本体のコンパイル用。Windows では WebView2 ランタイムも必要）
 - Node.js >= 18.17（`npm run tauri:*` とフロントエンドのビルドスクリプトの実行のみ。デスクトップアプリは実行時に Node へ依存しません）
 - 対象プラットフォーム: Windows / macOS / Linux のデスクトップ（各プラットフォームの bundle: Windows NSIS、macOS app+dmg、Linux deb+AppImage）と Docker のサーバー
 
@@ -132,6 +132,8 @@ npm run build:icon         # アイコンのソース画像を生成（アイコ
 パッケージ成果物は `target/release/bundle/nsis/Agent2API_<バージョン>_x64-setup.exe`（3.0 時点でおよそ 8.6 MB。`src-tauri/.cargo/config.toml` が cargo の `target-dir` をプロジェクトルートの `target/` に指定しています）。
 
 macOS の `.dmg` は **macOS 上でしかビルドできません**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`）。Windows からのクロスコンパイルは不可のため、公式成果物は CI の `build` ワークフロー（`macos-latest` で 2 ターゲットを統合）が生成します。Linux デスクトップのパッケージは同じワークフローの `linux-desktop` job が生成し（deb + AppImage）、Docker イメージとコンテナ内更新に使うサーバーパッケージは `linux-server` job が生成します。後者は Dockerfile のコンパイル経路を再利用するため、パッケージ内の実行ファイルはイメージと同一ツールチェーンの成果物になります。
+
+個人 fork では `performance-build` ワークフローを手動実行し、Windows デスクトップと Windows サーバーの成果物をビルドして、`ghcr.io/<所有者>/a2api` の `linux/amd64` イメージをプッシュできます。詳細は [個人 fork のビルドと GHCR](./fork-build_2026-11-04.md) を参照してください。
 
 ## 📜 使用に関する告知
 

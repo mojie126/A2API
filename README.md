@@ -115,7 +115,7 @@ Trends: 24-hour **cache hit rate** (line) and **token consumption** (area) on tw
 
 ### Requirements
 
-- Rust >= 1.77 and the Tauri 2 toolchain (to compile the desktop app itself; Windows also needs the WebView2 runtime)
+- Rust >= 1.88 and the Tauri 2 toolchain (to compile the desktop app itself; Windows also needs the WebView2 runtime)
 - Node.js >= 18.17 (only to run `npm run tauri:*` and frontend build scripts; the desktop app does not depend on Node at runtime)
 - Target platforms: Windows / macOS / Linux desktops, headless Windows / Linux servers, and a Docker server
 
@@ -132,6 +132,8 @@ npm run build:icon         # Generate the icon source image (run after changing 
 The build artifact is `target/release/bundle/nsis/Agent2API_<version>_x64-setup.exe` (about 8.6 MB as of 3.0; `src-tauri/.cargo/config.toml` points cargo's `target-dir` at the project root's `target/`).
 
 The macOS `.dmg` **can only be built on macOS** (`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`) — it cannot be cross-compiled from Windows, so the official artifact comes from the CI `build` workflow (`macos-latest`, two targets merged). Docker images and the server archives used for in-container updates come from the same workflow's `linux-server` job, which reuses the Dockerfile's compile path so the executable inside is built from the same toolchain as the image.
+
+Fork maintainers can manually run the `performance-build` workflow to build the Windows desktop and Windows server artifacts and push a `linux/amd64` image to `ghcr.io/<owner>/a2api`. See [Fork build and GHCR](./docs/fork-build_2026-11-04.md).
 
 ## 📜 Usage Notice
 

@@ -172,8 +172,10 @@ export function RoutingConfigPanel({ editor, scope, now, onScope, onAccount, onS
   }
   const toggleProvider = (provider: string, on: boolean) => mutate(next => {
     ensure(next, provider)
-    if (next.providerScope === 'all') next.disabledProviders = on ? next.disabledProviders.filter(id => id !== provider) : [...new Set([...next.disabledProviders, provider])]
-    else next.providers = on ? [...new Set([...next.providers, provider])] : next.providers.filter(id => id !== provider)
+    next.disabledProviders = on
+      ? next.disabledProviders.filter(id => id !== provider)
+      : [...new Set([...next.disabledProviders, provider])]
+    if (next.providerScope !== 'all') next.providers = [...new Set([...next.providers, provider])]
   })
   const toggleAccount = (id: string, on: boolean) => mutate(next => {
     next.excludedAccounts = on ? next.excludedAccounts.filter(value => value !== id) : [...new Set([...next.excludedAccounts, id])]

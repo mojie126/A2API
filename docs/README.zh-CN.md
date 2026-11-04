@@ -115,7 +115,7 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 
 ### 环境要求
 
-- Rust >= 1.77 与 Tauri 2 工具链（编译桌面端本体；Windows 上还需 WebView2 运行时）
+- Rust >= 1.88 与 Tauri 2 工具链（编译桌面端本体；Windows 上还需 WebView2 运行时）
 - Node.js >= 18.17（只用于 `npm run tauri:*` 与前端构建脚本，桌面端运行时不依赖 Node）
 - 目标平台：Windows / macOS / Linux 桌面端、Windows / Linux 服务端（无 GUI）、Docker 服务端
 
@@ -132,6 +132,8 @@ npm run build:icon         # 生成图标源图（改图标设计后执行，再
 打包产物为 `target/release/bundle/nsis/Agent2API_<版本>_x64-setup.exe`（3.0 版约 8.6 MB；`src-tauri/.cargo/config.toml` 把 cargo 的 `target-dir` 指到了项目根的 `target/`）。
 
 macOS 的 `.dmg` **只能在 macOS 上构建**（`npm --prefix desktop-tauri run build -- --target universal-apple-darwin`），无法从 Windows 交叉编译，所以正式产物由 CI 的 `build` 工作流产（`macos-latest` + 双目标合并）；Docker 镜像与容器内更新用的服务端包由同一工作流的 `linux-server` job 出（复用 Dockerfile 的编译路径，包内可执行文件与镜像同源同工具链）。
+
+个人 fork 可手动运行 `performance-build` 工作流，构建 Windows 桌面端与 Windows 服务端产物，并推送 `ghcr.io/<所有者>/a2api` 的 `linux/amd64` 镜像。详见 [个人 fork 构建与 GHCR](./fork-build_2026-11-04.md)。
 
 ## 📜 使用声明
 

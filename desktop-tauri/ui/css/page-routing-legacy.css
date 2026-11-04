@@ -1,0 +1,80 @@
+/* beta 版路由画布的恢复样式
+   仅使用 routing-legacy- 前缀，避免覆盖新版配置页与请求回放样式 */
+
+.routing-legacy-shell { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 10px; }
+.routing-legacy-loading { display: flex; flex: 1; align-items: center; justify-content: center; }
+.routing-legacy-toolbar { display: flex; align-items: center; gap: 12px; flex: none; flex-wrap: wrap; }
+.routing-legacy-scope { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.routing-legacy-scope > b { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; }
+.routing-legacy-actions { display: flex; align-items: center; gap: 5px; margin-left: auto; flex-wrap: wrap; }
+.routing-legacy-workspace { display: flex; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; box-shadow: var(--shadow-1); }
+.routing-legacy-model-rail { display: flex; flex: none; flex-direction: column; width: 226px; min-height: 0; padding: 16px 10px 10px; border-right: 1px solid var(--hairline); background: var(--rail-bg); }
+.routing-legacy-rail-head { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 12px; color: var(--text-2); font-size: 12px; font-weight: 600; }
+.routing-legacy-model-item { display: flex; align-items: center; justify-content: flex-start; gap: 9px; width: 100%; height: auto; min-height: 60px; padding: 9px; border: 1px solid transparent; border-radius: var(--r-md); color: var(--text-2); text-align: left; }
+.routing-legacy-model-item:hover { background: var(--nav-hover); }
+.routing-legacy-model-item.is-selected { border-color: var(--primary-bd); background: var(--primary-soft); color: var(--primary-fg); }
+.routing-legacy-model-item > span:nth-child(2) { flex: 1; min-width: 0; }
+.routing-legacy-model-item b { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; }
+.routing-legacy-model-item em { display: block; margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-3); font-size: 10px; font-style: normal; font-weight: 400; }
+.routing-legacy-rail-divider { display: flex; align-items: center; justify-content: space-between; padding: 18px 9px 8px; color: var(--text-3); font-size: 10px; }
+.routing-legacy-model-list { display: flex; flex: 1; min-height: 50px; flex-direction: column; gap: 4px; overflow-y: auto; }
+.routing-legacy-add-model { justify-content: flex-start; margin: 8px 0 0; padding: 10px; border: 1px dashed var(--border-strong); color: var(--text-3); }
+.routing-legacy-map { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.routing-legacy-map-head { display: flex; align-items: center; justify-content: space-between; flex: none; flex-wrap: wrap; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--hairline); }
+.routing-legacy-map-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.routing-legacy-map-title > b { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; }
+.routing-legacy-dirty { color: var(--text-3); font-size: 10px; }
+.routing-legacy-map-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; flex-wrap: wrap; }
+.routing-legacy-map-actions > span { color: var(--text-3); font-size: 10px; }
+.routing-legacy-columns { display: grid; grid-template-columns: minmax(0, 1fr) 290px; flex: 1; min-height: 0; }
+.routing-legacy-provider-column { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 14px 14px 10px; }
+.routing-legacy-provider-head { display: flex; align-items: center; justify-content: space-between; flex: none; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.routing-legacy-provider-head > span { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 11px; font-weight: 600; }
+.routing-legacy-provider-head > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.routing-legacy-search { width: 190px; height: 30px; font-size: 11px; }
+.routing-legacy-provider-list { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.routing-legacy-provider-card { margin-bottom: 10px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.routing-legacy-provider-card.is-off { border-style: dashed; opacity: .72; }
+.routing-legacy-provider-card > header { display: flex; align-items: center; gap: 7px; min-height: 48px; padding: 8px 9px; border-bottom: 1px solid transparent; }
+.routing-legacy-provider-card:has(.routing-legacy-account-list) > header { border-bottom-color: var(--hairline); }
+.routing-legacy-provider-toggle { display: flex; align-items: center; flex: 1; min-width: 0; height: auto; justify-content: flex-start; gap: 7px; padding: 0; color: var(--text-2); text-align: left; white-space: normal; }
+.routing-legacy-provider-toggle:hover { background: transparent; }
+.routing-legacy-account-list { padding: 4px 6px; }
+.routing-legacy-account-row { display: flex; align-items: center; gap: 5px; min-height: 52px; padding: 5px 3px; border-top: 1px solid var(--hairline); }
+.routing-legacy-account-row:first-child { border-top: 0; }
+.routing-legacy-account-row.is-excluded { opacity: .62; }
+.routing-legacy-account-row .routing-account-name { flex: 1; min-width: 70px; }
+.routing-legacy-account-row .routing-account-name > b { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; font-weight: 600; }
+.routing-legacy-account-row .routing-account-name > span { display: block; margin-top: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-3); font-size: 9.5px; }
+.routing-legacy-collapsed { margin: 0; padding: 8px 12px; color: var(--text-3); font-size: 10px; }
+.routing-legacy-empty-account { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0; padding: 10px; color: var(--text-3); font-size: 10.5px; }
+.routing-legacy-show-empty { width: 100%; justify-content: flex-start; color: var(--text-3); }
+.routing-legacy-foot { display: flex; align-items: center; justify-content: space-between; flex: none; flex-wrap: wrap; gap: 8px; padding: 7px 14px; border-top: 1px solid var(--hairline); color: var(--text-3); font-size: 9.5px; }
+.routing-legacy-foot > span:last-child { margin-left: auto; }
+.routing-legacy-columns > .routing-live-panel { min-width: 0; border-left: 1px solid var(--hairline); }
+
+@media (max-width: 1200px) {
+  .routing-legacy-model-rail { width: 190px; }
+  .routing-legacy-columns { grid-template-columns: minmax(0, 1fr) 245px; }
+}
+@media (max-width: 860px) {
+  .routing-legacy-workspace { flex-direction: column; }
+  .routing-legacy-model-rail { width: auto; min-height: 0; padding: 8px; flex-direction: row; align-items: center; gap: 5px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--hairline); }
+  .routing-legacy-rail-head, .routing-legacy-rail-divider { display: none; }
+  .routing-legacy-model-list { flex-direction: row; flex: none; overflow: visible; }
+  .routing-legacy-model-item { width: 170px; min-height: 44px; flex: none; padding: 6px; }
+  .routing-legacy-model-item em { display: none; }
+  .routing-legacy-add-model { flex: none; width: auto; margin: 0; }
+  .routing-legacy-columns { display: flex; flex-direction: column; overflow-y: auto; }
+  .routing-legacy-provider-column { min-height: 360px; }
+  .routing-legacy-columns > .routing-live-panel { border-top: 1px solid var(--hairline); border-left: 0; }
+}
+@media (max-width: 600px) {
+  .routing-legacy-toolbar { gap: 6px; }
+  .routing-legacy-actions { width: 100%; }
+  .routing-legacy-actions > button { flex: 1 1 auto; justify-content: center; }
+  .routing-legacy-provider-head > div { width: 100%; }
+  .routing-legacy-search { flex: 1; width: auto; }
+  .routing-legacy-map-head { padding: 8px 10px; }
+  .routing-legacy-foot > span:nth-child(2) { display: none; }
+}
