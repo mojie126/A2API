@@ -510,6 +510,7 @@ fn dedupe_seeded(items: &mut Vec<String>) -> usize {
 /// 入口归一：旧客户端请求 `<id>-solo` 时改成原始 ID，`<id>-solo-max` 改成
 /// 新的 `<id>-max`。只认 Trae 清单里确实存在的目标，避免影响别家真实的
 /// `foo-solo` 模型；Max 变体未广告时回落到基础模型，至少不丢请求。
+#[allow(dead_code)]
 pub(crate) fn legacy_model_alias(model: &str) -> Option<String> {
     let target = legacy_name(model)?;
     // 旧名本身就是别家的真实模型（或用户建的别名）时保留原意。

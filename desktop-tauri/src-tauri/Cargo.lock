@@ -55,7 +55,7 @@ dependencies = [
 [[package]]
 name = "agent2api-provider-protocol"
 version = "0.2.1"
-source = "git+https://github.com/ProvidersPlugin/Agent2Providers?tag=v3.4.0#198b5051928c33426ff4fd63d486c84f9c5394af"
+source = "git+https://github.com/ProvidersPlugin/Agent2Providers?tag=v3.4.1#604c4102d5becddc997052d997185a302ed9e74f"
 dependencies = [
  "base64 0.22.1",
  "serde",

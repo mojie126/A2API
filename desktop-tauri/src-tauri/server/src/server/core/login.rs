@@ -970,31 +970,6 @@ pub(crate) fn set_plugin_login_hint(handle: &LoginTaskHandle, hint: Option<&str>
     });
 }
 
-/// 标记任务完成并写入会话摘要
-fn finish_task(handle: &LoginTaskHandle, session: &Value) {
-    let summary = json!({
-        "accountUid": session
-            .get("account")
-            .and_then(|account| account.get("uid"))
-            .cloned()
-            .unwrap_or(Value::Null),
-        "nickname": session
-            .get("account")
-            .and_then(|account| account.get("nickname"))
-            .cloned()
-            .unwrap_or(Value::Null),
-        "edition": session
-            .get("edition")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-    });
-    handle.update(|task| {
-        task.done = true;
-        task.session = Some(summary);
-        task.finished_at = Some(logging::now_ms());
-    });
-}
-
 fn mark_task_error(task: &mut LoginTaskState, message: &str) {
     task.done = true;
     task.polling = false;

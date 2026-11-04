@@ -7,8 +7,9 @@
 - `windows-nsis`：Windows 桌面端安装包
 - `windows-server-amd64`：Windows 服务端压缩包与校验文件
 - `ghcr.io/<所有者>/a2api:latest`：`linux/amd64` 容器镜像
+- `v3.4.1` 草稿 Release：包含 Windows 资产，等待人工确认后再正式发布
 
-手动运行工作流后，在对应运行的 Artifacts 区域下载 Windows 产物。每次手动构建都会覆盖 `latest`。
+手动运行工作流后，在对应运行的 Artifacts 区域下载 Windows 产物。每次手动构建都会覆盖 `latest`，并创建或更新 `v3.4.1` 草稿 Release。草稿不会自动公开，需在 GitHub Releases 页面人工确认后正式发布。
 
 ## 使用镜像
 

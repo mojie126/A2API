@@ -1,9 +1,10 @@
 name: performance-build
 
-# 个人 fork 的 Windows 资产与 GHCR 容器镜像构建
+# 个人 fork 的 Windows 资产、GHCR 容器镜像与草稿 Release 构建
 #
 # 只保留 Windows 桌面端、Windows 服务端和 linux/amd64 容器镜像
 # 工作流只允许在 Actions 页面手动触发，不响应标签推送
+# Release 固定按应用版本创建为草稿，由人工确认后再正式发布
 
 on:
   workflow_dispatch:
@@ -20,6 +21,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: 安装 Node
         uses: actions/setup-node@v7
@@ -54,6 +57,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
@@ -132,3 +137,74 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    name: 创建草稿 Release
+    needs:
+      - windows
+      - windows-server
+      - docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 下载 Windows 资产
+        uses: actions/download-artifact@v7
+        with:
+          pattern: |
+            windows-nsis
+            windows-server-amd64
+          path: dist
+          merge-multiple: true
+
+      - name: 校验 Release 附件
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find dist -maxdepth 1 -type f | sort)
+          if [[ ${#files[@]} -ne 3 ]]; then
+            echo "::error::Release 附件应为三个，实际 ${#files[@]} 个"
+            printf '%s\n' "${files[@]}"
+            exit 1
+          fi
+          for archive in dist/*.zip; do
+            sha256sum --check "$archive.sha256" --status
+          done
+
+      - name: 创建或更新草稿 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop-tauri/src-tauri/server/Cargo.toml | head -1)"
+          tag="v$version"
+          desktop_version="$(jq -r .version desktop-tauri/package.json)"
+          app_version="$(jq -r .version package.json)"
+          tauri_version="$(jq -r .version desktop-tauri/src-tauri/tauri.conf.json)"
+          desktop_rust_version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop-tauri/src-tauri/Cargo.toml | head -1)"
+          mobile_version="$(jq -r .version desktop-tauri/mobile/package.json)"
+          if [[ "$version" != "3.4.1" || "$desktop_version" != "$version" || "$app_version" != "$version" || "$tauri_version" != "$version" || "$desktop_rust_version" != "$version" || "$mobile_version" != "$version" ]]; then
+            echo "::error::应用版本号不一致，服务端=$version 桌面端=$desktop_version 根目录=$app_version Tauri=$tauri_version 桌面端Rust=$desktop_rust_version 手机端=$mobile_version"
+            exit 1
+          fi
+          notes="$(mktemp)"
+          printf '%s\n' \
+            "Agent2API $version 草稿 Release" \
+            "" \
+            "本 Release 仅包含 Windows 桌面端与 Windows 服务端资产。" \
+            "" \
+            "- Windows 桌面端：windows-nsis" \
+            "- Windows 服务端：windows-server-amd64" \
+            "- 容器镜像：ghcr.io/$GITHUB_REPOSITORY_OWNER/a2api:latest（linux/amd64）" \
+            "" \
+            "请在确认 Windows 附件与容器镜像后，再手动将本 Release 正式发布。" > "$notes"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "同名 Release 已存在，仅更新附件，不改变草稿或公开状态"
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$tag" --notes-file "$notes" --draft
+          fi
+          gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
