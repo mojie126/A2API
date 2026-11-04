@@ -7,11 +7,11 @@ import { AccountSettingsDialog } from './accounts-settings-dialog'
 import { GroupSettingsDialog } from './accounts-group-settings'
 import { AddRouteModelDialog, RoutingSettingsDialog } from './routing-settings'
 import { RoutingStickyDialog } from './routing-sticky'
-import { RoutingLegacyWorkbench } from './routing-legacy-workbench'
+import { RoutingConfigPanel } from './routing-config-panel'
 import { RoutingExecTimeline } from './routing-exec-timeline'
 import { RoutingRequestList } from './routing-request-list'
 import { useRoutingReplay } from './routing-replay-state'
-import { useRoutingEditor } from './routing-editor-state'
+import { draftDirty, useRoutingEditor } from './routing-editor-state'
 import { RouteIcon, stickyLabel, strategyLabel } from './routing-ui'
 import { isTraceRunning, requestKey } from './routing-trace-model'
 import { bridge, host, type ReplayRow, type RoutingWorkspace } from './routing-types'
@@ -22,12 +22,12 @@ let requestTrace: ((row?: ReplayRow | null) => void) | undefined
 let refreshWorkspace: (() => void) | undefined
 
 /**
- * 路由页保留两个视图：
+ * 路由页只有两个视图：
  *
- *   路由配置：beta 版画布，模型轨道、网关、提供商与账号画布、已停用提供商分组
- *   请求跟踪：左栏最近请求，右栏回放单条请求的候选、跳过原因、尝试与配置快照。
+ *   请求回放：左栏最近请求，右栏回放单条请求的候选、跳过原因、尝试与配置快照。
+ *   配置：左栏作用范围，中间有序名单，右栏「此刻队列」预演当前模型会走哪套配置。
  *
- * 配置页的数据来自新版草稿状态：作用范围、策略、粘滞与版本校验仍是最新实现。
+ * 原来的聚合画布已移除：它回答的是「流量去哪了」，不是「这次为什么是它」。
  */
 export function RoutingPage() {
   const [mode, setMode] = React.useState<'replay' | 'config'>('config')
@@ -78,6 +78,11 @@ export function RoutingPage() {
     } catch { /* 列表下次刷新会带回新状态 */ }
   }
   const close = () => { setModal(null); replay.refresh() }
+  const reloadConfig = async () => {
+    if (editor.draft && draftDirty(editor.draft)
+      && !await confirmDialog(t('重新读取会丢弃当前范围的未保存草稿，其他范围的草稿保留。'), { title: t('重新读取配置'), confirmText: t('重新读取') })) return
+    void editor.load(editor.scope, true)
+  }
   React.useEffect(() => {
     requestTrace = row => {
       if (!row) return
@@ -94,25 +99,25 @@ export function RoutingPage() {
         setMode(value as 'replay' | 'config')
         if (value === 'config' && !editor.draft && !editor.busy) void editor.load(editor.scope || '')
       }} options={[
-        { value: 'config', label: <><RouteIcon name='settings' />{t('路由配置')}{editor.dirtyCount ? <Badge variant='warning' shape='tag'>{editor.dirtyCount}</Badge> : null}</> },
-        { value: 'replay', label: <><RouteIcon name='requests' />{t('请求跟踪')}</> },
+        { value: 'replay', label: <><RouteIcon name='requests' />{t('请求回放')}</> },
+        { value: 'config', label: <><RouteIcon name='route' />{t('配置')}{editor.dirtyCount ? <Badge variant='warning' shape='tag'>{editor.dirtyCount}</Badge> : null}</> },
       ]} />
-      <span className='routing-page-policy'>{mode === 'config'
-        ? t('配置请求的参与范围与优先顺序')
-        : settings ? `${strategyLabel(settings.routingStrategy)} · ${t('粘滞 {mode}', { mode: stickyLabel(settings.routingSticky) })}` : ''}</span>
-      {mode === 'replay' ? <div className='routing-page-actions'>
+      <span className='routing-page-policy'>{settings ? `${strategyLabel(settings.routingStrategy)} · ${t('粘滞 {mode}', { mode: stickyLabel(settings.routingSticky) })}` : ''}</span>
+      <div className='routing-page-actions'>
         <Button variant='ghost' size='sm' onClick={() => setModal({ kind: 'sticky' })}>
           <RouteIcon name='lock' />{t('会话粘滞')}{replay.sticky.length ? ` · ${replay.sticky.length}` : ''}
         </Button>
-        <Button variant='ghost' size='sm' disabled={replay.loading} onClick={() => void refreshReplay()}><RouteIcon name='refresh' />{t('刷新')}</Button>
-      </div> : null}
+        {mode === 'replay'
+          ? <Button variant='ghost' size='sm' disabled={replay.loading} onClick={() => void refreshReplay()}><RouteIcon name='refresh' />{t('刷新')}</Button>
+          : <Button variant='ghost' size='sm' disabled={editor.loading || editor.busy} onClick={() => void reloadConfig()}><RouteIcon name='refresh' />{t('重新读取')}</Button>}
+      </div>
     </div>
 
     {replay.error && mode === 'replay' ? <div className='routing-page-error' role='alert'>
       <RouteIcon name='info' /><span>{replay.error}</span><Button variant='ghost' size='sm' onClick={replay.refresh}>{t('重试')}</Button>
     </div> : null}
 
-      {mode === 'replay' ? <div className='routing-replay-layout'>
+    {mode === 'replay' ? <div className='routing-replay-layout'>
       <aside className='routing-request-rail'>
         <RoutingRequestList active={mode === 'replay'} query={replay.query}
           selectedKey={selected ? requestKey(selected) : ''} refreshToken={refreshToken}
@@ -139,11 +144,12 @@ export function RoutingPage() {
       {editor.error && !editor.draft ? <div className='routing-page-error' role='alert'>
         <RouteIcon name='info' /><span>{editor.error}</span><Button variant='ghost' size='sm' onClick={() => void editor.load(editor.scope, true)}>{t('重新读取')}</Button>
       </div> : null}
-      <RoutingLegacyWorkbench editor={editor}
-        onRequestTrace={() => setMode('replay')}
+      <RoutingConfigPanel editor={editor} scope={editor.scope} now={replay.now}
+        onScope={scope => { if (!editor.busy) void editor.load(scope) }}
         onAccount={id => setModal({ kind: 'account', id })}
+        onSort={provider => setModal({ kind: 'sort', id: provider })}
         onAddModel={() => setModal({ kind: 'model' })}
-        onSticky={() => setModal({ kind: 'sticky' })} />
+        onProtection={workspace => setModal({ kind: 'protection', workspace })} />
     </div>}
 
     {modal?.kind === 'sticky' ? <RoutingStickyDialog model={mode === 'config' ? editor.scope || replay.model : replay.model} onClose={close} /> : null}

@@ -167,6 +167,23 @@
 .routing-live-foot > p { margin: 0; }
 .routing-live-foot > p + p { margin-top: 3px; }
 
+/* 路由页使用系统默认字体与字号，拖动期间不触发悬停或变更指针。 */
+.routing-config-shell,
+.routing-config-shell * {
+  font-family: inherit !important;
+  font-size: inherit !important;
+}
+.routing-config-shell .routing-grip { cursor: default; }
+body.routing-drag-active,
+body.routing-drag-active * {
+  pointer-events: none !important;
+  cursor: default !important;
+}
+body.routing-drag-active .routing-config-provider > header,
+body.routing-drag-active .routing-config-account {
+  background: transparent !important;
+}
+
 @media (max-width: 1280px) {
   .routing-config-rail { width: 205px; }
   .routing-config-body { grid-template-columns: minmax(0, 1fr) 280px; }

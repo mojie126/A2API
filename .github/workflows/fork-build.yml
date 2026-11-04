@@ -163,33 +163,23 @@ jobs:
           path: dist
 
       - name: 校验 Release 附件
+        id: release
         run: |
           set -euo pipefail
-          mapfile -t desktop < <(find dist -maxdepth 1 -type f -name '*.exe' | sort)
-          mapfile -t server < <(find dist -maxdepth 1 -type f \( -name '*.zip' -o -name '*.sha256' \) | sort)
-          if [[ ${#desktop[@]} -ne 1 ]]; then
-            echo "::error::Windows 桌面端附件应为一个，实际 ${#desktop[@]} 个"
-            printf '%s\n' "${desktop[@]}"
+          cd dist
+          desktop_count="$(find . -maxdepth 1 -type f -name '*.exe' | wc -l)"
+          zip_count="$(find . -maxdepth 1 -type f -name '*.zip' | wc -l)"
+          checksum_count="$(find . -maxdepth 1 -type f -name '*.sha256' | wc -l)"
+          if [[ "$desktop_count" -ne 1 || "$zip_count" -ne 1 || "$checksum_count" -ne 1 ]]; then
+            echo "::error::Release 附件应为桌面端、服务端包和校验文件各一个"
+            find . -maxdepth 1 -type f -printf '%f\n' | sort
             exit 1
           fi
-          if [[ ${#server[@]} -ne 2 ]]; then
-            echo "::error::Windows 服务端附件应为两个，实际 ${#server[@]} 个"
-            printf '%s\n' "${server[@]}"
-            exit 1
-          fi
-          for archive in "${server[@]}"; do
-            [[ "$archive" == *.zip ]] || continue
-            sha256sum --check "$archive.sha256" --status
+          for checksum in *.sha256; do
+            sha256sum --check "$checksum" --status
           done
-
-      - name: 创建或更新草稿 Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          set -euo pipefail
+          cd ..
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop-tauri/src-tauri/server/Cargo.toml | head -1)"
-          tag="v$version"
           desktop_version="$(jq -r .version desktop-tauri/package.json)"
           app_version="$(jq -r .version package.json)"
           tauri_version="$(jq -r .version desktop-tauri/src-tauri/tauri.conf.json)"
@@ -199,7 +189,6 @@ jobs:
             echo "::error::应用版本号不一致，服务端=$version 桌面端=$desktop_version 根目录=$app_version Tauri=$tauri_version 桌面端Rust=$desktop_rust_version 手机端=$mobile_version"
             exit 1
           fi
-          notes="$(mktemp)"
           printf '%s\n' \
             "Agent2API $version 草稿 Release" \
             "" \
@@ -207,14 +196,19 @@ jobs:
             "" \
             "- Windows 桌面端：windows-nsis" \
             "- Windows 服务端：windows-server-amd64" \
-            "- 容器镜像：ghcr.io/$GITHUB_REPOSITORY_OWNER/a2api:latest（linux/amd64）" \
+            "- 容器镜像：ghcr.io/${{ github.repository_owner }}/a2api:latest（linux/amd64）" \
             "" \
-            "请在确认 Windows 附件与容器镜像后，再手动将本 Release 正式发布。" > "$notes"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "同名 Release 已存在，仅更新附件，不改变草稿或公开状态"
-            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"
-          else
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" --title "$tag" --notes-file "$notes" --draft
-          fi
-          gh release upload "$tag" "${desktop[@]}" "${server[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+            "请在确认 Windows 附件与容器镜像后，再手动将本 Release 正式发布。" > notes
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: 创建或更新草稿 Release
+        uses: ncipollo/release-action@v1.21.0
+        with:
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: "dist/*"
+          bodyFile: notes
+          draft: true
+          tag: "v${{ steps.release.outputs.version }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          updateOnlyUnreleased: true

@@ -41,8 +41,16 @@ export function RoutingConfigPanel({ editor, scope, now, onScope, onAccount, onS
   const autoOpened = React.useRef<ReadonlySet<string>>(new Set())
   const draft = editor.draft
   const disabled = editor.busy || editor.loading
+  // 继承态第一次修改时先转为独立草稿，否则修改只会停留在不可保存的继承视图。
   const mutate = React.useCallback((fn: (profile: RouteProfile, workspace: RoutingWorkspace) => void) => {
-    editor.update(current => { const profile = structuredClone(current.profile); fn(profile, current.workspace); return { ...current, profile } })
+    editor.update(current => {
+      const next = current.mode === 'inherit'
+        ? { ...current, mode: 'custom' as const, baseline: null, profile: structuredClone(current.profile) }
+        : current
+      const profile = structuredClone(next.profile)
+      fn(profile, next.workspace)
+      return { ...next, profile }
+    })
   }, [editor])
   const drop = React.useCallback(({ kind, provider, id, target, after }: { kind: 'provider' | 'account'; provider: string; id: string; target: string; after: boolean }) => {
     const move = (ids: string[]) => {
@@ -92,7 +100,7 @@ export function RoutingConfigPanel({ editor, scope, now, onScope, onAccount, onS
   const workspace = draft.workspace
   const inherited = draft.mode === 'inherit'
   const profile = inherited ? workspace.inheritedProfile || draft.profile : draft.profile
-  const locked = disabled || inherited
+  const locked = disabled
   const dirty = draftDirty(draft)
   const previewCustom = Boolean(preview?.customized)
   const previewDirty = dirty && (scope ? true : !previewCustom)
@@ -172,10 +180,11 @@ export function RoutingConfigPanel({ editor, scope, now, onScope, onAccount, onS
   }
   const toggleProvider = (provider: string, on: boolean) => mutate(next => {
     ensure(next, provider)
+    next.providerScope = next.providerScope || 'all'
     next.disabledProviders = on
       ? next.disabledProviders.filter(id => id !== provider)
       : [...new Set([...next.disabledProviders, provider])]
-    if (next.providerScope !== 'all') next.providers = [...new Set([...next.providers, provider])]
+    if (next.providerScope !== 'all' && !next.providers.includes(provider)) next.providers.push(provider)
   })
   const toggleAccount = (id: string, on: boolean) => mutate(next => {
     next.excludedAccounts = on ? next.excludedAccounts.filter(value => value !== id) : [...new Set([...next.excludedAccounts, id])]
@@ -440,10 +449,15 @@ function useDraftDrag(enabled: boolean, onDrop: (payload: { kind: 'provider' | '
       if (!drag.active && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5) return
       drag.active = true
       event.preventDefault()
-      const hit = document.elementFromPoint(event.clientX, event.clientY)
-      const row = hit?.closest<HTMLElement>(drag.kind === 'account' ? '[data-cfg-account]' : '[data-cfg-provider]')
+      const selector = drag.kind === 'account' ? '[data-cfg-account]' : '[data-cfg-provider]'
+      const rows = Array.from(document.querySelectorAll<HTMLElement>(selector)).filter(row => {
+        if (drag.kind !== 'account') return row.dataset.disabled === String(document.querySelector<HTMLElement>(`[data-cfg-provider="${drag.provider}"]`)?.dataset.disabled)
+        return row.dataset.provider === drag.provider
+      })
+      const row = rows.find(row => event.clientY >= row.getBoundingClientRect().top
+        && event.clientY <= row.getBoundingClientRect().bottom)
       const id = drag.kind === 'account' ? row?.dataset.cfgAccount : row?.dataset.cfgProvider
-      if (!row || !id || id === drag.id || (drag.kind === 'account' && row.dataset.provider !== drag.provider)) {
+      if (!row || !id || id === drag.id) {
         drag.target = undefined
         setState({ id: drag.id })
         return
@@ -457,6 +471,7 @@ function useDraftDrag(enabled: boolean, onDrop: (payload: { kind: 'provider' | '
       const drag = ref.current
       if (!drag) return
       ref.current = null
+      document.body.classList.remove('routing-drag-active')
       setState(null)
       if (!drag.active || !drag.target) return
       live.current.onDrop({ kind: drag.kind, provider: drag.provider, id: drag.id, target: drag.target, after: Boolean(drag.after) })
@@ -464,11 +479,13 @@ function useDraftDrag(enabled: boolean, onDrop: (payload: { kind: 'provider' | '
     window.addEventListener('pointermove', move, { passive: false })
     window.addEventListener('pointerup', end)
     window.addEventListener('pointercancel', end)
-    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end) }
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end); document.body.classList.remove('routing-drag-active') }
   }, [])
   const start = (event: React.PointerEvent, kind: 'provider' | 'account', provider: string, id: string) => {
     if (!live.current.enabled || event.button !== 0) return
     event.preventDefault()
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    document.body.classList.add('routing-drag-active')
     ref.current = { kind, provider, id, x: event.clientX, y: event.clientY, active: false }
   }
   return { start, state }
