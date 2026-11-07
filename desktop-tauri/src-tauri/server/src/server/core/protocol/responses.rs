@@ -26,7 +26,7 @@ use serde_json::{json, Map, Value};
 
 use super::{
     content_parts, content_text, event_frame, freeform, is_truthy, json_text, native_tool,
-    random_id, string_field, string_value, tool_plan, SseLineBuffer, TOOL_IMAGE_PLACEHOLDER,
+    random_id, responses_phase, string_field, string_value, tool_plan, SseLineBuffer, TOOL_IMAGE_PLACEHOLDER,
     FIELD_ENCRYPTED_CONTENT,
 };
 use crate::server::logging;
@@ -998,7 +998,12 @@ fn format_to_chat(format: &Value) -> Value {
 /// `request` 是**原始的 Responses 请求体**：回程要把一批请求侧字段
 /// （instructions / temperature / tools / …）如实回显，客户端据此确认
 /// 「我发的参数被接受了」。
-pub fn responses_from_chat(chat: &Value, model: &str, request: &Value) -> Value {
+pub fn responses_from_chat(
+    chat: &Value,
+    model: &str,
+    request: &Value,
+    reasoning_collapse: bool,
+) -> Value {
     let plan = tool_plan::plan_tools(request);
     let choice = chat.pointer("/choices/0");
     let message = choice.and_then(|choice| choice.get("message")).cloned().unwrap_or(Value::Null);
@@ -1020,17 +1025,25 @@ pub fn responses_from_chat(chat: &Value, model: &str, request: &Value) -> Value 
         }));
     }
     let text = content_text(message.get("content").unwrap_or(&Value::Null));
-    let tool_calls = message.get("tool_calls").and_then(Value::as_array);
+    let tool_calls = message.get("tool_calls").and_then(Value::as_array).filter(|calls| !calls.is_empty());
+    let incomplete = responses_phase::incomplete_reason(Some(&finish));
     // 没有工具调用时始终给一条 message 项（哪怕文本为空）：
     // 客户端的 `output_text` 解析依赖它存在，缺失会被当成「响应损坏」
     if !text.is_empty() || tool_calls.is_none() {
-        output.push(json!({
+        let mut item = json!({
             "type": "message",
             "id": random_id("msg"),
             "status": "completed",
             "role": "assistant",
             "content": [{ "type": "output_text", "text": text, "annotations": [], "logprobs": [] }],
-        }));
+        });
+        if reasoning_collapse {
+            responses_phase::apply(&mut item, responses_phase::message_phase(
+                Some(&finish), tool_calls.is_some(),
+                responses_phase::response_is_successful(chat) && responses_phase::response_is_successful(&message),
+            ));
+        }
+        output.push(item);
     }
     if let Some(calls) = tool_calls {
         for call in calls {
@@ -1047,13 +1060,6 @@ pub fn responses_from_chat(chat: &Value, model: &str, request: &Value) -> Value 
         }
     }
 
-    let incomplete = if finish == "length" {
-        Some("max_output_tokens")
-    } else if finish == "content_filter" {
-        Some("content_filter")
-    } else {
-        None
-    };
     let status = if incomplete.is_some() { "incomplete" } else { "completed" };
     let created = chat
         .get("created")
@@ -1216,8 +1222,12 @@ pub struct ResponsesStream {
     next_index: i64,
     usage: Option<Value>,
     finish_reason: Option<String>,
+    saw_done: bool,
+    phase_eligible: bool,
     /// 已完成的 output 项（收尾时按 output_index 排序进 response.output）
     output_items: Vec<(i64, Value)>,
+    /// 是否给助手消息补 `phase` 阶段标记（设置「第三方模型回答完自动折叠过程」）
+    reasoning_collapse: bool,
 }
 
 #[derive(Default)]
@@ -1243,7 +1253,7 @@ struct ToolFinal {
 }
 
 impl ResponsesStream {
-    pub fn new(model: &str, request: &Value) -> Self {
+    pub fn new(model: &str, request: &Value, reasoning_collapse: bool) -> Self {
         Self {
             buffer: SseLineBuffer::new(),
             response_id: random_id("resp"),
@@ -1267,7 +1277,10 @@ impl ResponsesStream {
             next_index: 0,
             usage: None,
             finish_reason: None,
+            saw_done: false,
+            phase_eligible: true,
             output_items: Vec::new(),
+            reasoning_collapse,
         }
     }
 
@@ -1276,12 +1289,14 @@ impl ResponsesStream {
         let mut out = Vec::new();
         for payload in self.buffer.push(chunk) {
             match payload {
-                None => out.extend(self.finish()),
-                Some(data) => {
-                    if let Ok(value) = serde_json::from_str::<Value>(&data) {
-                        out.extend(self.consume(&value));
-                    }
+                None => {
+                    self.saw_done = true;
+                    out.extend(self.finish());
                 }
+                Some(data) => match serde_json::from_str::<Value>(&data) {
+                    Ok(value) => out.extend(self.consume(&value)),
+                    Err(_) => self.phase_eligible = false,
+                },
             }
         }
         out
@@ -1295,10 +1310,12 @@ impl ResponsesStream {
         // 先冲刷缓冲里残留的最后一帧
         let mut out = Vec::new();
         for payload in self.buffer.finish() {
-            if let Some(data) = payload {
-                if let Ok(value) = serde_json::from_str::<Value>(&data) {
-                    out.extend(self.consume(&value));
-                }
+            match payload {
+                None => self.saw_done = true,
+                Some(data) => match serde_json::from_str::<Value>(&data) {
+                    Ok(value) => out.extend(self.consume(&value)),
+                    Err(_) => self.phase_eligible = false,
+                },
             }
         }
         if self.finished {
@@ -1341,17 +1358,16 @@ impl ResponsesStream {
         if !self.text_open && self.tools.is_empty() {
             out.extend(self.open_text());
         }
-        out.extend(self.close_text());
+        let incomplete = responses_phase::incomplete_reason(self.finish_reason.as_deref());
+        let phase = responses_phase::message_phase(
+            self.finish_reason.as_deref(), !self.tools.is_empty(), self.saw_done && self.phase_eligible,
+        );
+        out.extend(self.close_text(phase));
         out.extend(self.close_tools());
         let output: Vec<Value> = {
             let mut items = self.output_items.clone();
             items.sort_by_key(|(index, _)| *index);
             items.into_iter().map(|(_, item)| item).collect()
-        };
-        let incomplete = match self.finish_reason.as_deref() {
-            Some("length") => Some("max_output_tokens"),
-            Some("content_filter") => Some("content_filter"),
-            _ => None,
         };
         let status = if incomplete.is_some() { "incomplete" } else { "completed" };
         let response = response_envelope(
@@ -1373,6 +1389,7 @@ impl ResponsesStream {
         if self.finished {
             return Vec::new();
         }
+        self.phase_eligible &= responses_phase::response_is_successful(chunk);
         let mut out = Vec::new();
         // 上游错误帧：转成 Responses 的 error + response.failed
         if let Some(error) = chunk.get("error").filter(|value| is_truthy(value)) {
@@ -1473,7 +1490,8 @@ impl ResponsesStream {
         let key = call.get("index").and_then(Value::as_i64).unwrap_or(0);
         // 工具调用与正文互斥：先把文本与思考收尾
         out.extend(self.close_reasoning());
-        out.extend(self.close_text());
+        // 有工具调用时，已经写出的正文属于过程说明，阶段补 commentary
+        out.extend(self.close_text(Some("commentary")));
 
         // ── 状态更新与事件构造**分两段**写 ──────────────────────────
         // 事件构造要动 `self.sequence`，而状态更新要借 `self.tools`。
@@ -1736,7 +1754,8 @@ impl ResponsesStream {
         ]
     }
 
-    fn close_text(&mut self) -> Vec<bytes::Bytes> {
+    /// `phase` 为 `None` 时不补阶段标记（截断收尾走这条）。
+    fn close_text(&mut self, phase: Option<&str>) -> Vec<bytes::Bytes> {
         if !self.text_open {
             return Vec::new();
         }
@@ -1747,13 +1766,16 @@ impl ResponsesStream {
             "annotations": [],
             "logprobs": [],
         });
-        let item = json!({
+        let mut item = json!({
             "type": "message",
             "id": self.text_id,
             "status": "completed",
             "role": "assistant",
             "content": [part.clone()],
         });
+        if self.reasoning_collapse {
+            responses_phase::apply(&mut item, phase);
+        }
         self.output_items.push((self.text_index, item.clone()));
         vec![
             self.event(
@@ -1894,6 +1916,8 @@ pub struct ResponsesCollector {
     tools: std::collections::BTreeMap<i64, ToolAccum>,
     usage: Option<Value>,
     finish_reason: Option<String>,
+    saw_done: bool,
+    phase_eligible: bool,
     id: String,
     created: i64,
 }
@@ -1907,6 +1931,8 @@ impl ResponsesCollector {
             tools: std::collections::BTreeMap::new(),
             usage: None,
             finish_reason: None,
+            saw_done: false,
+            phase_eligible: true,
             id: String::new(),
             created: logging::now_ms() / 1000,
         }
@@ -1914,25 +1940,28 @@ impl ResponsesCollector {
 
     pub fn push(&mut self, chunk: &[u8]) {
         for payload in self.buffer.push(chunk) {
-            if let Some(data) = payload {
-                if let Ok(value) = serde_json::from_str::<Value>(&data) {
-                    self.consume(&value);
-                }
-            }
+            self.consume_payload(payload);
         }
     }
 
     pub fn finish(&mut self) {
         for payload in self.buffer.finish() {
-            if let Some(data) = payload {
-                if let Ok(value) = serde_json::from_str::<Value>(&data) {
-                    self.consume(&value);
-                }
-            }
+            self.consume_payload(payload);
+        }
+    }
+
+    fn consume_payload(&mut self, payload: Option<String>) {
+        match payload {
+            None => self.saw_done = true,
+            Some(data) => match serde_json::from_str::<Value>(&data) {
+                Ok(value) => self.consume(&value),
+                Err(_) => self.phase_eligible = false,
+            },
         }
     }
 
     fn consume(&mut self, chunk: &Value) {
+        self.phase_eligible &= responses_phase::response_is_successful(chunk);
         if let Some(id) = chunk.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) {
             if self.id.is_empty() {
                 self.id = id.to_string();
@@ -1983,7 +2012,7 @@ impl ResponsesCollector {
     }
 
     /// 收成一个 Responses 响应对象
-    pub fn into_response(self, model: &str, request: &Value) -> Value {
+    pub fn into_response(self, model: &str, request: &Value, reasoning_collapse: bool) -> Value {
         let plan = tool_plan::plan_tools(request);
         let mut output: Vec<Value> = Vec::new();
         if !self.reasoning.is_empty() {
@@ -1993,14 +2022,21 @@ impl ResponsesCollector {
                 "summary": [{ "type": "summary_text", "text": self.reasoning }],
             }));
         }
+        let incomplete = responses_phase::incomplete_reason(self.finish_reason.as_deref());
         if !self.text.is_empty() || self.tools.is_empty() {
-            output.push(json!({
+            let mut item = json!({
                 "type": "message",
                 "id": random_id("msg"),
                 "status": "completed",
                 "role": "assistant",
                 "content": [{ "type": "output_text", "text": self.text, "annotations": [], "logprobs": [] }],
-            }));
+            });
+            if reasoning_collapse {
+                responses_phase::apply(&mut item, responses_phase::message_phase(
+                    self.finish_reason.as_deref(), !self.tools.is_empty(), self.saw_done && self.phase_eligible,
+                ));
+            }
+            output.push(item);
         }
         for (_, tool) in self.tools {
             let name = if tool.name.is_empty() { "unknown".to_string() } else { tool.name };
@@ -2010,11 +2046,6 @@ impl ResponsesCollector {
             // （item id 的前缀由 tool_call_item 内部按类型选，不必在这里管）
             output.push(tool_call_item(&name, &call_id, &arguments, &plan));
         }
-        let incomplete = match self.finish_reason.as_deref() {
-            Some("length") => Some("max_output_tokens"),
-            Some("content_filter") => Some("content_filter"),
-            _ => None,
-        };
         let status = if incomplete.is_some() { "incomplete" } else { "completed" };
         let id = if self.id.is_empty() { random_id("resp") } else { self.id.clone() };
         let mut body = response_envelope(
@@ -2037,5 +2068,138 @@ impl ResponsesCollector {
 impl Default for ResponsesCollector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 「第三方模型回答完自动折叠过程」的阶段标记判据。
+    //!
+    //! Codex 桌面端只在最后一条助手消息带 `phase: "final_answer"` 时才折叠
+    //! 这一轮的过程，所以这三条钉住的是**何时补 `commentary`、何时补
+    //! `final_answer`、关掉时一个字都不补**。
+
+    use super::*;
+
+    /// 从 SSE 字节里取出所有助手消息 `response.output_item.done` 的 phase。
+    fn message_phases(chunks: &[bytes::Bytes]) -> Vec<Option<String>> {
+        let text: String = chunks
+            .iter()
+            .map(|chunk| String::from_utf8_lossy(chunk).to_string())
+            .collect();
+        text.split("\n\n")
+            .filter_map(|event| event.lines().find_map(|line| line.strip_prefix("data: ")))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .filter(|data| {
+                data.get("type").and_then(Value::as_str) == Some("response.output_item.done")
+                    && data.pointer("/item/type").and_then(Value::as_str) == Some("message")
+            })
+            .map(|data| {
+                data.pointer("/item/phase")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// 一段只含正文的 chat SSE（无工具调用）。
+    fn text_only_stream() -> Vec<u8> {
+        b"data: {\"id\":\"chatcmpl_a\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"\xe7\xad\x94\xe6\xa1\x88\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()
+    }
+
+    /// 一段正文在前、工具调用收尾的 chat SSE。
+    fn text_then_tool_stream() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(
+            b"data: {\"id\":\"chatcmpl_b\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"\xe5\x85\x88\xe7\x9c\x8b\xe7\x9c\x8b\"}}]}\n\n",
+        );
+        out.extend_from_slice(
+            b"data: {\"id\":\"chatcmpl_b\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        );
+        out.extend_from_slice(b"data: [DONE]\n\n");
+        out
+    }
+
+    /// 无工具调用的整段回复：最后一条正文补 `final_answer`。
+    #[test]
+    fn text_without_tool_calls_is_final_answer() {
+        let mut machine = ResponsesStream::new("m", &json!({}), true);
+        let chunks = machine.push(&text_only_stream());
+        let phases = message_phases(&chunks);
+        assert_eq!(phases, vec![Some("final_answer".to_string())]);
+        // `response.completed` 里回显的 output 也要带同一份阶段标记：
+        // 客户端读完整对象时不能只看到事件里有、终态里没有
+        let text: String = chunks
+            .iter()
+            .map(|chunk| String::from_utf8_lossy(chunk).to_string())
+            .collect();
+        let completed = text
+            .split("\n\n")
+            .filter_map(|event| event.lines().find_map(|line| line.strip_prefix("data: ")))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .find(|data| data.get("type").and_then(Value::as_str) == Some("response.completed"))
+            .expect("应当有 response.completed");
+        assert_eq!(
+            completed.pointer("/response/output/0/phase"),
+            Some(&json!("final_answer"))
+        );
+    }
+
+    /// 工具调用前的正文只是过程说明，补 `commentary`。
+    #[test]
+    fn text_before_tool_calls_is_commentary() {
+        let mut machine = ResponsesStream::new("m", &json!({}), true);
+        let phases = message_phases(&machine.push(&text_then_tool_stream()));
+        assert_eq!(phases, vec![Some("commentary".to_string())]);
+    }
+
+    /// 开关关闭时原样重建：一个 phase 都不补。
+    #[test]
+    fn phase_is_absent_unless_enabled() {
+        let mut machine = ResponsesStream::new("m", &json!({}), false);
+        let phases = message_phases(&machine.push(&text_only_stream()));
+        assert_eq!(phases, vec![None]);
+    }
+
+    /// 被截断的响应（输出预算用尽 / 内容过滤）不算真正回答完，不补阶段标记 ——
+    /// 与 Codex++ 对 `response.incomplete` 的处置一致，否则半截答案会被折叠成收尾。
+    #[test]
+    fn truncated_response_gets_no_phase() {
+        let mut machine = ResponsesStream::new("m", &json!({}), true);
+        let truncated = b"data: {\"id\":\"chatcmpl_c\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"\xe5\x8d\x8a\xe6\x88\xaa\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n".to_vec();
+        assert_eq!(message_phases(&machine.push(&truncated)), vec![None]);
+    }
+
+    /// 非流式聚合与流式同一判据。
+    #[test]
+    fn collector_marks_message_phase_by_tool_calls() {
+        let final_answer = responses_from_chat(
+            &json!({
+                "id": "chatcmpl_a",
+                "choices": [{ "message": { "role": "assistant", "content": "答案" }, "finish_reason": "stop" }]
+            }),
+            "m",
+            &json!({}),
+            true,
+        );
+        assert_eq!(final_answer["output"][0]["phase"], "final_answer");
+
+        let commentary = responses_from_chat(
+            &json!({
+                "id": "chatcmpl_b",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "先看看",
+                        "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "shell", "arguments": "{}" } }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            }),
+            "m",
+            &json!({}),
+            true,
+        );
+        assert_eq!(commentary["output"][0]["phase"], "commentary");
     }
 }

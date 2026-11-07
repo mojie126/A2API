@@ -1172,5 +1172,15 @@
   "，替换前的数据已备份为 {name}": ", the pre-replace data was backed up as {name}",
   "，自定义提供商新增 {added} 个、更新 {updated} 个": ", custom providers: {added} added, {updated} updated",
   "；开关关闭时词表不执行": "; rules do not run while masking is disabled",
-  "；网页管理面板已一并开放（浏览器打开同一地址）": "; the web admin panel is also open (open the same address in a browser)"
+  "；网页管理面板已一并开放（浏览器打开同一地址）": "; the web admin panel is also open (open the same address in a browser)",
+  "第三方模型回答完自动折叠过程": "Collapse third-party model work after the answer",
+  "让 Codex 在收到最终答案后收起中间过程。仅为严格识别的 Codex Responses 请求补阶段标记，报表归类和来源声明不影响此判断。正常结束且没有工具调用的非空回答才补 final_answer，工具调用前的说明补 commentary；错误、截断、缺少结束信号或未知结束原因不补最终答案标记。默认关闭，不改变回答文字，也不减少模型思考或用量。": "Let Codex collapse intermediate work after the final answer. Phase markers are added only to strictly identified Codex Responses requests, independently of report categories and client declarations. Only non-empty, normally completed replies without tool calls receive final_answer; text before tool calls receives commentary. Errors, truncation, missing completion signals and unknown finish reasons never receive a final-answer marker. Off by default; answer text, model reasoning and usage are unchanged.",
+  "给 Codex 的响应补阶段标记，回答完后像官方模型一样把推理与命令过程折叠起来": "Add phase markers to Codex responses so reasoning and commands collapse after the answer, like official models",
+  "✅ 第三方模型回答完自动折叠过程已开启": "✅ Collapse third-party model work after the answer enabled",
+  "已关闭第三方模型回答完自动折叠过程": "Collapse third-party model work after the answer disabled",
+  "第三方模型回答完自动折叠过程设置已刷新": "Third-party reasoning collapse setting refreshed",
+  "未能读取第三方模型回答完自动折叠过程设置，请稍后重试": "Could not read the third-party reasoning collapse setting, please try again later",
+  "已开启：为正常完成的 Codex 回答补阶段标记。": "Enabled: add phase markers to normally completed Codex replies.",
+  "已关闭：不额外补阶段标记，由客户端决定过程展示。": "Disabled: no extra phase markers; the client controls how work is displayed.",
+  "默认关闭。开启后下一次 Codex 请求立即生效，不用重启；只对 Codex 来源的 /v1/responses 请求补阶段标记，其它客户端与 /v1/chat/completions 不受影响。": "Off by default. Enabling takes effect on the next Codex request without a restart; phase markers are only added to Codex-origin /v1/responses requests, other clients and /v1/chat/completions are unaffected."
 }
