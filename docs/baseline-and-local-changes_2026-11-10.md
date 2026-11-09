@@ -1,6 +1,6 @@
-# 官方基线与本地改动记录（2026-11-08）
+# 官方基线与本地改动记录（2026-11-10）
 
-本文汇总自 fork 以来本仓库的全部本地改动、官方基线增量与部署运行基线，取代 2026-11-04 与 2026-11-05 两份记录成为当前权威清单：2026-11-05 原文见 `docs/baseline-and-local-changes_2026-11-05.md`；2026-11-04 原文只存于本地对象库的提交 `aa108bc1`（performance 谱系未进 develop 祖先，其工作经 `e99f2031` 重新落地），两份的历史结论在本文中继续有效。
+本文汇总自 fork 以来本仓库的全部本地改动、官方基线增量、部署运行基线与可向上游提交的改动清单，整合并取代 2026-11-04、2026-11-05、2026-11-08 三份记录与 `models-dev-model-metadata-follow-up_2026-11-09.md` 跟进文档：2026-11-04 原文只存于本地对象库的提交 `aa108bc1`（performance 谱系未进 develop 祖先，其工作经 `e99f2031` 重新落地），2026-11-05 与 11-08 两份的官方基线与结论已全部并入本文，历史结论在本文中继续有效。
 
 ## 仓库与分支
 
@@ -77,7 +77,7 @@
 - `dec9790c`：图片兼容参与校验深层误拒与状态列标签对齐修复
 - `09e528cb`：移除图片兼容目标的请求路由参与门
 - `6a79c4bf`：图片兼容视觉调用改用目标模型的账号池与路由 profile
-- `e4e0ed79`：新增 models.dev 模型身份绑定与代理选择——模型身份解析顺序为用户精确绑定、适配器 `modelsDevId`、canonical 标识、精确模型 ID、同提供商名称对齐、全局唯一名称；能力值优先级为用户覆盖值、提供商目录声明值、models.dev 补齐值；目录更新任务行带代理下拉（复用软件更新出口），手动绑定支持 canonical 标识与名称对齐开关（跟进文档见 `docs/models-dev-model-metadata-follow-up_2026-11-09.md`）
+- `e4e0ed79`：新增 models.dev 模型身份绑定与代理选择——模型身份解析顺序为用户精确绑定、适配器 `modelsDevId`、canonical 标识、精确模型 ID、同提供商名称对齐、全局唯一名称；能力值优先级为用户覆盖值、提供商目录声明值、models.dev 补齐值（未声明兜底）；目录更新任务行带代理下拉（复用软件更新出口），手动绑定支持 canonical 标识与名称对齐开关。models.dev 请求带 gzip 与两分钟超时，失败不覆盖内嵌快照；任意模型 id（如 `sn-*`）不能从名称形态推断身份，必须由适配器或用户显式绑定。维护检查：`cargo test -p agent2api-server model_meta --lib`、`cargo check -p agent2api-server`、`ui-islands` 下 tsc 与 vite build（原跟进文档已并入本文）
 
 ### 2026-11-10（同步官方 beta 大版本与本地修复）
 
@@ -142,7 +142,7 @@
 
 ## 插件仓库对应
 
-提供商插件仓库（`Agent2Providers`，origin `https://github.com/mojie126/A2P`）的官方基线、本地改动全史与开发构建流程基线，见该仓库 `docs/插件仓库基线与本地改动记录_2026-11-08.md`；供应商上游排查记录见其 `docs/供应商上游基线与本地改动记录_2026-11-06.md`
+提供商插件仓库（`Agent2Providers`，origin `https://github.com/mojie126/A2P`）的官方基线、本地改动全史、供应商上游排查与开发构建流程基线，见其 `docs/插件仓库基线与本地改动记录_2026-11-10.md`
 
 ## 验证记录
 
@@ -154,9 +154,9 @@
 - `performance-build` 运行 `42391552192`：覆盖模态框遮罩、Bun 清理入口与路由表单布局全部改动
 - 2026-11-08 第三批（管理界面与构建链收尾）：`cargo test --workspace` 全量通过（337 项，1 项需插件环境跳过）；`scripts/build-desktop.ps1` 完成桌面构建（`agent2api.exe` / `agent2api-server.exe`）
 
-## 可 PR 上游清单（2026-11-08 盘点）
+## 可 PR 上游清单（2026-11-10 盘点）
 
-2026-11-08 晚已整理为上游 PR：A2API [aimod-cc/Agent2API#531](https://github.com/aimod-cc/Agent2API/pull/531)（base beta，fork 特有的工作流调整、本地构建脚本与改动记录文档已剥离）、A2P [ProvidersPlugin/Agent2Providers#42](https://github.com/ProvidersPlugin/Agent2Providers/pull/42)（base beta，dev-build 工作流与改动记录文档已剥离），待上游合并。
+2026-11-08 整理的 [aimod-cc/Agent2API#531](https://github.com/aimod-cc/Agent2API/pull/531)、[aimod-cc/Agent2API#540](https://github.com/aimod-cc/Agent2API/pull/540)（models.dev）与 [ProvidersPlugin/Agent2Providers#42](https://github.com/ProvidersPlugin/Agent2Providers/pull/42)（OfficeAce）已于 2026-11-10 关闭——官方 `3.5.0-beta.1` 基线落地后按下方清单重新整理提交，fork 的 `feature/*`、`pr/*` 分支已随之清理。
 
 已通过 PR 合入上游的改动（closed = 已在上游收口，无需重复提交）：
 
@@ -186,6 +186,9 @@
 - ZCode 定时领取验证支持浏览器后台标签页（`7e4fbb42`）
 - 整库备份「包含日志与调试报文」开关跨会话记忆（`0e3ac617`）
 - 构建：桌面壳二进制名对齐 `mainBinaryName` 与 lib `crate-type` 收敛为 `rlib`（修复 windows-gnu 本地构建）
+- TOML 配置编辑丢失行上注释的修复——官方已在 `aba58858` 以原地替换方式修复，无需再提
+- 云同步抑制计数 `fetch_update` 改 `fetch_sub` 与无调用方函数清理（编译告警清零，2026-11-10）
+- models.dev 模型身份绑定与代理选择（原 #540 内容，重整后按新基线提交）
 
 不宜 PR 上游（fork 特有）：
 
