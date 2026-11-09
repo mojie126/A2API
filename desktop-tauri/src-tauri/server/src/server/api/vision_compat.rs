@@ -38,7 +38,8 @@ fn model_choices(store: &AccountStore) -> Vec<Value> {
         let manifest: Vec<Value> = if is_custom {
             custom_providers::get(provider).and_then(|owner| owner.get("models").and_then(Value::as_array).cloned()).unwrap_or_default()
                 .into_iter().map(|mut item| {
-                    model_meta::apply(&mut item);
+                    let id = model_id(&item);
+                    model_meta::apply(provider, &mut item, Some(&id));
                     let overrides = capability::normalize_object(item.get("capabilities"));
                     capability::apply_overrides(&mut item, &overrides);
                     item
