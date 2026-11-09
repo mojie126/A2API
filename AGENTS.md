@@ -5,6 +5,9 @@
 >
 > 覆盖范围：切分支 / 给 PR 选 base / 合并 PR / 回复 Issue、PR / 改版本号 / 写更新日志 /
 > 打 tag / 挂 GitHub Release / 发 beta 预发布版 / 发版验收 / 排查发版失败。
+>
+> **向上游整理 PR 的操作，一律按 Skill `upstream-pr` 执行：**
+> **`.agents/skills/upstream-pr/SKILL.md`** —— PR 分支命名、base 选择、fork 专属剥离、候选核对等细则见该 Skill。
 
 ## 两条红线（先问人，不得自行推进）
 
@@ -12,6 +15,29 @@
 2. **更新日志**：写好的日志（= 发布提交信息 = Release 正文）必须先给用户逐条过目；按反馈改完**再确认一次**才能提交。
 
 其余细则（分支落脚点、署名与 AI 落款、六处版本号、正式版 / beta 完整流程、验收清单、已知坑与排查）见上述 Skill。
+
+## 仓库与分支模型（fork 三分支）
+
+本仓库是 `aimod-cc/Agent2API` 的 fork，采用三分支模型；官方 Skill `release-flow` 第 1 节描述的「beta 集成、main 发版」是上游仓库口径，本 fork 以本节为准，发版红线与流程仍按该 Skill 执行。
+
+- `main`：官方正式版镜像。只做同步与发版基线，不承载本地功能改动
+- `beta`：官方 beta 集成镜像。只做同步，不承载本地功能改动
+- `develop`：当前工作分支。承载全部本地改动（客户端归属规则、models.dev、图片兼容、Bun 运行时清理等）与权威文档；本地改进一律落在这里，再按「可 PR 上游清单」向上游整理
+- 插件仓库 `Agent2Providers`（origin `https://github.com/mojie126/A2P`）同口径维护 `main` / `beta` / `develop` 三分支，其权威文档见该仓库 `docs/插件仓库基线与本地改动记录_2026-11-10.md`
+- 同步分支重置步骤：`git reset --hard upstream/<分支>` → 全部工作流修剪为仅 `workflow_dispatch`（移除推送、拉取请求、tag、定时等一切自动触发）→ 单独提交 → 强推 origin；两个同步分支的重置互不影响
+- 任何 GitHub Actions 工作流都不得有自动触发（推送、拉取请求、tag、定时、workflow_run 均不允许）；新建或合并工作流时同样遵守
+
+## 权威文档维护
+
+- `docs/baseline-and-local-changes_2026-11-10.md`：官方基线、本地改动全史、部署运行基线与「可 PR 上游清单」的唯一权威清单。每次同步官方、跟进修复、发版验证后滚动更新；历史分日期文档已并入本文并删除，不再新增分日期记录
+- 「可 PR 上游清单」是整理上游 PR 的唯一依据：先核对条目未被官方覆盖、未被其它 PR 承接，再动手整理
+- 插件仓库对应文档：`docs/插件仓库基线与本地改动记录_2026-11-10.md`（在 Agent2Providers 仓库），维护口径相同
+
+## 提交与本地测试注意事项
+
+- 本地测试网关改动：先跑 `scripts/build-desktop.ps1` 构建 Windows 桌面端（串联 i18n 词典、页面岛、手机端 bundle、Rust 四步，按产物时间增量跳过），产物为 `target\release\agent2api.exe`（桌面壳）与 `target\release\agent2api-server.exe`（headless 网关）
+- 插件仓库（Agent2Providers）有更新：先构建 Windows 插件包——`cargo build --release -p agent2api-providers` 后 `node scripts/pack.mjs --target x86_64-pc-windows-msvc --skip-build` 产出 `dist/*.zip`，再更新到本地网关的插件目录 `%USERPROFILE%\.agent2api\plugins\agent2api-providers`（保持 `pack.json`、`bin/`、`ui/`、`licenses/` 目录结构，`plugins.json` 为登记表），或经网关面板「提供商插件 → 安装插件包」安装 zip
+- 推送 develop 触发 `performance-build` 构建时，注意发布步骤的校验包含「协议库 tag 与网关版本一致」——升级网关版本号时必须同步升级协议库 tag（官方已发布 tag 见 Agent2Providers 的 tags 页）
 
 ## 反代提供商问题排查
 
