@@ -39,6 +39,14 @@
 - 插件仓库（Agent2Providers）有更新：先构建 Windows 插件包——`cargo build --release -p agent2api-providers` 后 `node scripts/pack.mjs --target x86_64-pc-windows-msvc --skip-build` 产出 `dist/*.zip`，再更新到本地网关的插件目录 `%USERPROFILE%\.agent2api\plugins\agent2api-providers`（保持 `pack.json`、`bin/`、`ui/`、`licenses/` 目录结构，`plugins.json` 为登记表），或经网关面板「提供商插件 → 安装插件包」安装 zip
 - 推送 develop 触发 `performance-build` 构建时，注意发布步骤的校验包含「协议库 tag 与网关版本一致」——升级网关版本号时必须同步升级协议库 tag（官方已发布 tag 见 Agent2Providers 的 tags 页）
 
+## 草稿发布维护
+
+- `performance-build`（A2API develop）与 `dev-build`（插件仓库 develop）产出的草稿 Release 是 fork 自有的测试资产，与官方发版流程无关，资产草稿可随时删除重建，不影响 develop 源码、构建缓存与运行中的部署
+- 草稿描述必须维护：按「新增：」「修复：」「优化：」分类列出本轮构建包含的改动，条目与提交信息一一对应，不写与产物无关的内容
+- 同一个大版本的多次构建：描述要整合或追加——同 tag 覆盖式重建时把历次条目合并为一份完整清单，不丢失先前条目；已发布同 tag 加 `-r<序号>` 后缀的重复构建，在描述里注明与上一版的差异
+- GHCR 镜像推送偶发 `permission_denied: write_package` 拒绝：重跑失败步骤即可恢复（runner 侧瞬时网络或令牌问题，2026-11-10 复现一次、重跑恢复），不是额度或包授权问题
+- 增量构建口径：两个构建工作流已配置 rust-cache（Cargo 注册表与 target 目录）、npm 缓存（`desktop-tauri/package-lock.json`）与 Docker 的 gha 层缓存，依赖与产物按缓存键增量复用；`Cargo.lock`、锁文件或 Dockerfile 变更引发相应重拉重编属预期行为，不改缓存配置
+
 ## 反代提供商问题排查
 
 收到反代提供商相关的问题反馈时，**优先使用网络搜索查找已有解决方案**，重点参考同类项目的 Issue、PR、修复记录和适配实现，了解其他项目是否遇到过相同问题、如何解决。**不要默认从零自行排查**：先核对已有方案与本项目的适用性，优先借鉴可靠的解决思路；未找到可靠方案、现有方案不适用或仍有未解决的问题时，再开展针对性的本地排查。
