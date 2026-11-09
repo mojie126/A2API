@@ -1,20 +1,6 @@
 name: rust-tests
 
 on:
-  push:
-    branches: [main, beta]
-    paths:
-      - 'desktop-tauri/src-tauri/**'
-      - 'scripts/cargo-test.mjs'
-      - '.github/workflows/rust-tests.yml'
-      - 'package.json'
-  pull_request:
-    branches: [main, beta]
-    paths:
-      - 'desktop-tauri/src-tauri/**'
-      - 'scripts/cargo-test.mjs'
-      - '.github/workflows/rust-tests.yml'
-      - 'package.json'
   workflow_dispatch:
 
 permissions:
