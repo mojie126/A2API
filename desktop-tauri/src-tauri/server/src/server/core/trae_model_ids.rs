@@ -9,9 +9,7 @@
 //!
 //! ── 旧请求仍然可用 ──────────────────────────────────────────
 //! 迁移只改**我们保存的数据**，不改下游正在发的请求名。旧客户端仍可请求
-//! 旧客户端仍可请求
-//! `<id>-solo` / `<id>-solo-max`：插件侧保留兼容解析，主程序入口把前者归一成
-//! 原始 ID、后者归一成新的 `<id>-max`（见 `core::trae_model_ids::legacy_model_alias`）。
+//! `<id>-solo` / `<id>-solo-max`：插件侧保留兼容解析。
 //!
 //! ── 为什么只跑一次 ──────────────────────────────────────────
 //! 目录缓存与配置里的旧名改完就不存在了，判据本身可自证；但「用户后来手建了
@@ -507,30 +505,3 @@ fn dedupe_seeded(items: &mut Vec<String>) -> usize {
     before - items.len()
 }
 
-/// 入口归一：旧客户端请求 `<id>-solo` 时改成原始 ID，`<id>-solo-max` 改成
-/// 新的 `<id>-max`。只认 Trae 清单里确实存在的目标，避免影响别家真实的
-/// `foo-solo` 模型；Max 变体未广告时回落到基础模型，至少不丢请求。
-pub(crate) fn legacy_model_alias(model: &str) -> Option<String> {
-    let target = legacy_name(model)?;
-    // 旧名本身就是别家的真实模型（或用户建的别名）时保留原意。
-    if !crate::server::core::providers::catalog::providers_for_model(model).is_empty() {
-        return None;
-    }
-    let manifest = crate::server::core::providers::catalog::manifest_for_provider(TRAE);
-    if let Some(base) = strip_suffix(model, "-solo-max") {
-        // `<id>-max` 只在本插件合成的 Max 条目上带标记；撞名的真实上游模型
-        // 不能被旧 `<id>-solo-max` 请求占用。
-        let ours = manifest.iter().any(|entry| {
-            entry
-                .get("id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| id.eq_ignore_ascii_case(&target))
-                && entry.get("traeMax").and_then(Value::as_bool) == Some(true)
-        });
-        if ours {
-            return Some(target);
-        }
-        return crate::server::core::providers::catalog::entry_id_in_manifest(&manifest, base);
-    }
-    crate::server::core::providers::catalog::entry_id_in_manifest(&manifest, &target)
-}

@@ -40,10 +40,8 @@ impl SuppressionGuard {
 
 impl Drop for SuppressionGuard {
     fn drop(&mut self) {
-        let previous = SUPPRESS_DEPTH.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
-            Some(value.saturating_sub(1))
-        });
-        if previous == Ok(1) {
+        let previous = SUPPRESS_DEPTH.fetch_sub(1, Ordering::SeqCst);
+        if previous == 1 {
             // 抑制期间也可能有真正的本地写入，结束后补查一次，不能丢掉这些变更。
             notify_change();
         }
