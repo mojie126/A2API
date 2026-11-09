@@ -187,16 +187,6 @@ jobs:
             echo "::error::提供商协议库版本与网关不一致，网关=$version 协议库=$provider_protocol_tag"
             exit 1
           fi
-          printf '%s\n' \
-            "Agent2API $version 草稿 Release" \
-            "" \
-            "本 Release 仅包含 Windows 桌面端与 Windows 服务端资产。" \
-            "" \
-            "- Windows 桌面端：windows-nsis" \
-            "- Windows 服务端：windows-server-amd64" \
-            "- 容器镜像：ghcr.io/${{ github.repository_owner }}/a2api:latest（linux/amd64）" \
-            "" \
-            "请在确认 Windows 附件与容器镜像后，再手动将本 Release 正式发布。" > notes
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: 清理未发布的同 tag 草稿
@@ -220,7 +210,7 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
           artifacts: "dist/*"
-          bodyFile: notes
+          bodyFile: docs/release-notes_3.5.0-beta.1.md
           draft: true
           tag: "v${{ steps.release.outputs.version }}${{ steps.tag_guard.outputs.suffix }}"
           token: ${{ secrets.GITHUB_TOKEN }}

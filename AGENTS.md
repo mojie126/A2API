@@ -42,8 +42,8 @@
 ## 草稿发布维护
 
 - `performance-build`（A2API develop）与 `dev-build`（插件仓库 develop）产出的草稿 Release 是 fork 自有的测试资产，与官方发版流程无关，资产草稿可随时删除重建，不影响 develop 源码、构建缓存与运行中的部署
-- 草稿描述必须维护：按「新增：」「修复：」「优化：」分类列出本轮构建包含的改动，条目与提交信息一一对应，不写与产物无关的内容
-- 同一个大版本的多次构建：描述要整合或追加——同 tag 覆盖式重建时把历次条目合并为一份完整清单，不丢失先前条目；已发布同 tag 加 `-r<序号>` 后缀的重复构建，在描述里注明与上一版的差异
+- 草稿描述由变更文档承载，工作流自动取用：A2API 为 `docs/release-notes_<版本>.md`（fork-build 的发布步骤以 `bodyFile` 引用），插件仓库为 `docs/release-notes_<版本>.md`（dev-build 以 `--notes-file` 引用）
+- 变更文档按「新增：」「修复：」「优化：」「其它：」分类列出构建包含的改动；同一个大版本的多次构建在同一个文件里整合或追加，新版本开始时新建对应版本号的文件，并同步更新工作流里的 `bodyFile` / `--notes-file` 路径（发布校验要求协议库 tag 与网关版本一致，两处同步改）
 - GHCR 镜像推送偶发 `permission_denied: write_package` 拒绝：重跑失败步骤即可恢复（runner 侧瞬时网络或令牌问题，2026-11-10 复现一次、重跑恢复），不是额度或包授权问题
 - 增量构建口径：两个构建工作流已配置 rust-cache（Cargo 注册表与 target 目录）、npm 缓存（`desktop-tauri/package-lock.json`）与 Docker 的 gha 层缓存，依赖与产物按缓存键增量复用；`Cargo.lock`、锁文件或 Dockerfile 变更引发相应重拉重编属预期行为，不改缓存配置
 
