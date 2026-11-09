@@ -65,7 +65,13 @@ fn patch(
             ) {
                 *new.decor_mut() = old.decor().clone();
             }
+            // 行上注释与键的间距都存在键的 leaf decor 里，整体替换条目会把它丢掉，
+            // 替换后要把旧键的 decor 原样搬回新键
+            let key_decor = table.key(key).map(|k| k.leaf_decor().clone());
             table.insert(key, replacement);
+            if let (Some(decor), Some(mut new_key)) = (key_decor, table.key_mut(key)) {
+                *new_key.leaf_decor_mut() = decor;
+            }
         }
     }
     Ok(())
