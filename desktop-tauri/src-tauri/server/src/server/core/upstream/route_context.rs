@@ -125,14 +125,14 @@ impl RequestRouting {
     }
 
     pub(super) fn for_vision_target(&self, store: &crate::server::core::account_store::AccountStore,
-        provider: &str, model: &str, request_model: &str, scope: Option<&crate::server::core::key_scope::KeyScope>,
+        provider: &str, model: &str, scope: Option<&crate::server::core::key_scope::KeyScope>,
         pinned: Option<&str>, candidate: Option<&str>, needs: Option<&RequestNeeds>) -> Result<Self, crate::server::errors::GatewayError> {
         use crate::server::errors::GatewayError;
         let mut next = self.clone();
         if let Some(current_group) = &self.group {
             let profiles = config::routing_profiles();
             if profiles.group_for_model(&current_group.model).is_none_or(|group| group.id != current_group.id) {
-                return Err(GatewayError::with_status(409, "原路由组已删除或入口已变更，图片兼容已停止"));
+                return Err(GatewayError::with_status(409, "所选路由组已删除或入口已变更，图片兼容已停止"));
             }
         }
         next.strict_vision = true;
@@ -148,31 +148,17 @@ impl RequestRouting {
                 && pinned.is_none_or(|id| routing::account_id(account) == Some(id))
                 && candidate.is_none_or(|id| routing_groups::attempt_key(account) == id));
             if next.group_projection.accounts.is_empty() {
-                return Err(GatewayError::with_status(403, "视觉目标不在当前路由组的参与成员内；未跳到组外")
+                return Err(GatewayError::with_status(403, "视觉目标不在所选路由组的参与成员内")
                     .with_code("vision_target_outside_route"));
             }
         } else {
-            let destination = Self::capture_request(request_model, store, &json!({}), scope, false)?;
-            // 参与校验与保存校验同一判据（`provider_serves_model`）：视觉目标按
-            // 上游真实 id 存储，原始 id 的默认绑定可能被关而启用别名仍指向它，
-            // 按原始 id 查参与范围会把这类目标误判成不可参与
-            let reachable = crate::server::core::providers::catalog::provider_serves_model(provider, model);
-            // 目标供应商不再要求出现在原请求的路由参与范围里：辅助识图/改写的
-            // 目标模型常常不属于原模型的提供商集合，Key 的范围已在 resolve
-            // 入口单独校验，这里按可达性放行
-            if destination.group.is_some() || !reachable {
-                return Err(GatewayError::with_status(403, "视觉目标不在本次请求与目标模型的路由参与范围内")
+            if !self.providers(vec![provider.to_string()]).contains(&provider.to_string()) {
+                return Err(GatewayError::with_status(403, "视觉提供商未参与所选路由，请检查目标模型的路由配置")
                     .with_code("vision_target_outside_route"));
             }
-            // 视觉调用的账号池与路由 profile 取自目标模型：辅助识图/改写的目标
-            // 模型常常不属于原模型的提供商集合，沿用原请求的 profile 过滤与账号
-            // 交集会让跨家目标必然 403/503；Key 的提供商与模型范围已在 resolve
-            // 入口单独校验
-            next.profile = destination.profile;
-            next.scope = destination.scope;
-            next.positions = destination.positions;
+            next.positions.retain(|id, _| pinned.is_none_or(|pinned| pinned == id));
             if next.positions.is_empty() {
-                return Err(GatewayError::with_status(503, "当前权限和路由范围内没有参与图片处理的账号")
+                return Err(GatewayError::with_status(503, "当前权限和目标路由内没有参与图片处理的账号")
                     .with_code("vision_target_unavailable"));
             }
         }
@@ -182,7 +168,8 @@ impl RequestRouting {
     pub(super) fn cache_identity(&self) -> String {
         let mut accounts: Vec<_> = self.positions.iter().map(|(id, position)| (id, position)).collect();
         accounts.sort_by_key(|(id, _)| *id);
-        json!({ "scope": self.scope, "accounts": accounts, "group": self.group,
+        let candidates: Vec<_> = self.group_projection.accounts.iter().map(|account| routing_groups::attempt_key(account)).collect();
+        json!({ "scope": self.scope, "accounts": accounts, "group": self.group, "candidates": candidates,
             "account": self.account_id, "requireAccount": self.require_account }).to_string()
     }
 

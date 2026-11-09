@@ -147,8 +147,12 @@ pub mod errors;
 pub mod http;
 pub mod logging;
 pub mod logs_store;
+mod panel_captcha;
 pub mod request_stats;
 mod static_files;
+
+#[cfg(test)]
+mod native_gateway_tests;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -532,6 +536,7 @@ impl ServerState {
         // 启动即收尾上次运行遗留的进行中行（详情见方法注释）：不等到第一条
         // 请求进来才清理，界面打开时看到的就已经是「已中断」的终态
         core::billing::keepalive::install_stats(request_stats.clone());
+        core::plugin_host::script::install_stats(request_stats.clone());
         request_stats.sweep_stale_running();
         // 启动时同步收敛旧版 debug 模式留下的正文容量，避免低配置设备
         // 在第一条请求到来前仍背着超限的下游正文

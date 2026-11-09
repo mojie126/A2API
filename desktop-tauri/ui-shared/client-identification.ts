@@ -40,7 +40,8 @@ export type ClientSettings = {
 export type ClientIdentificationView = {
   config: ClientSettings
   revision: string
-  builtins: { id: string; name: string; value: string; products: string[] }[]
+  /** `ua` 是该客户端一份代表性的 User-Agent（账号级自定义 UA 的预置项，见后端 catalog） */
+  builtins: { id: string; name: string; value: string; products: string[]; ua?: string }[]
   /** 已添加供应商（模型管理同源）：内置家在前、自定义家在后，归属规则第一列用 */
   providers: { id: string; label: string; custom: boolean }[]
   headers: string[]
