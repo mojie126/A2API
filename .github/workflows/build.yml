@@ -122,9 +122,6 @@ name: build
 # `scripts/release.sh` 挂到构建仓库（脚本里的 `BUILD_REPO` 已指向那里）。
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
