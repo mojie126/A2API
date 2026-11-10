@@ -114,6 +114,12 @@
   - 桌面 lib 的 `crate-type` 从 `staticlib`、`cdylib`、`rlib` 收敛为 `rlib`——仓库内没有任何动态库或静态库消费者（桌面壳以 rlib 静态链接，Tauri 桌面打包只需要 bin），而 windows-gnu 下 cdylib 把全部符号导出会触发「export ordinal too large」链接失败，官方 CI 的 MSVC 工具链不受影响
   - 组件库新增 `SearchSelect` 单选搜索下拉与 `useOptionsWidth` 选项测宽工具（ui-shared `dropdown-width.ts`）；词典新增 8 个维护设置键并补齐英语、日语、韩语、葡语译文（繁体由构建自动转换）
 
+- 待提交（2026-11-10 本地问题排查与修复，用户反馈三轮：云同步上传失败、Magpie 插件清单读取失败、特殊请求路由模型下拉不刷新）：
+  - 云同步 WebDAV 传输层复用连接池——客户端从「每次请求新建」改为 Transport 按整次操作构建（上传与 GET 各一个，GET 不自动跟转、逐跳处理重定向），一次上传从约 7 次 DNS + TCP + TLS 建连降到 1 次；连接类失败自动重试一次（500 毫秒后重新解析重发，非连接类错误不重试，连接阶段服务端未收到字节，重发无副作用）；实测环境 NAS 域名同时发布 A 与 AAAA，解析偶发只返回 AAAA 时连接器没有 IPv4 可回退，整条连接报 Network is unreachable，手动重试命中解析缓存即恢复，与「第一次点击经常失败」的表现吻合
+  - 路由页特殊请求路由的模型下拉随模型变化刷新——三块面板此前只在首次激活拉一次数据，页面岛跨页切换不卸载，模型页改完映射或获取模型回来后下拉停留在旧清单；`useSpecialEditor` 新增 `refreshView`（只刷新模型、客户端、上限等参考数据，配置、修订号与未保存草稿不动），面板重新激活与返回路由页（`wb:page` 事件）时触发，静默失败沿用现有清单
+  - 插件目录 GitHub 清单解析加固——清单不是合法 JSON（实测 heaven-1314/magpie-plugin-claude-scrub 的 package.json 在 description 字段末尾双逗号，serde 严格解析必败且重试无效）时并入既有忽略生命周期：不再进横幅与重试循环，作者修复（pushed_at 变化）后自动恢复读取；`Failure` 增加技术细节字段（serde 行列定位），status 暴露 `githubFailures`（逐仓库失败与重试时间）与 `githubUnreadable`（无法解析清单与原因），解析前剥离 UTF-8 BOM
+  - 插件目录横幅新增「错误详情」弹窗——横幅保持一句话，弹窗按「Magpie 官方名单、读取失败的仓库、无法解析的插件清单」三段展示具体原因、仓库与重试时间，六语词条补齐
+
 ## 部署与运行基线（2026-11-08 实测）
 
 ### NAS Docker 部署
@@ -139,6 +145,9 @@
 - 已知环境限制：`workbuddy-proxy-desktop` 的测试二进制在 windows-gnu 下加载阶段报 `STATUS_ENTRYPOINT_NOT_FOUND`（PATH 里 mingw 运行时 DLL 冲突；该 crate 没有任何测试，与代码无关），`-Test` 因此只跑 server crate 的测试
 - 产物：`target\release\agent2api.exe`（桌面壳，二进制名已与 Tauri CLI 打包名一致）与 `target\release\agent2api-server.exe`（headless 网关）
 - 常用参数：`-DebugBuild` 调试档、`-Test` 构建后跑 server crate 测试、`-FrontendOnly` 仅前端、`-SkipFrontend` 仅 Rust、`-ScanI18n` 先扫描词典新键、`-Force` 全部重建、`-Bundle` 追加 NSIS 安装包（需 `cargo install tauri-cli --locked`，本地未装）、`-Proxy http://127.0.0.1:7890` 首次拉依赖走本地代理
+- 构建只保留 release（2026-11-10 起）：debug 谱系已清理（A2API `target\debug` 38.46 GB + 插件仓库 `target\debug` 3.83 GB，共回收 42.29 GB），本地无断点调试需求；后续 `cargo test` 与 `cargo check` 一律加 `--release`（复用 release 依赖缓存，不产生 debug 谱系），确需断点调试时再临时构建
+- 行尾幻影修改根治——生成器（词典编译 build.mjs、vite）固定输出 LF，仓库 `core.autocrlf=true` 检出为 CRLF，每次重建产物在两种行尾间翻转，git status 出现大量 diff 为空的幻影修改（本轮 95 个 i18n 产物条目）；两道修复：`.gitattributes` 锁定 `desktop-tauri/ui/** text=auto eol=lf`（与 `.githooks/**` 同一先例），词典编译器 build.mjs 对内容一致（行尾归一后）的产物跳过写入；`ui/sw.js` 的缓存指纹随 bundle 内容哈希变化属设计行为，不算噪音
+- 注意：AI 会话的执行沙箱对 `.git` 只读，git add / renormalize 无法持久化索引，幻影条目需要在正常环境跑一次 `git status` 或随下次提交自然消除
 
 ## 插件仓库对应
 
@@ -153,6 +162,7 @@
 - 服务端 plugin_host 相关测试：20 通过、11 忽略；providers 全量测试 11 通过（含果办 pending 超时回落 2 个新增用例，提交于 A2P）
 - `performance-build` 运行 `42391552192`：覆盖模态框遮罩、Bun 清理入口与路由表单布局全部改动
 - 2026-11-08 第三批（管理界面与构建链收尾）：`cargo test --workspace` 全量通过（337 项，1 项需插件环境跳过）；`scripts/build-desktop.ps1` 完成桌面构建（`agent2api.exe` / `agent2api-server.exe`）
+- 2026-11-10 本地修复批次：`cargo test -p agent2api-server --lib` 407 通过（新增 3 个清单解析用例）、`cargo check` 零告警、ui-islands `tsc --noEmit` 通过；`cargo test --release` 407 通过（首跑在满负载下 readiness 闸门用例偶发失败一次，单跑与复跑均通过）；插件目录行为经本地受控 HTTP 服务模拟验证（六种响应形状逐一灌入真实拉取链路，再用真实仓库 heaven-1314/magpie-plugin-claude-scrub 的 package.json 双逗号实测定位）
 
 ## 可 PR 上游清单（2026-11-10 盘点）
 
@@ -189,6 +199,9 @@
 - TOML 配置编辑丢失行上注释的修复——官方已在 `aba58858` 以原地替换方式修复，无需再提
 - 云同步抑制计数 `fetch_update` 改 `fetch_sub` 与无调用方函数清理（编译告警清零，2026-11-10）
 - models.dev 模型身份绑定与代理选择（原 #540 内容，重整后按新基线提交）
+- 云同步 WebDAV 连接池复用与连接类失败自动重试（一次上传建连约 7 次降为 1 次，瞬态解析失败不再让首次上传报错）
+- 特殊请求路由模型下拉随模型变化刷新（面板重新可见时静默刷新参考数据，未保存草稿不动）
+- 插件目录：无法解析的清单并入忽略生命周期、横幅「错误详情」弹窗、解析前剥离 BOM
 
 不宜 PR 上游（fork 特有）：
 
