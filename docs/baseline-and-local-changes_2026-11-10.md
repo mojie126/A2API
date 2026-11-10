@@ -170,6 +170,7 @@
 - 2026-11-08 第三批（管理界面与构建链收尾）：`cargo test --workspace` 全量通过（337 项，1 项需插件环境跳过）；`scripts/build-desktop.ps1` 完成桌面构建（`agent2api.exe` / `agent2api-server.exe`）
 - 2026-11-10 本地修复批次：`cargo test -p agent2api-server --lib` 407 通过（新增 3 个清单解析用例）、`cargo check` 零告警、ui-islands `tsc --noEmit` 通过；`cargo test --release` 407 通过（首跑在满负载下 readiness 闸门用例偶发失败一次，单跑与复跑均通过）；插件目录行为经本地受控 HTTP 服务模拟验证（六种响应形状逐一灌入真实拉取链路，再用真实仓库 heaven-1314/magpie-plugin-claude-scrub 的 package.json 双逗号实测定位）
 - 2026-11-10 特殊请求路由与图片兼容批次：服务端 release 全量测试 411 通过、11 项插件环境相关跳过、零失败；新增标题生成快照、逐规则能力处理和显式空规则删除回归用例；桌面端与手机端类型检查通过；主界面、手机端、词典与 `scripts/build-desktop.ps1` release 桌面构建通过，无新增告警；正式产物确认包含逐规则三选项且不再包含旧版「更多设置」折叠结构
+- `performance-build` 运行 `42802362630`（提交 `0b141b06`）：Windows 桌面端、Windows 服务端、GHCR linux/amd64 镜像与草稿 Release 全部成功；草稿 `v3.5.0-beta.1-r34` 包含 Windows 安装包与服务端包，正文采用「核心更新 / 其他更新」两段格式
 
 ## 可 PR 上游清单（2026-11-10 盘点）
 
