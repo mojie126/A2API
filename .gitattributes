@@ -5,3 +5,9 @@
 # 报错提示，只是静默不跑）。只约束 .githooks/ 下的文件，仓库其余部分
 # 维持现状，不做全仓库行尾规范化。
 .githooks/** text eol=lf
+
+# 构建产物（词典、页面岛、手机端 bundle、service worker）由生成器固定写 LF，
+# core.autocrlf=true 会把文本文件检出成 CRLF，生成器重写后回到 LF，工作区在
+# 两种状态间翻转，git status 出现大量 diff 为空的幻影修改。锁定 ui/ 产物为
+# LF，重写与检出状态一致，重建不再产生行尾噪音。
+desktop-tauri/ui/** text=auto eol=lf

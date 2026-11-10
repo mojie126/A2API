@@ -216,6 +216,10 @@ async function main() {
   }
 
   for (const { file, content } of outputs) {
+    // 内容一致（行尾归一后）就跳过写入：生成器固定输出 LF，检出态可能是
+    // CRLF，无条件重写会让工作区在两种行尾间翻转，git status 出现大量
+    // diff 为空的幻影修改
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').replaceAll('\r\n', '\n') === content) continue
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, content, 'utf8')
   }
