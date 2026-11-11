@@ -197,7 +197,8 @@
 - `performance-build` 运行 `42802362630`（提交 `0b141b06`）：Windows 桌面端、Windows 服务端、GHCR linux/amd64 镜像与草稿 Release 全部成功；草稿 `v3.5.0-beta.1-r34` 包含 Windows 安装包与服务端包，正文采用「核心更新 / 其他更新」两段格式
 - 2026-11-11 开放拉取请求复核批次：服务端 release 构建通过，全量库测试 412 通过、11 项插件环境相关跳过、零失败；桌面页面岛与手机端类型检查、构建通过，词典完整重建；界面产物确认三种遮罩均不再带入场动画，能力位与身份合并写入的桌面和 Web 桥接保持一致
 - 2026-11-11 特殊请求路由与自动维护收敛批次：服务端 `cargo test -p agent2api-server vision_compat` 6 项通过，`cargo check -p agent2api-server` 零告警；桌面页面岛、手机端与组件库类型检查通过；`scripts/build-desktop.ps1` release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`；产物核对确认不再包含「工具服务的视觉模型」文案，包含「默认识图模型」与「强制辅助识图」
-- 2026-11-12 调试采集、ZCode、果办与商汤批次：服务端 `cargo check -p agent2api-server` 通过、零告警；服务端全量测试 430 个用例，419 通过、11 个既有插件环境条件用例忽略、0 失败；页面岛 TypeScript 检查通过，主界面与登录界面 Vite 构建通过，i18n 扫描与缺失键检查通过；`scripts/build-desktop.ps1` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
+- 2026-11-12 调试采集、ZCode、果办与商汤批次：服务端 `cargo check -p agent2api-server` 通过、零告警；服务端全量测试 430 个用例，419 通过、11 个既有插件环境条件用例忽略、0 失败；页面岛与手机端 TypeScript 检查通过，主界面、登录界面与手机端 Vite 构建通过，i18n 扫描与缺失键检查通过；`scripts/build-desktop.ps1` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`；插件仓库 23 个测试全部通过
+- 2026-11-12 草稿清理修复：`performance-build` 首次运行中，`gh release delete --cleanup-tag` 在删除旧草稿后会因标签已不存在返回 HTTP 422；改为先删除 Release、再单独删除标签，并让标签已不存在的响应按幂等清理处理，重跑运行 `43081964358` 全部成功并生成草稿 `v3.5.0-beta.1`
 - 2026-11-12 商汤真实链路实测：手机号验证码授权成功，授权码换票返回 access token 与 refresh token，两个 refresh 轮次均 HTTP 200 且 refresh token 均变化；直连发码 HTTP 200、`token_code` 为空，`getCaptcha` 返回 `code_key`、背景图与拼图块，验证官方滑块协议
 - 2026-11-12 调试模式本次没有开启真实流量采集；完整回归步骤、档位读数和资源观察口径记录在 `docs/调试模式与ZCode果办回归测试_2026-11-11.md`，待下次开启调试模式时执行
 
