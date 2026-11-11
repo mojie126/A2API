@@ -209,6 +209,7 @@ export function MaintenancePanel({ api, active = true, revision = 0, onAccount, 
         detailLoading={detailLoading === expanded}
         detailError={detailError[expanded] || ''}
         onReloadDetail={() => void fetchDetail(expanded)}
+        providers={overview.providers}
         retentionDays={overview.retentionDays}
         maxRecords={overview.maxRecords}
         onRetry={(runId, itemId) => { const run = runs.find(item => item.id === runId); if (run) void execute(run.taskId, runId, itemId) }}

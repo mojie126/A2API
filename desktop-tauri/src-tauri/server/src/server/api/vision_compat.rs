@@ -108,6 +108,7 @@ fn expand_legacy(settings: &mut VisionSettings, choices: &[Value]) {
         match settings.legacy_mode(provider, model) {
             Some(Mode::Assist) => settings.assist.models.push(ModelRef::new(provider, model)),
             Some(Mode::Reroute) => settings.reroute.models.push(ModelRef::new(provider, model)),
+            Some(Mode::Force) => settings.assist.models.push(ModelRef::new(provider, model)),
             None => {}
         }
     }
@@ -208,13 +209,16 @@ pub async fn put_settings(State(state): State<ServerState>, body: Bytes) -> Resp
         if shape == SaveShape::ProjectedBlocks { normalized.fold_blocks(); }
         vision_compat::validate(&normalized).map_err(GatewayError::bad_request)?;
         if normalized.enabled {
+            if let Some(target) = &normalized.default_target { validate_available(target)?; }
             for rule in normalized.rules.iter().filter(|rule| rule.enabled && !rule.models.is_empty()) {
                 match rule.mode {
-                    Mode::Assist => {
+                    Mode::Assist | Mode::Force => {
+                        // 规则没单独指定时允许回落到全局默认识图模型；
+                        // 两者都没有才要求用户补齐
                         let target = match rule.source {
-                            ModelSource::Shared => shared_target(),
-                            ModelSource::Custom => rule.target.clone(),
-                        }.ok_or_else(|| GatewayError::bad_request("请先配置辅助识图的视觉模型"))?;
+                            ModelSource::Shared => normalized.default_target.clone(),
+                            ModelSource::Custom => rule.target.clone().or_else(|| normalized.default_target.clone()),
+                        }.ok_or_else(|| GatewayError::bad_request("请为这条规则选择识图模型，或先设置默认识图模型"))?;
                         validate_available(&target)?;
                     }
                     Mode::Reroute => {

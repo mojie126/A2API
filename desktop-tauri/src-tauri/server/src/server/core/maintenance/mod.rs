@@ -161,7 +161,13 @@ async fn complete(
         )
         .await
     } else {
-        providers::adapter::refresh_implemented(store).await
+        // 自动路径只刷新真正在用的提供商：没有启用账号的家刷了只会在记录里
+        // 产生「缺少登录态」的噪音，也白白占用一次上游请求
+        let in_use: Vec<String> = providers::executable_provider_ids()
+            .into_iter()
+            .filter(|provider| !store.accounts_for_provider(provider).is_empty())
+            .collect();
+        providers::adapter::refresh_implemented(store, Some(&in_use)).await
     };
     let mut items = raw
         .iter()

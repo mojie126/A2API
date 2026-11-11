@@ -60,6 +60,8 @@ type MultiSelectProps<Value extends string = string> = {
   id?: string
   /** 触发器的悬停提示 */
   title?: string
+  /** 浮层挂载的容器；弹窗内传弹窗节点，避免浮层被当作外部点击 */
+  portalContainer?: HTMLElement | null
   /** 无障碍名（触发器上没有可见 label 时必填） */
   'aria-label'?: string
 }
@@ -79,6 +81,7 @@ function MultiSelect<Value extends string = string>({
   style,
   id,
   title,
+  portalContainer,
   ...props
 }: MultiSelectProps<Value>) {
   /**
@@ -145,7 +148,7 @@ function MultiSelect<Value extends string = string>({
         </ComboboxPrimitive.Icon>
       </ComboboxPrimitive.Trigger>
 
-      <ComboboxPrimitive.Portal>
+      <ComboboxPrimitive.Portal container={portalContainer ?? undefined}>
         <ComboboxPrimitive.Positioner sideOffset={4} className='z-[35]'>
           <ComboboxPrimitive.Popup
             data-slot='multi-select-content'

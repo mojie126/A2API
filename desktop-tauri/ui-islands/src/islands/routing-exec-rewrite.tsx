@@ -40,7 +40,7 @@ export function requestRewrite(row: ReplayRow): Rewrite | null {
   const route = row.route as (NonNullable<ReplayRow['route']> & {
     compactRoute?: { source?: string; target?: string; client?: string }
     titleRoute?: { source?: string; target?: string; client?: string }
-    visionCompatibility?: { mode?: string; status?: string; calls?: unknown[]; target?: { model?: string } }
+    visionCompatibility?: { mode?: string; status?: string; calls?: unknown[]; target?: { model?: string }; targetModel?: string }
   }) | null | undefined
   if (!route) return null
 
@@ -56,14 +56,15 @@ export function requestRewrite(row: ReplayRow): Rewrite | null {
   }
   const vision = route.visionCompatibility
   if (vision?.mode) {
-    // 图片兼容不改「请求的模型」：辅助识图是另起一次读图调用，整体接管才是换模型。
+    // 辅助识图不改「请求的模型」：它是另起一次读图调用，整体接管与强制转发才是换模型
     if (vision.status === 'skipped') return null
     const calls = Array.isArray(vision.calls) ? vision.calls.length : 0
-    const assist = vision.mode === 'assist_call' || vision.mode === 'assist'
+    const assist = vision.mode === 'assist_call' || vision.mode === 'assist' || vision.mode === 'force'
     return {
-      kind: 'vision', label: t('图片兼容'),
+      kind: 'vision', label: t('辅助识图'),
       from: requestModel(row),
-      to: assist ? t('辅助识图 · {n} 次读图', { n: calls }) : (vision.target?.model || t('视觉模型接管')),
+      to: assist ? t('辅助识图 · {n} 次读图', { n: calls })
+        : (vision.targetModel || vision.target?.model || t('视觉模型接管')),
       detail: assist ? t('读图结果交回原模型继续回答') : t('整次请求交给视觉模型'),
     }
   }

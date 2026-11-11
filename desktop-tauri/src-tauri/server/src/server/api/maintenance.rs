@@ -10,17 +10,32 @@ use crate::server::http::{ok_json, parse_body, MAX_BODY_SIZE};
 use crate::server::ServerState;
 
 pub async fn overview(
-    State(_state): State<ServerState>,
+    State(state): State<ServerState>,
     Query(query): Query<maintenance::types::Query>,
 ) -> Response {
     let result = (|| -> Result<Value, String> {
         let records = maintenance::storage::list(&query)?;
         let latest = maintenance::storage::latest()?;
         let retention = crate::server::config::retention_settings();
+        // 明细弹窗的提供商筛选要和模型目录刷新的匹配口径一致：只列有启用账号的
+        // 提供商，避免出现启用但旗下没有账号的家
+        let store = state.store();
+        let in_use: Vec<String> = crate::server::core::providers::executable_provider_ids()
+            .into_iter()
+            .filter(|provider| !store.accounts_for_provider(provider).is_empty())
+            .collect();
+        let providers: Vec<Value> = crate::server::core::providers::summary_json(
+            |provider| if in_use.iter().any(|id| id == provider) { store.accounts_for_provider(provider).len() } else { 0 },
+            &in_use,
+        )
+        .into_iter()
+        .filter(|item| in_use.iter().any(|id| item["id"].as_str() == Some(id)))
+        .collect();
         Ok(json!({
             "tasks": [scheduled_tasks::task_by_id(maintenance::CREDENTIAL), scheduled_tasks::task_by_id(maintenance::MODEL)],
             "latest": latest,
             "records": records,
+            "providers": providers,
             "retentionDays": retention.maintenance_days,
             "maxRecords": retention.maintenance_count,
         }))

@@ -2,7 +2,7 @@ import { Alert, Badge } from '@ui'
 import type { Translate } from './assistant-read-types'
 
 type VisionDetail = {
-  mode: 'assist' | 'reroute' | 'assist_call'
+  mode: 'assist' | 'reroute' | 'force' | 'assist_call'
   status?: string
   trigger?: string
   reason?: string
@@ -22,24 +22,27 @@ type VisionDetail = {
 export function visionDetail(route: unknown): VisionDetail | null {
   if (!route || typeof route !== 'object') return null
   const value = (route as { visionCompatibility?: VisionDetail }).visionCompatibility
-  return value && ['assist', 'reroute', 'assist_call'].includes(value.mode) ? value : null
+  return value && ['assist', 'reroute', 'force', 'assist_call'].includes(value.mode) ? value : null
 }
 
 export function VisionRequestDetail({ route, t }: { route: unknown; t: Translate }) {
   const value = visionDetail(route)
   if (!value) return null
-  const mode = value.mode === 'assist' ? t('辅助识图 · 原模型回答') : value.mode === 'reroute' ? t('切换视觉模型 · 视觉模型回答') : t('辅助识图调用')
+  const mode = value.mode === 'assist' ? t('辅助识图 · 原模型回答')
+    : value.mode === 'reroute' ? t('整体接管 · 视觉模型回答')
+    : value.mode === 'force' ? t('强制辅助识图 · 原模型回答') : t('辅助识图调用')
   const status = value.status === 'failed' ? t('失败') : value.status === 'processing' ? t('处理中')
     : value.status === 'skipped' ? t('未应用') : t('已完成')
   return <div className='space-y-2 text-xs'>
     <div className='flex flex-wrap items-center gap-2'><Badge variant={value.status === 'skipped' ? 'secondary' : 'outline'}>{mode}</Badge><span className='text-muted-foreground'>{status}</span></div>
-    {value.trigger ? <p>{t('触发方式')}：{value.trigger === 'capability' ? t('图片能力判据') : t('上游拒图补救')}</p> : null}
+    {value.trigger ? <p>{t('触发方式')}：{value.trigger === 'capability' ? t('图片能力判据')
+      : value.trigger === 'force' ? t('强制辅助识图规则') : t('上游拒图补救')}</p> : null}
     {value.reason ? <p className='text-muted-foreground'>{t('未应用原因')}：{value.reason === 'model-declares-image-support' ? t('模型已声明支持图片') : value.reason === 'image-capability-unknown' ? t('模型图片能力未知，先发送原图') : value.reason}</p> : null}
     {value.sourceModel ? <p className='break-all'>{t('原模型')}：{value.sourceProvider} · {value.sourceModel}</p> : null}
     {value.targetModel ? <p className='break-all'>{t('视觉模型')}：{value.targetProvider} · {value.targetModel}</p> : null}
     {value.parentId ? <p className='break-all text-muted-foreground'>{t('所属请求')}：{value.parentId}</p> : null}
     <p className='text-muted-foreground'>{t('图片处理用时：{n} 秒', { n: ((Number(value.durationMs) || 0) / 1000).toFixed(2) })}</p>
-    {value.mode === 'assist' ? <>
+    {value.mode === 'assist' || value.mode === 'force' ? <>
       <p>{t('共 {images} 张图片，复用 {cached} 张识读结果', { images: value.imageCount || 0, cached: value.cachedImages || 0 })}</p>
       <p>{t('额外识图用量：{n} Token', { n: (Number(value.totalTokens) || 0).toLocaleString() })}</p>
       <p className='text-muted-foreground'>{t('识图用量按实际视觉账号单独记录，不混入原模型的回答用量。')}</p>

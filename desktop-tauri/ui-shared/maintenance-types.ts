@@ -67,6 +67,8 @@ export type MaintenanceOverview = {
   tasks: MaintenanceTask[]
   latest: Partial<Record<MaintenanceTaskId, MaintenanceRun>>
   records: { items: MaintenanceRun[]; total: number; offset: number; limit: number }
+  /** 全量提供商清单，供明细弹窗的筛选下拉使用；旧版响应可能没有 */
+  providers?: Array<{ id: string; label: string }>
   retentionDays: number
   maxRecords: number
 }

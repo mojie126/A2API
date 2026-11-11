@@ -154,7 +154,7 @@ function SelectContent({ className, sideOffset = 4, children, finalFocus, ...pro
         <BaseSelect.Popup
           data-slot='select-content'
           className={cn(
-            'max-h-[min(260px,var(--available-height))] min-w-[min(var(--anchor-width),var(--available-width))] max-w-[var(--available-width)] overflow-y-auto overscroll-contain rounded-lg border border-border-strong bg-raised p-[5px] shadow-3',
+            'max-h-[clamp(140px,var(--available-height,260px),260px)] min-w-[min(var(--anchor-width),var(--available-width))] max-w-[var(--available-width)] overflow-y-auto overscroll-contain rounded-lg border border-border-strong bg-raised p-[5px] shadow-3',
             'outline-none',
             // 只淡入不做位移/缩放：打开后要立刻量尺寸摆位置，transform 会污染坐标
             'data-open:animate-in data-open:fade-in-0',

@@ -26,7 +26,7 @@ import * as React from 'react'
 import {
   Button, Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle,
   Label, MultiSelect, Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-  Spinner, Switch,
+  Spinner, Switch, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@ui'
 import { t } from '../i18n'
 import { RouteIcon } from './routing-ui'
@@ -140,8 +140,37 @@ function RuleRow({ title, detail, side, off, onClick }: {
 }
 
 /** 弹窗表单的一格：标签在上、控件在下（与设置页的规则编辑弹窗同一口径） */
-function DlgField({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className='rp-field'><Label>{label}</Label>{children}</div>
+function DlgField({ label, help, children }: { label: string; help?: React.ReactNode; children: React.ReactNode }) {
+  return <div className='rp-field'>
+    <div className='rp-field-label'>
+      <Label>{label}</Label>
+      {help ? <TooltipProvider delay={0}><Tooltip><TooltipTrigger render={<span
+        className='inline-flex cursor-help text-muted-foreground' aria-label={label} />}>
+        <svg viewBox='0 0 24 24' width={13} height={13} aria-hidden='true' fill='none' stroke='currentColor'
+          strokeWidth='1.8' strokeLinecap='round'><circle cx='12' cy='12' r='9' /><path d='M12 8h.01M11 11.5h1V16h1' /></svg>
+      </TooltipTrigger><TooltipContent className='max-w-[320px] leading-[1.7]'>{help}</TooltipContent></Tooltip></TooltipProvider> : null}
+    </div>
+    {children}
+  </div>
+}
+
+/** 数字设置项：编辑期间只改本地文案，失焦或回车才提交 */
+function NumberSetting({ value, min, max, step, unit, disabled, label, onCommit }: {
+  value: number; min: number; max: number; step: number; unit: string; disabled: boolean
+  label: string; onCommit(next: number): void
+}) {
+  const [text, setText] = React.useState<string | null>(null)
+  const shown = text ?? String(value)
+  const parsed = Number(shown)
+  const valid = Number.isInteger(parsed) && parsed >= min && parsed <= max
+  return <span className='flex items-center gap-2'>
+    <input className={valid ? 'rp-number' : 'rp-number rp-number-invalid'} type='number' min={min} max={max} step={step}
+      disabled={disabled} aria-label={label} value={shown}
+      onChange={event => setText(event.currentTarget.value)}
+      onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}
+      onBlur={() => { if (text !== null) { if (valid) onCommit(parsed); setText(null) } }} />
+    <span className='text-[12px] text-muted-foreground'>{unit}</span>
+  </span>
 }
 
 /** 弹窗顶部那条「启用规则」：开关在左、状态右对齐 */
@@ -196,7 +225,8 @@ function CompactRuleDialog({ rule, models, clients, saving, error, onClose, onSa
   const [deleting, setDeleting] = React.useState(false)
   const update = (patch: Partial<CompactRoute>) => setDraft(current => ({ ...current, ...patch }))
   const clientLabel = clients.find(client => client.id === draft.client)?.label || draft.client
-  return <Dialog open onOpenChange={next => { if (!next) onClose() }}>
+  // 下拉浮层已通过 portalContainer 挂进弹窗内部，不再是 Dialog 眼里的外部元素
+  return <Dialog open disablePointerDismissal onOpenChange={next => { if (!next) onClose() }}>
     <DialogContent className='w-[min(520px,calc(100vw-24px))]'>
       <DialogHeader><DialogTitle>{onDelete ? t('编辑规则') : t('添加规则')}</DialogTitle></DialogHeader>
       <DialogBody>
@@ -205,7 +235,7 @@ function CompactRuleDialog({ rule, models, clients, saving, error, onClose, onSa
           {t('命中这条规则的压缩请求会改用「压缩模型」重发一次；改写之后按新模型自己的路由挑账号。')}
         </p>
         <RuleSwitchRow enabled={draft.enabled} disabled={saving} onChange={enabled => update({ enabled })} />
-        <DlgField label={t('触发客户端')}>
+        <DlgField label={t('触发客户端')} help={t('按请求头识别出的真实客户端匹配，不是把请求归属改写后的客户端；只匹配已识别的压缩请求。')}>
           <Select value={draft.client} disabled={saving}
             onValueChange={next => update({ client: String(next) })}>
             <SelectTrigger aria-label={t('触发客户端')}><SelectValue>{clientLabel}</SelectValue></SelectTrigger>
@@ -322,12 +352,14 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
   onSave(rule: VisionRuleItem): Promise<void>
   onDelete?(): Promise<boolean>
 }) {
+  const [popup, setPopup] = React.useState<HTMLDivElement | null>(null)
   const [draft, setDraft] = React.useState(rule)
   const [busy, setBusy] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const [candidate, setCandidate] = React.useState('')
   const update = (patch: Partial<VisionRuleItem>) => setDraft(current => ({ ...current, ...patch }))
-  const listChoices = view.models.filter(model => model.capabilities?.supportsImages !== true)
+  // 强制辅助识图允许选中本来能识图的模型，因此候选名单不能只看「不支持图片」的条目
+  const listChoices = view.models.filter(model => draft.mode === 'force' || model.capabilities?.supportsImages !== true)
     .map(model => ({ value: visionKey(model), label: `${model.providerLabel || model.provider} · ${model.model}` }))
   const targetChoices = view.models.filter(model => model.capabilities?.supportsImages === true)
     .map(model => ({ value: visionKey(model), label: `${model.providerLabel || model.provider} · ${model.model}`,
@@ -346,55 +378,45 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
     ;[next[index], next[to]] = [next[to], next[index]]
     setTargets(next)
   }
-  return <Dialog open onOpenChange={next => { if (!next) onClose() }}>
+  return <Dialog open disablePointerDismissal onOpenChange={next => { if (!next) onClose() }}>
     <DialogContent className='w-[min(560px,calc(100vw-24px))]'>
       <DialogHeader><DialogTitle>{onDelete ? t('编辑规则') : t('添加规则')}</DialogTitle></DialogHeader>
-      <DialogBody>
+      <DialogBody ref={setPopup} className='min-h-[420px]'>
         {error ? <p className='routing-config-error' role='alert'>{error}</p> : null}
         <p className='text-[12px] leading-[1.7] text-muted-foreground'>
           {t('这条规则里的模型收到图片时按选定的方式处理；没被任何规则选中的模型一律原样放行。')}
         </p>
         <RuleSwitchRow enabled={draft.enabled} disabled={saving} onChange={enabled => update({ enabled })} />
         <DlgField label={t('哪些模型用这种方式')}>
-          <MultiSelect className='w-full' value={draft.models.map(visionKey)} disabled={saving}
+          <MultiSelect className='w-full' value={draft.models.map(visionKey)} disabled={saving} portalContainer={popup}
             options={listChoices} placeholder={t('选择一个或多个模型')} searchPlaceholder={t('搜索提供商或模型')}
             aria-label={t('哪些模型用这种方式')}
             onValueChange={keys => update({ models: keys.map(parseVisionKey).filter((ref): ref is VisionModelRef => ref !== null) })} />
         </DlgField>
-        <DlgField label={t('处理方式')}>
+        <DlgField label={t('处理方式')} help={<>
+          <p>{t('辅助识图：先让视觉模型把图片读成文字，再交回原模型回答。')}</p>
+          <p>{t('整体接管：只有原模型看不了图片时，才把整次请求交给视觉模型回答。')}</p>
+          <p>{t('强制辅助识图：不看原模型能否识图，命中规则都把图片交给识图模型，识读结果再交回原模型回答。')}</p>
+        </>}>
           <Select value={draft.mode} disabled={saving}
             onValueChange={next => update({ mode: String(next) as VisionRuleItem['mode'] })}>
             <SelectTrigger className='w-full' aria-label={t('处理方式')}><SelectValue>
-              {draft.mode === 'assist' ? t('辅助识图') : t('整体接管')}
+              {draft.mode === 'assist' ? t('辅助识图') : draft.mode === 'force' ? t('强制辅助识图') : t('整体接管')}
             </SelectValue></SelectTrigger>
             <SelectContent>
               <SelectItem value='assist'>{t('辅助识图')}</SelectItem>
               <SelectItem value='reroute'>{t('整体接管')}</SelectItem>
+              <SelectItem value='force'>{t('强制辅助识图')}</SelectItem>
             </SelectContent>
           </Select>
         </DlgField>
-        <DlgField label={t('图片能力未知时')}>
-          <Select value={draft.unknownCapability} disabled={saving}
-            onValueChange={next => update({ unknownCapability: next as VisionRuleItem['unknownCapability'] })}>
-            <SelectTrigger className='w-full' aria-label={t('图片能力未知时')}><SelectValue>
-              {draft.unknownCapability === 'inherit' ? t('沿用全局设置')
-                : draft.unknownCapability === 'compat' ? t('直接按当前方式兼容') : t('先发送原图，明确拒图后补救')}
-            </SelectValue></SelectTrigger>
-            <SelectContent>
-              <SelectItem value='inherit'>{t('沿用全局设置')}</SelectItem>
-              <SelectItem value='try_original'>{t('先发送原图，明确拒图后补救')}</SelectItem>
-              <SelectItem value='compat'>{t('直接按当前方式兼容')}</SelectItem>
-            </SelectContent>
-          </Select>
-        </DlgField>
-        {draft.mode === 'assist' ? <>
+        {draft.mode === 'assist' || draft.mode === 'force' ? <>
           <DlgField label={t('用哪只模型识图')}>
-            <SearchableSelect className='w-full' value={draft.source === 'shared' ? 'shared' : (draft.target ? visionKey(draft.target) : '')}
-              disabled={saving} aria-label={t('用哪只模型识图')} searchPlaceholder={t('搜索模型')}
-              displayValue={draft.source === 'shared' ? t('沿用工具服务的视觉模型') : (visionLabel(view.models, draft.target) || t('请选择模型'))}
-              options={[{ value: 'shared', label: t('沿用工具服务的视觉模型') }, ...targetChoices]}
+            <SearchableSelect className='w-full' value={draft.target ? visionKey(draft.target) : ''}
+              portalContainer={popup} disabled={saving} aria-label={t('用哪只模型识图')} searchPlaceholder={t('搜索模型')}
+              displayValue={visionLabel(view.models, draft.target) || t('请选择模型')}
+              options={targetChoices}
               onValueChange={next => {
-                if (next === 'shared') { update({ source: 'shared' }); return }
                 const target = pick(next)
                 if (target) update({ source: 'custom', target: { ...target, reasoning: draft.target?.reasoning || '' } })
               }} />
@@ -416,7 +438,7 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
           </DlgField>
           <DlgField label={t('接管回答的模型')}>
             <SearchableSelect className='w-full' value={primary ? visionKey(primary) : ''} disabled={saving}
-              aria-label={t('接管回答的模型')} searchPlaceholder={t('搜索模型')}
+              portalContainer={popup} aria-label={t('接管回答的模型')} searchPlaceholder={t('搜索模型')}
               displayValue={primary ? visionLabel(view.models, primary) : t('请选择模型')}
               options={targetChoices}
               onValueChange={next => {
@@ -428,7 +450,7 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
             <div className='flex flex-col gap-2'>
               <div className='flex items-center gap-2'>
                 <SearchableSelect className='min-w-0 flex-1' value={candidate} disabled={saving || draft.targets.length >= view.maxTargets}
-                  aria-label={t('备选模型')} searchPlaceholder={t('搜索模型')}
+                  portalContainer={popup} aria-label={t('备选模型')} searchPlaceholder={t('搜索模型')}
                   displayValue={visionLabel(view.models, parseVisionKey(candidate)) || t('请选择模型')}
                   options={targetChoices} onValueChange={setCandidate} />
                 <Button variant='outline' size='sm' disabled={saving || !candidate || draft.targets.length >= view.maxTargets}
@@ -468,9 +490,16 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
 export function VisionSpecialPanel({ editor }: { editor: SpecialEditor<VisionConfig, VisionView> }) {
   const { view, draft, loading, saving, dirty, error } = editor
   const rules = draft?.rules || []
+  const targetChoices = (view?.models || []).filter(model => model.capabilities?.supportsImages === true)
+    .map(model => ({ value: visionKey(model), label: `${model.providerLabel || model.provider} · ${model.model}`,
+      searchText: `${model.name || ''} ${model.provider}` }))
+  const pickTarget = (value: string): VisionTarget | null => {
+    const ref = parseVisionKey(value)
+    return ref ? { ...ref, reasoning: '' } : null
+  }
   const [editing, setEditing] = React.useState<{ rule: VisionRuleItem; index: number } | null>(null)
   const blank: VisionRuleItem = {
-    enabled: true, models: [], mode: 'assist', source: 'shared', target: null,
+    enabled: true, models: [], mode: 'assist', source: 'custom', target: null,
     reuseResults: true, preferCurrentRoute: true, fallback: 'stop', targets: [], unknownCapability: 'inherit',
   }
   const openRule = (rule: VisionRuleItem, index: number) => {
@@ -486,19 +515,47 @@ export function VisionSpecialPanel({ editor }: { editor: SpecialEditor<VisionCon
   })
   const detail = (rule: VisionRuleItem) => {
     const label = visionLabel(view?.models || [], rule.targets[0] || rule.target)
-    if (rule.mode === 'assist') {
-      const reader = rule.source === 'shared' ? t('工具服务的视觉模型') : (label || t('还没选视觉模型'))
-      return <><span>{t('先读图再交回')}</span><span className='rp-row-target'>{reader}</span><span>· {t('原模型继续回答')}</span></>
+    if (rule.mode === 'assist' || rule.mode === 'force') {
+      const reader = label || t('还没选视觉模型')
+      return <><span>{rule.mode === 'force' ? t('强制读图再交回') : t('先读图再交回')}</span>
+        <span className='rp-row-target'>{reader}</span><span>· {t('原模型继续回答')}</span></>
     }
-    const taker = rule.preferCurrentRoute ? t('当前路由内的视觉模型') : (label || t('还没选视觉模型'))
+    const currentFirst = rule.preferCurrentRoute && rule.targets.length > 0
+    const taker = currentFirst ? t('当前路由内的视觉模型') : (label || t('还没选视觉模型'))
     return <><span>{t('整次请求改交')}</span><span className='rp-row-target'>{taker}</span></>
   }
-  return <RulePanel title={t('图片兼容')}
-    lede={t('模型看不了图片时，按下面的规则交给视觉模型；没配到的模型、以及本来就能看图的，一律原样放行。')}
+  return <RulePanel title={t('辅助识图')}
+    lede={t('带图片的请求按下面的规则处理；没配到的模型、以及本来就能看图的，一律原样放行。')}
     enabled={Boolean(draft?.enabled)} onEnabled={next => editor.update(current => ({ ...current, enabled: next }))}
     busy={saving || loading} dirty={dirty} error={error} loading={loading}
     onReload={() => void editor.reload()} onSave={() => void editor.save()} onDiscard={editor.discard}>
     {draft && view ? <>
+      <RuleSection title={t('高级设置')}>
+        <div className='grid gap-3 px-4 py-3 sm:grid-cols-2'>
+          <div className='flex flex-col gap-1.5'>
+            <span className='text-[12.5px] font-medium text-foreground'>{t('兼容处理最长等待')}</span>
+            <NumberSetting value={draft.timeoutSeconds} min={5} max={120} step={1} unit={t('秒')}
+              disabled={saving} label={t('兼容处理最长等待')}
+              onCommit={timeoutSeconds => editor.update(current => ({ ...current, timeoutSeconds }))} />
+            <span className='text-[11.5px] leading-[1.6] text-muted-foreground'>{t('范围 5–120 秒，并受原请求时限约束。')}</span>
+          </div>
+          <div className='flex flex-col gap-1.5'>
+            <span className='text-[12.5px] font-medium text-foreground'>{t('默认识图模型')}</span>
+            <SearchableSelect className='w-full' value={draft.defaultTarget ? visionKey(draft.defaultTarget) : ''}
+              disabled={saving} aria-label={t('默认识图模型')} searchPlaceholder={t('搜索模型')}
+              displayValue={visionLabel(view.models, draft.defaultTarget) || t('请选择模型')}
+              options={[{ value: '', label: t('不设置默认，按各规则自己的识图模型') }, ...targetChoices]}
+              onValueChange={next => {
+                if (!next) { editor.update(current => ({ ...current, defaultTarget: null })); return }
+                const target = pickTarget(next)
+                if (target) editor.update(current => ({ ...current, defaultTarget: { ...target, reasoning: current.defaultTarget?.reasoning || '' } }))
+              }} />
+            <span className='text-[11.5px] leading-[1.6] text-muted-foreground'>
+              {draft.defaultTarget ? t('规则没有单独指定识图模型时，默认用这只模型读图。') : t('选择后作为识图的默认模型；每条规则仍可单独指定。')}
+            </span>
+          </div>
+        </div>
+      </RuleSection>
       <RuleSection title={t('规则')} count={t('{n} 条', { n: rules.length })}
         action={<Button variant='outline' size='sm' disabled={saving}
           onClick={() => openRule(blank, -1)}>
@@ -506,12 +563,14 @@ export function VisionSpecialPanel({ editor }: { editor: SpecialEditor<VisionCon
         </Button>}>
         {rules.length ? rules.map((rule, index) => <RuleRow key={index} off={!rule.enabled}
           title={rule.models.length
-            ? t('{models} 看不了图时', { models: rule.models.map(model => visionLabel(view.models, model)).join('、') })
+            ? rule.mode === 'force'
+              ? t('强制辅助识图 {models}', { models: rule.models.map(model => visionLabel(view.models, model)).join('、') })
+              : t('{models} 看不了图时', { models: rule.models.map(model => visionLabel(view.models, model)).join('、') })
             : t('未选择模型')}
           detail={detail(rule)}
           side={rule.enabled ? null : t('已停用')}
           onClick={() => openRule(rule, index)} />)
-          : <p className='rp-empty'>{t('还没有规则。图片会照常交给原模型，看不了的就会报错。')}</p>}
+          : <p className='rp-empty'>{t('还没有规则。带图片的请求会照常交给原模型，看不了的就会报错。')}</p>}
       </RuleSection>
       {!view.models.length ? <p className='rp-note'>{t('还没有可用的模型，请先启用模型和对应账号。')}</p> : null}
     </> : null}
@@ -541,7 +600,7 @@ function TitleRuleDialog({ rule, models, clients, saving, error, onClose, onSave
   const [busy, setBusy] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
   const update = (patch: Partial<TitleRule>) => setDraft(current => ({ ...current, ...patch }))
-  return <Dialog open onOpenChange={next => { if (!next) onClose() }}>
+  return <Dialog open disablePointerDismissal onOpenChange={next => { if (!next) onClose() }}>
     <DialogContent className='w-[min(520px,calc(100vw-24px))]'>
       <DialogHeader><DialogTitle>{onDelete ? t('编辑规则') : t('添加规则')}</DialogTitle></DialogHeader>
       <DialogBody>
@@ -550,7 +609,7 @@ function TitleRuleDialog({ rule, models, clients, saving, error, onClose, onSave
           {t('这条规则只改写被识别为标题生成的小请求，普通对话不受影响。')}
         </p>
         <RuleSwitchRow enabled={draft.enabled} disabled={saving} onChange={enabled => update({ enabled })} />
-        <DlgField label={t('识别客户端')}>
+        <DlgField label={t('识别客户端')} help={t('按请求头识别出的真实客户端匹配，不是归属改写后的客户端；只有识别为标题生成的小请求才会命中。')}>
           <MultiSelect className='w-full' value={draft.clients} disabled={saving}
             options={clients.map(client => ({ value: client.id, label: client.label, disabled: !client.supported }))}
             placeholder={t('选择一个或多个客户端')} searchPlaceholder={t('搜索客户端')}

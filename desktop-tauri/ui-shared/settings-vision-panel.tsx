@@ -234,7 +234,7 @@ export function VisionCompatibilityPanel({ api, t, active = true, scope = '' }: 
               className='h-auto w-full justify-between gap-3 rounded-sm px-1 py-1.5' />}>
               <span className='flex min-w-0 flex-wrap items-baseline gap-2'>
                 <span className='text-[13px] font-medium text-foreground'>{t('更多设置')}</span>
-                <span className='text-[12px] text-muted-foreground'>{t('思考等级、图片能力未知、等待上限')}</span>
+                <span className='text-[12px] text-muted-foreground'>{t('思考等级、等待上限')}</span>
               </span>
               <Chevron open={more} />
             </CollapsibleTrigger>
@@ -244,18 +244,6 @@ export function VisionCompatibilityPanel({ api, t, active = true, scope = '' }: 
                   className='items-center max-[767px]:flex-col max-[767px]:items-stretch max-[767px]:gap-2' control={
                     <VisionReasoningSelect t={t} value={reasoning} disabled={busy} onValueChange={setReasoning} />
                   } />
-                <Row label={t('图片能力未知时')} tip={t('模型目录没写明是否支持图片时按这里处理。')} className='items-center max-[767px]:flex-col max-[767px]:items-stretch max-[767px]:gap-2' control={
-                  <Select value={draft.unknownCapability} disabled={busy}
-                    onValueChange={unknownCapability => patch({ unknownCapability: unknownCapability as VisionSettings['unknownCapability'] })}>
-                    <SelectTrigger className='w-[min(260px,100%)]' aria-label={t('图片能力未知时')}>
-                      <SelectValue>{draft.unknownCapability === 'try_original' ? t('先发送原图，明确拒图后补救') : t('直接按当前方式兼容')}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value='try_original'>{t('先发送原图，明确拒图后补救')}</SelectItem>
-                      <SelectItem value='compat'>{t('直接按当前方式兼容')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                } />
                 <Row label={t('兼容处理最长等待')} tip={t('范围 5–120 秒，并受原请求时限约束。')} className='items-center max-[767px]:flex-col max-[767px]:items-stretch max-[767px]:gap-2' control={
                   <TimeoutField value={draft.timeoutSeconds} disabled={busy} t={t}
                     onCommit={timeoutSeconds => patch({ timeoutSeconds })} />

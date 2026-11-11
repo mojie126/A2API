@@ -2469,12 +2469,12 @@ pub(crate) fn seed_hidden_visibility_defaults() {
 ///
 /// 各家自身的缓存/TTL 仍然生效（`force = false`）：排期说「可以刷了」之后，
 /// 由各家决定这次是否真的打网络。手动按钮走 [`refresh_implemented_forced`]。
-pub async fn refresh_implemented(store: &AccountStore) -> Vec<Value> {
+pub async fn refresh_implemented(store: &AccountStore, providers: Option<&[String]>) -> Vec<Value> {
     seed_current_workbuddy_defaults();
     seed_current_qoder_defaults();
     seed_current_cline_defaults();
     seed_hidden_visibility_defaults();
-    let results = super::catalog_refresh::refresh(store, &serde_json::Map::new(), None, false).await;
+    let results = super::catalog_refresh::refresh(store, &serde_json::Map::new(), providers, false).await;
     // 刷新落地后补种一次：新增的带前缀 / 别名模型在这一刻才出现在清单里
     // （与开头那次同一件事 —— 那时种的是缓存恢复的清单）
     seed_current_cline_defaults();

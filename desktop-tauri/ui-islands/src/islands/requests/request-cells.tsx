@@ -51,7 +51,8 @@ function VisionTag({ route }: { route: unknown }) {
   const value = visionDetail(route)
   if (!value) return null
   const modeLabel = value.mode === 'assist' ? t('辅助识图')
-    : value.mode === 'reroute' ? t('切换视觉模型') : t('辅助识图调用')
+    : value.mode === 'reroute' ? t('整体接管')
+    : value.mode === 'force' ? t('强制辅助识图') : t('辅助识图调用')
   const statusLabel = value.status === 'failed' ? t('失败')
     : value.status === 'processing' ? t('处理中')
     : value.status === 'skipped' ? t('未应用') : t('已完成')
@@ -60,7 +61,7 @@ function VisionTag({ route }: { route: unknown }) {
     + (Number(value.durationMs) ? ` · ${((Number(value.durationMs) || 0) / 1000).toFixed(1)}s` : '')
     + (value.error ? ` · ${value.error}` : '')
   return <Badge shape='tag' variant={value.status === 'failed' ? 'destructive' : value.status === 'skipped' ? 'secondary' : 'outline'} title={title}>
-    {value.status === 'skipped' ? t('图片兼容未应用') : modeLabel}
+    {value.status === 'skipped' ? t('辅助识图未应用') : modeLabel}
   </Badge>
 }
 

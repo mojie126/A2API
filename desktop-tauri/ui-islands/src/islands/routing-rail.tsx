@@ -18,7 +18,7 @@ export type SpecialKey = 'compact' | 'vision' | 'title'
  */
 export const SPECIAL_RAIL: Array<{ key: SpecialKey; label: string; icon: string }> = [
   { key: 'compact', label: t('压缩上下文'), icon: 'database' },
-  { key: 'vision', label: t('图片兼容'), icon: 'eye' },
+  { key: 'vision', label: t('辅助识图'), icon: 'eye' },
   { key: 'title', label: t('标题生成'), icon: 'spark' },
 ]
 

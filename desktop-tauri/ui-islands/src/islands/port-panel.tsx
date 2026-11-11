@@ -339,21 +339,14 @@ function SidebarStatus({ container }: { container: HTMLElement }) {
   const [phase, setPhase] = React.useState<EndPhase>('idle')
 
   const failure = backend?.failure || null
-  const port = portLabel()
   const ready = backend?.ready
 
-  // ── 状态灯与那一行文案：三种状态 + 「还没查过」 ──
-  // 文案里的端口用 portLabel()（与顶栏徽标同一份读数），短标签由后端给
+  // ── 状态灯：只保留颜色，详细状态放进 title ──
   let dotVariant: StatusDotProps['variant'] = 'muted'
-  let text = t('正在检查… · {port}', { port })
   if (ready === true) {
     dotVariant = 'success'
-    text = t('网关运行中 · {port}', { port })
   } else if (failure) {
     dotVariant = 'destructive'
-    text = t('{label} · {port}', { label: failure.label || t('网关启动失败'), port })
-  } else if (ready === false) {
-    text = t('网关启动中… · {port}', { port })
   }
 
   /** 完整说明（可能上百字）只进 title 与弹窗：状态条只有一行 */
@@ -461,7 +454,7 @@ function SidebarStatus({ container }: { container: HTMLElement }) {
     <>
       <div className='status-line'>
         <StatusDot variant={dotVariant} pulse={ready === true} />
-        <span className='txt'>{text}</span>
+        {ready === true ? <span className='txt'>{gatewayBase.replace(/^https?:\/\//, '')}</span> : null}
       </div>
 
       {failure?.conflict ? (

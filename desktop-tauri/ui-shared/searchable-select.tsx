@@ -26,13 +26,14 @@ type SearchableSelectProps = {
   className?: string
   id?: string
   title?: string
+  portalContainer?: HTMLElement | null
   'aria-label'?: string
 }
 
 export function SearchableSelect({
   value, onValueChange, options, placeholder = '', displayValue,
   searchPlaceholder = t('搜索…'), emptyHint = t('没有匹配的选项'),
-  disabled, className, id, title, searchable = true, ...props
+  disabled, className, id, title, portalContainer, searchable = true, ...props
 }: SearchableSelectProps) {
   const [search, setSearch] = React.useState('')
   const selected = options.find(option => option.value === value) ?? null
@@ -57,7 +58,7 @@ export function SearchableSelect({
     <ComboboxTrigger id={id} className={className} title={title ?? label} aria-label={props['aria-label']}>
       <ComboboxValue>{label}</ComboboxValue>
     </ComboboxTrigger>
-    <ComboboxContent>
+    <ComboboxContent container={portalContainer}>
       <div className='shrink-0 border-b border-hairline p-2'>
         <ComboboxInput placeholder={searchPlaceholder} aria-label={searchPlaceholder} autoComplete='off' />
       </div>

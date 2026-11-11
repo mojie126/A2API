@@ -99,14 +99,16 @@ function ComboboxTrigger({ className, children, ref, ...props }: ComboboxTrigger
 type ComboboxContentProps = Omit<React.ComponentProps<typeof BaseCombobox.Popup>, 'className'> & {
   className?: string
   sideOffset?: number
+  /** 浮层挂载的容器；弹窗内传弹窗节点，避免浮层被当作外部点击 */
+  container?: HTMLElement | null
 }
 
-function ComboboxContent({ className, sideOffset = 4, children, finalFocus, ...props }: ComboboxContentProps) {
+function ComboboxContent({ className, sideOffset = 4, container, children, finalFocus, ...props }: ComboboxContentProps) {
   const context = React.useContext(ComboboxContext)
   const boundary = useSelectBoundary(context?.trigger ?? null, context?.open ?? false)
 
   return (
-    <BaseCombobox.Portal>
+    <BaseCombobox.Portal container={container ?? undefined}>
       <BaseCombobox.Positioner sideOffset={sideOffset} align='start' collisionBoundary={boundary}
         className='z-[35] data-anchor-hidden:invisible data-anchor-hidden:pointer-events-none'
         render={(positionerProps, state) => <ComboboxPositionerElement {...positionerProps}
@@ -114,7 +116,7 @@ function ComboboxContent({ className, sideOffset = 4, children, finalFocus, ...p
         <BaseCombobox.Popup
           data-slot='combobox-content'
           className={cn(
-            'flex max-h-[min(300px,var(--available-height))] w-[max(var(--anchor-width),220px)] max-w-[var(--available-width)] flex-col overflow-hidden',
+            'flex max-h-[clamp(160px,var(--available-height,300px),300px)] w-[max(var(--anchor-width),220px)] max-w-[var(--available-width)] flex-col overflow-hidden',
             'rounded-lg border border-border-strong bg-raised shadow-3 outline-none',
             'data-open:animate-in data-open:fade-in-0',
             'data-closed:animate-out data-closed:fade-out-0',

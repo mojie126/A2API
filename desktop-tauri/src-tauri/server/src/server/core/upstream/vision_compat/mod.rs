@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::server::config::vision_compat::{self as config, Mode, VisionRule, VisionSettings, VisionTarget};
+use crate::server::config::vision_compat::{self as config, Mode, VisionRule, VisionSettings};
 use crate::server::errors::GatewayError;
 use super::{connections::ConnectionGuard, payload::ProviderContext, usage::TelemetrySnapshot, ForwardOutcome, InFlightGuard, RouteTarget, UpstreamService};
 
@@ -30,7 +30,6 @@ pub(crate) struct VisionCall {
 pub(super) struct RequestVision {
     pub settings: VisionSettings,
     pub revision: String,
-    shared: Option<VisionTarget>,
     original_messages: usize,
     started: Instant,
     triggered: AtomicBool,
@@ -41,9 +40,11 @@ impl RequestVision {
         if !content::has_images(body) { return Ok(None); }
         let snapshot = config::current();
         let settings = snapshot.settings.as_ref().map_err(|error| GatewayError::new(error.clone()))?;
-        if !settings.enabled || !(settings.uses(Mode::Assist) || settings.uses(Mode::Reroute)) { return Ok(None); }
+        if !settings.enabled || !(settings.uses(Mode::Assist) || settings.uses(Mode::Reroute) || settings.uses(Mode::Force)) {
+            return Ok(None);
+        }
         Ok(Some(Arc::new(Self { settings: settings.clone(), revision: snapshot.revision.clone(),
-            shared: config::shared_target(), original_messages: body.get("messages").and_then(Value::as_array).map_or(0, Vec::len),
+            original_messages: body.get("messages").and_then(Value::as_array).map_or(0, Vec::len),
             started: Instant::now(), triggered: AtomicBool::new(false) })))
     }
 
@@ -76,6 +77,11 @@ pub(super) async fn before_target(service: &UpstreamService, ctx: &ProviderConte
     let rule = vision.settings.rule_for(&target.provider, &model);
     ctx.telemetry.set_vision_enabled(rule.is_some());
     let Some(rule) = rule else { return Ok(None); };
+    // 强制转发不看源模型的能力声明，命中规则先做辅助识图，再由原模型回答
+    if rule.mode == Mode::Force {
+        let assist_rule = VisionRule { mode: Mode::Assist, ..rule.clone() };
+        return recover(service, ctx, target, &assist_rule, "force", slot, connections).await.map(Some);
+    }
     match targets::supports_images(&target.provider, &model) {
         Some(true) => {
             ctx.telemetry.note_vision(json!({
@@ -160,7 +166,7 @@ async fn recover(service: &UpstreamService, ctx: &ProviderContext<'_>, original:
     let result = {
         let work = async {
             match rule.mode {
-                Mode::Assist => assist::run(service, ctx, original, vision, rule, &mut detail).await
+                Mode::Assist | Mode::Force => assist::run(service, ctx, original, vision, rule, &mut detail).await
                     .map(|(body, destination)| Prepared::Assist { body, destination }),
                 Mode::Reroute => reroute(service, ctx, original, vision, rule, &mut detail, slot, connections).await.map(Prepared::Rerouted),
             }

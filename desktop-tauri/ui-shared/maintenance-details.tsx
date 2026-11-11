@@ -31,11 +31,13 @@ import type { MaintenanceDetail, MaintenanceItem, MaintenanceResultStatus } from
 
 const PAGE_SIZE = 10
 
-export function MaintenanceDetailDialog({ detail, loading, error, busy, onReload, onClose, onRetry, onAccount }: {
+export function MaintenanceDetailDialog({ detail, loading, error, busy, providers: knownProviders, onReload, onClose, onRetry, onAccount }: {
   detail?: MaintenanceDetail
   loading: boolean
   error: string
   busy: boolean
+  /** 全量提供商清单；缺失时退回本轮结果里出现过的几家 */
+  providers?: Array<{ id: string; label: string }>
   onReload(): void
   onClose(): void
   onRetry(runId: string, itemId?: string): void
@@ -43,6 +45,7 @@ export function MaintenanceDetailDialog({ detail, loading, error, busy, onReload
 }) {
   const [filter, setFilter] = React.useState<MaintenanceResultStatus | 'all'>('all')
   const [provider, setProvider] = React.useState('')
+  const [filters, setFilters] = React.useState<HTMLDivElement | null>(null)
   const [page, setPage] = React.useState(1)
   const [selected, setSelected] = React.useState<MaintenanceItem | null>(null)
   // 明细一到手就先看失败项（与本页原有一致），但只替用户选一次，之后不再抢筛选
@@ -55,12 +58,17 @@ export function MaintenanceDetailDialog({ detail, loading, error, busy, onReload
 
   const credential = detail?.taskId === 'credentialMaintenance'
   const stalled = !detail || detail.status === 'running' || detail.status === 'interrupted'
-  // 提供商选项来自这次执行的结果本身（去重后按名称排序）
+  // 提供商选项优先用全量清单：本轮 0 项时结果里一家都没有，筛选器会退化成
+  // 只剩「全部提供商」；没有清单时再退回本轮结果
   const providers = React.useMemo(() => {
+    if (knownProviders?.length) {
+      return knownProviders.map(item => [item.id, item.label] as [string, string])
+        .sort((left, right) => left[1].localeCompare(right[1]))
+    }
     const map = new Map<string, string>()
     for (const item of detail?.results ?? []) map.set(item.provider, item.providerLabel || item.provider)
     return [...map.entries()].sort((left, right) => left[1].localeCompare(right[1]))
-  }, [detail])
+  }, [detail, knownProviders])
   const byProvider = (detail?.results ?? []).filter(item => !provider || item.provider === provider)
   const rows = byProvider.filter(item => filter === 'all' || item.status === filter)
   const statusCount = (value: MaintenanceResultStatus | 'all') =>
@@ -72,6 +80,7 @@ export function MaintenanceDetailDialog({ detail, loading, error, busy, onReload
     : detail?.status === 'interrupted' ? t('该次执行未完成，没有完整明细')
       : t('本轮没有符合条件的项目')
 
+  // 下拉浮层挂进弹窗内部，避免被 Dialog 当成外部点击
   return <Dialog open onOpenChange={open => { if (!open) onClose() }}>
     <DialogContent className='flex h-[min(720px,calc(100vh-48px))] w-[min(1000px,calc(100vw-32px))] flex-col'>
       <DialogHeader className='shrink-0 flex-col items-start gap-1'>
@@ -90,7 +99,7 @@ export function MaintenanceDetailDialog({ detail, loading, error, busy, onReload
         {loading && !detail ? <Empty><Spinner />{t('正在读取维护记录…')}</Empty> : null}
         {detail ? <>
           {detail.error ? <Alert variant='warning'>{maintenanceMessage(detail.error)}</Alert> : null}
-          <div className='maintenance-detail-filters'>
+          <div className='maintenance-detail-filters' ref={setFilters}>
             <SegmentedControl
               value={filter}
               aria-label={t('明细状态筛选')}
@@ -103,7 +112,7 @@ export function MaintenanceDetailDialog({ detail, loading, error, busy, onReload
               ]}
             />
             <SearchableSelect value={provider} onValueChange={value => { setProvider(value); setPage(1) }}
-              aria-label={t('提供商')} className='min-w-[150px] max-w-[260px]' searchPlaceholder={t('搜索提供商')}
+              portalContainer={filters} aria-label={t('提供商')} className='min-w-[150px] max-w-[260px]' searchPlaceholder={t('搜索提供商')}
               options={[{ value: '', label: t('全部提供商') }, ...providers.map(([value, label]) => ({ value, label }))]} />
           </div>
           {/* 表格区吃掉剩余高度：行少时留白而不是缩窗，行多时在这里滚 */}

@@ -16,18 +16,24 @@ pub const MAX_TARGETS: usize = 8;
 /// 挡住异常大的载荷，不该挡住正常展开出来的名单。
 pub const MAX_MODELS: usize = 2000;
 
-/// 处理方式。图片兼容只有这两种，所以每一块都是一个固定的设置块，不是可以增删的配置列表。
+/// 处理方式。
+///
+/// `Force` 不判断源模型是否能识图，命中规则就把图片交给识图模型并由原模型回答
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Mode { #[default] Assist, Reroute }
+pub enum Mode { #[default] Assist, Reroute, Force }
 
 impl Mode {
     pub fn as_str(self) -> &'static str {
-        match self { Self::Assist => "assist", Self::Reroute => "reroute" }
+        match self {
+            Self::Assist => "assist",
+            Self::Reroute => "reroute",
+            Self::Force => "force",
+        }
     }
 }
 
-/// 旧版「模型单独配置」用的处理方式（多一档「不做兼容」）。
+/// 旧版「模型单独配置」用的处理方式，多一档「不做兼容」
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverrideMode { #[default] Assist, Reroute, Off }
@@ -167,10 +173,10 @@ pub struct VisionRule {
     pub target: Option<VisionTarget>,
     /// 辅助识图：复用相同图片的识读结果。
     pub reuse_results: bool,
-    /// 整体接管：优先使用当前路由范围内的视觉模型。
+    /// 整体接管：优先使用当前路由范围内的视觉模型
     pub prefer_current_route: bool,
     pub fallback: Fallback,
-    /// 整体接管：指定接管模型与备选，按顺序尝试。
+    /// 整体接管：指定接管模型与备选，按顺序尝试
     pub targets: Vec<VisionTarget>,
     /// 这条规则自己的能力未知处理方式
     pub unknown_capability: RuleUnknownCapability,
@@ -242,6 +248,9 @@ pub struct VisionSettings {
     pub reroute: RerouteSettings,
     pub unknown_capability: UnknownCapability,
     pub timeout_seconds: u64,
+    /// 默认识图模型：规则没有单独指定识图模型时使用它
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_target: Option<VisionTarget>,
     /// 旧版顶层字段：全局二选一。读到就继续按旧语义生效，直到面板把它展开成名单。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<Mode>,
@@ -254,7 +263,8 @@ impl Default for VisionSettings {
     fn default() -> Self {
         Self {
             enabled: true, rules: Vec::new(), assist: AssistSettings::default(), reroute: RerouteSettings::default(),
-            unknown_capability: UnknownCapability::TryOriginal, timeout_seconds: 30,
+            unknown_capability: UnknownCapability::Compat, timeout_seconds: 30,
+            default_target: None,
             mode: None, overrides: Vec::new(),
         }
     }
@@ -307,8 +317,10 @@ impl VisionSettings {
                 prefer_current_route: self.reroute.prefer_current_route, fallback: self.reroute.fallback,
                 targets: self.reroute.targets.clone(), ..VisionRule::default()
             };
+            // 旧形状只有辅助识图与整体接管两种可能，强制辅助识图不会被旧配置表达出来
             return self.legacy_mode(provider, model).map(|mode| match mode {
-                Mode::Assist => assist(), Mode::Reroute => reroute(),
+                Mode::Assist | Mode::Force => assist(),
+                Mode::Reroute => reroute(),
             });
         }
         // 还没折成规则的两块名单：辅助识图优先（与旧口径一致）。
@@ -341,7 +353,8 @@ impl VisionSettings {
     /// 规则 → 两块设置（投影）。手机端与旧界面按两块读写，这里让它们看到真实配置：
     /// 名单取**同方式所有规则的并集**，其余字段取该方式第一条规则。
     pub fn project_blocks(&mut self) {
-        let assists: Vec<&VisionRule> = self.rules.iter().filter(|rule| rule.mode == Mode::Assist).collect();
+        let assists: Vec<&VisionRule> = self.rules.iter()
+            .filter(|rule| matches!(rule.mode, Mode::Assist | Mode::Force)).collect();
         let reroutes: Vec<&VisionRule> = self.rules.iter().filter(|rule| rule.mode == Mode::Reroute).collect();
         let first_assist = assists.first().copied();
         let first_reroute = reroutes.first().copied();
@@ -362,16 +375,19 @@ impl VisionSettings {
 
     /// 这种方式此刻有没有在用（接口用它决定要不要校验视觉模型是否可用）。
     pub fn uses(&self, mode: Mode) -> bool {
+        // 强制辅助识图属于辅助识图族：保存校验问「辅助识图在用吗」时也要把它算进来
+        let matches_mode = |rule_mode: Mode| rule_mode == mode
+            || mode == Mode::Assist && rule_mode == Mode::Force;
         if self.is_legacy() {
             return self.mode.unwrap_or_default() == mode
                 || self.overrides.iter().any(|entry| matches!((entry.mode, mode),
                     (OverrideMode::Assist, Mode::Assist) | (OverrideMode::Reroute, Mode::Reroute)));
         }
         if !self.rules.is_empty() {
-            return self.rules.iter().any(|rule| rule.enabled && !rule.models.is_empty() && rule.mode == mode);
+            return self.rules.iter().any(|rule| rule.enabled && !rule.models.is_empty() && matches_mode(rule.mode));
         }
         match mode {
-            Mode::Assist => !self.assist.models.is_empty(),
+            Mode::Assist | Mode::Force => !self.assist.models.is_empty(),
             Mode::Reroute => !self.reroute.models.is_empty(),
         }
     }
@@ -437,7 +453,7 @@ pub fn validate(settings: &VisionSettings) -> Result<(), String> {
             return Err(format!("第 {at} 条规则最多 {MAX_TARGETS} 个备选视觉模型"));
         }
         match rule.mode {
-            Mode::Assist => { if let Some(target) = &rule.target { validate_target(target)?; } }
+            Mode::Assist | Mode::Force => { if let Some(target) = &rule.target { validate_target(target)?; } }
             Mode::Reroute => {
                 let mut targets = HashSet::new();
                 for target in &rule.targets {
@@ -451,15 +467,15 @@ pub fn validate(settings: &VisionSettings) -> Result<(), String> {
         // 只有真的会用上的规则才要求配全：停用的、总开关关掉的，允许留着半截。
         if !settings.enabled || !rule.enabled || rule.models.is_empty() { continue; }
         match rule.mode {
-            Mode::Assist => {
-                if rule.source == ModelSource::Custom && rule.target.is_none() {
-                    return Err(format!("第 {at} 条规则选了「指定视觉模型」，请先选一只"));
+            Mode::Assist | Mode::Force => {
+                if rule.target.is_none() && settings.default_target.is_none() {
+                    return Err(format!("第 {at} 条规则请先选择一只识图模型，或先设置默认识图模型"));
                 }
             }
             Mode::Reroute => {
                 let designated = rule.fallback == Fallback::Designated && !rule.targets.is_empty();
                 if !rule.prefer_current_route && !designated {
-                    return Err(format!("第 {at} 条规则请选择「优先使用当前路由内的视觉模型」，或指定接管回答的视觉模型"));
+                    return Err(format!("第 {at} 条规则请选择「优先使用当前路由内的视觉模型」，或指定视觉模型"));
                 }
                 if rule.fallback == Fallback::Designated && rule.targets.is_empty() {
                     return Err(format!("第 {at} 条规则选了「指定备选模型」，请至少添加一个视觉模型"));
@@ -475,6 +491,7 @@ pub fn validate(settings: &VisionSettings) -> Result<(), String> {
     validate_model_list("切换视觉模型", &settings.reroute.models)?;
     if let Some(target) = &settings.assist.target { validate_target(target)?; }
     if let Some(target) = &settings.assist.shared_target { validate_target(target)?; }
+    if let Some(target) = &settings.default_target { validate_target(target)?; }
     let mut targets = HashSet::new();
     for target in &settings.reroute.targets {
         validate_target(target)?;
@@ -492,8 +509,8 @@ pub fn validate(settings: &VisionSettings) -> Result<(), String> {
         }
     }
     if settings.enabled && settings.uses(Mode::Assist)
-        && settings.assist.source == ModelSource::Custom && settings.assist.target.is_none() {
-        return Err("启用前请先选择辅助识图的视觉模型".into());
+        && settings.assist.target.is_none() && settings.default_target.is_none() {
+        return Err("启用前请先选择辅助识图的视觉模型，或先设置默认识图模型".into());
     }
     if settings.enabled && settings.uses(Mode::Reroute) {
         let designated = settings.reroute.fallback == Fallback::Designated && !settings.reroute.targets.is_empty();
@@ -556,12 +573,24 @@ pub fn save(settings: VisionSettings, expected: &str, shape: SaveShape) -> Resul
         // 同一种方式已经有多条规则时两块表达不了，直接拒掉并指路 —— 让它照样存下去，
         // 等于用两条规则覆盖掉其余的，那是静默丢配置。
         if shape == SaveShape::ProjectedBlocks {
-            let count = |mode: Mode| previous.rules.iter().filter(|rule| rule.mode == mode).count();
-            if count(Mode::Assist) > 1 || count(Mode::Reroute) > 1 {
+            let assist_count = previous.rules.iter()
+                .filter(|rule| matches!(rule.mode, Mode::Assist | Mode::Force)).count();
+            let reroute_count = previous.rules.iter().filter(|rule| rule.mode == Mode::Reroute).count();
+            if assist_count > 1 || reroute_count > 1 {
                 return Err(GatewayError::bad_request(
-                    "图片兼容已改为按规则配置；这一种方式下有多条规则时，请到「路由 → 图片兼容」里修改"));
+                    "辅助识图已改为按规则配置；这一种方式下有多条规则时，请到「路由 → 辅助识图」里修改"));
             }
-            next.fold_blocks();
+            // 旧界面没有强制辅助识图这一档：只改了整体接管时，保留原有强制规则，
+            // 避免一次旧界面保存把它静默降级成按能力判断的普通辅助识图
+            let assist_unchanged = next.assist == previous.assist;
+            if previous.rules.iter().any(|rule| rule.mode == Mode::Force) && assist_unchanged {
+                let force_rule = previous.rules.iter().find(|rule| rule.mode == Mode::Force).cloned();
+                next.fold_blocks();
+                next.rules.retain(|rule| rule.mode != Mode::Assist);
+                if let Some(rule) = force_rule { next.rules.push(rule); }
+            } else {
+                next.fold_blocks();
+            }
         }
         validate(&next).map_err(GatewayError::bad_request)?;
         // 两块设置降级成投影：手机端与旧界面还在按它读。
@@ -627,5 +656,63 @@ mod tests {
         assert!(!legacy.rules.is_empty(), "legacy projected save should rebuild the rule");
 
         assert!(explicit.rules.is_empty(), "explicit rules must remain empty");
+    }
+
+    /// 强制转发属于辅助识图族：配置沿用识图目标，投影进旧界面的辅助识图块
+    #[test]
+    fn force_rule_uses_assist_target_and_projects_into_assist_block() {
+        let mut settings = VisionSettings {
+            rules: vec![VisionRule {
+                enabled: true,
+                models: vec![ModelRef::new("provider", "source")],
+                mode: Mode::Force,
+                source: ModelSource::Custom,
+                target: Some(VisionTarget { provider: "vision".into(), model: "reader".into(), reasoning: String::new() }),
+                ..VisionRule::default()
+            }],
+            ..VisionSettings::default()
+        };
+        assert!(settings.uses(Mode::Force));
+        settings.project_blocks();
+        assert_eq!(settings.assist.models.len(), 1);
+        assert_eq!(settings.assist.target.as_ref().unwrap().model, "reader");
+        assert!(settings.reroute.models.is_empty());
+    }
+
+    /// 强制转发投影后与普通辅助识图同形，旧界面无法表达两者的区别
+    /// 保存分支必须靠「辅助识图块未变化」把强制规则原样保留下来
+    #[test]
+    fn force_and_assist_project_to_the_same_block() {
+        let force = VisionRule {
+            enabled: true,
+            models: vec![ModelRef::new("provider", "source")],
+            mode: Mode::Force,
+            source: ModelSource::Custom,
+            target: Some(VisionTarget { provider: "vision".into(), model: "reader".into(), reasoning: String::new() }),
+            ..VisionRule::default()
+        };
+        let mut projected = VisionSettings { rules: vec![force], ..VisionSettings::default() };
+        projected.project_blocks();
+        assert_eq!(projected.assist.models, vec![ModelRef::new("provider", "source")]);
+        assert_eq!(projected.assist.target.as_ref().unwrap().model, "reader");
+        // 折叠回来只能得到普通辅助识图，这正是保存分支需要单独保住 force 的原因
+        let mut folded = projected.clone();
+        folded.rules.clear();
+        folded.fold_blocks();
+        assert_eq!(folded.rules[0].mode, Mode::Assist);
+    }
+
+    /// 默认识图模型与规则自带的旧字段互不干扰，旧配置缺字段时保持 None
+    #[test]
+    fn default_target_is_optional_and_survives_round_trip() {
+        let settings: VisionSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(settings.default_target.is_none());
+        let settings = VisionSettings {
+            default_target: Some(VisionTarget { provider: "vision".into(), model: "reader".into(), reasoning: String::new() }),
+            ..VisionSettings::default()
+        };
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["defaultTarget"]["model"], "reader");
+        assert!(validate(&settings).is_ok());
     }
 }

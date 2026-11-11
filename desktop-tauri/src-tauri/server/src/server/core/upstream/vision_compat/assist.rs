@@ -60,7 +60,6 @@ async fn describe(service: &UpstreamService, ctx: &ProviderContext<'_>, destinat
     if let Some(detail) = &image.detail { part["image_url"]["detail"] = detail.clone().into(); }
     let mut body = json!({
         "model": destination.request_model, "stream": true,
-        "max_tokens": 4096,
         "messages": [
             { "role": "system", "content": INSTRUCTIONS },
             { "role": "user", "content": [
@@ -87,7 +86,10 @@ async fn describe(service: &UpstreamService, ctx: &ProviderContext<'_>, destinat
     if let Some(usage) = body.get("usage") { telemetry.report_usage(usage); }
     let message = body.pointer("/choices/0/message").ok_or_else(|| GatewayError::with_status(502, "视觉模型没有返回图片识读内容"))?;
     let finish = body.pointer("/choices/0/finish_reason").and_then(Value::as_str).unwrap_or("");
-    if matches!(finish, "length" | "content_filter" | "tool_calls" | "function_call")
+    let truncated = finish == "length";
+    if truncated {
+        telemetry.note_attempt_notice("图片识读达到最大输出长度，保留已识读内容并标记为可能不完整");
+    } else if matches!(finish, "content_filter" | "tool_calls" | "function_call")
         || message.get("tool_calls").and_then(Value::as_array).is_some_and(|calls| !calls.is_empty())
         || message.get("function_call").is_some_and(|call| !call.is_null())
         || message.get("refusal").and_then(Value::as_str).is_some_and(|text| !text.is_empty()) {
@@ -100,17 +102,19 @@ async fn describe(service: &UpstreamService, ctx: &ProviderContext<'_>, destinat
     if text.trim().is_empty() || text.len() > 65_536 {
         return Err(GatewayError::with_status(502, "图片识读内容为空或过长；未删除图片继续回答"));
     }
-    Ok(text)
+    Ok(if truncated {
+        format!("{text}\n[图片识读达到最大输出长度，以上内容可能不完整]")
+    } else { text })
 }
 
 pub(super) async fn run(service: &UpstreamService, ctx: &ProviderContext<'_>, original: &RouteTarget, vision: &RequestVision,
     rule: &VisionRule, detail: &mut Value) -> Result<(Value, targets::Destination), GatewayError> {
     let target = match rule.source {
-        // 「沿用工具服务的视觉分析模型」按请求当时的配置取值：不再要求保存时的那一只
-        // 原样未变，因为已经没有人去确认那份变更了。
-        ModelSource::Shared => vision.shared.clone(),
-        ModelSource::Custom => rule.target.clone(),
-    }.ok_or_else(|| GatewayError::bad_request("未配置辅助识图模型；未改用其他模型或删除图片"))?;
+        // 旧版规则可能仍写着共享来源，这里只把它当作「没有单独指定」，
+        // 再按全局默认识图模型补一次，补不到就明确报错
+        ModelSource::Shared => vision.settings.default_target.clone(),
+        ModelSource::Custom => rule.target.clone().or_else(|| vision.settings.default_target.clone()),
+    }.ok_or_else(|| GatewayError::bad_request("这条规则没有指定识图模型，也没有设置默认识图模型；未删除图片"))?;
     let needs = RequestNeeds { images: true, ..Default::default() };
     let destination = targets::resolve(service, ctx, target.clone(), &target.model, &needs)?;
     let target = destination.target.clone();

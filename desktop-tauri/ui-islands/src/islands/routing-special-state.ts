@@ -62,7 +62,7 @@ export type VisionModelRef = { provider: string; model: string }
 export type VisionRuleItem = {
   enabled: boolean
   models: VisionModelRef[]
-  mode: 'assist' | 'reroute'
+  mode: 'assist' | 'reroute' | 'force'
   source: 'shared' | 'custom'
   target: VisionTarget | null
   reuseResults: boolean
@@ -83,6 +83,8 @@ export type VisionConfig = {
   reroute: { models: VisionModelRef[]; preferCurrentRoute: boolean; fallback: 'stop' | 'designated'; targets: VisionTarget[] }
   unknownCapability: 'try_original' | 'compat'
   timeoutSeconds: number
+  /** 规则选择「沿用工具服务的视觉模型」时优先使用的默认识图模型 */
+  defaultTarget: VisionTarget | null
 }
 export type VisionView = {
   config: VisionConfig

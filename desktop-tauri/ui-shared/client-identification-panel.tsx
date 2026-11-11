@@ -6,6 +6,7 @@ import {
 } from '@ui'
 import type { Translate } from './assistant-read-types'
 import { ClientRuleEditor } from './client-identification-editor'
+import { Tip } from './settings-vision-rows'
 import {
   clientSettingsError, IDENTIFICATION_CHANGED, notifyIdentificationChanged,
   randomId, type ClientIdentificationApi, type ClientIdentificationView, type ClientRule, type ClientSettings, type ProviderRule,
@@ -151,6 +152,7 @@ export function ClientIdentificationPanel({ api, t, active = true }: { api: Clie
         <FoldChevron />
         <h2>{t('客户端识别')}</h2>
       </CollapsibleTrigger>
+      <Tip label={t('客户端识别')} text={t('按每条请求的软件标识识别真实客户端，不依赖 API Key；归属规则再按路由供应商把请求改写到所选客户端，未命中时用默认归属客户端。修改只影响新请求，内置规则随软件更新，自定义数据参与备份与云同步。')} />
       {view ? <span className='flex items-center gap-1.5 text-[12px] text-muted-foreground'>
         <StatusDot variant={view.config.providerRules.length || view.config.defaultClientId ? 'success' : 'muted'} />
         {view.config.providerRules.length
@@ -163,7 +165,6 @@ export function ClientIdentificationPanel({ api, t, active = true }: { api: Clie
     </CardHeader>
     <CollapsibleContent keepMounted>
       <CardContent className='panel-body bg-rail-bg'>
-      <p className='max-w-[78ch] text-[12.5px] leading-[1.7] text-muted-foreground'>{t('按每条请求的软件标识识别真实客户端，不依赖 API Key；归属规则再按路由供应商把请求改写到所选客户端，未命中时用默认归属客户端。修改只影响新请求，内置规则随软件更新，自定义数据参与备份与云同步。')}</p>
       {error ? <Alert variant='destructive'>{error}</Alert> : null}
       {!view ? <p className='text-[13px] text-muted-foreground'>{error ? t('客户端识别设置读取失败') : t('加载中…')}</p> : <>
         <div className='grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(340px,500px)]'>

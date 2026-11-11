@@ -26,7 +26,7 @@ import type { MaintenanceDetail, MaintenanceQuery, MaintenanceRun, MaintenanceTa
  */
 
 export function MaintenanceRecords({ compact, loading, busy, runs, total, page, pages, query, search,
-  onSearch, onQuery, onPage, openId, onToggle, detail, detailLoading, detailError, onReloadDetail,
+  onSearch, onQuery, onPage, openId, onToggle, detail, detailLoading, detailError, onReloadDetail, providers,
   retentionDays, maxRecords, onRetry, onClear, clearing, onAccount }: {
   compact: boolean
   loading: boolean
@@ -46,6 +46,7 @@ export function MaintenanceRecords({ compact, loading, busy, runs, total, page, 
   detailLoading: boolean
   detailError: string
   onReloadDetail(): void
+  providers?: Array<{ id: string; label: string }>
   retentionDays: number
   maxRecords: number
   onRetry(runId: string, itemId?: string): void
@@ -158,6 +159,7 @@ export function MaintenanceRecords({ compact, loading, busy, runs, total, page, 
       error={detailError}
       busy={busy}
       onReload={onReloadDetail}
+      providers={providers}
       onClose={() => onToggle(openId)}
       onRetry={onRetry}
       onAccount={onAccount}
