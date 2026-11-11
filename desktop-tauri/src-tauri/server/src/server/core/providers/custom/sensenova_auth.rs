@@ -1,20 +1,25 @@
-//! 商汤日日新（SenseNova）**账号密码登录**：OAuth2 授权码 + PKCE 换 JWT。
+//! 商汤日日新（SenseNova）**手机号验证码登录**：OAuth2 授权码 + PKCE 换 JWT。
 //!
 //! ── 为什么余额查询要自己登录（这一家的特别之处）──────────────
 //! 余额接口（`platform.sensenova.cn` 的 tokenplan/pool-usage）只认控制台的
 //! Bearer JWT，而**推理用的 API Key 换不到它** —— 两者是两套平面（开放平台
-//! API Key 打推理，控制台 JWT 打账户/积分）。用户手上能提供的就是控制台账号
-//! 密码，所以查询链路里带着一段登录（移植来源：OmniProxy 的
-//! `server/src/utils/sensenovaAuth.ts`，逐步对读）。
+//! API Key 打推理，控制台 JWT 打账户/积分）。上游已经不支持控制台账号密码
+//! 登录，用户手上能提供的是绑定手机号与短信验证码，所以查询链路先走手机号
+//! 验证码授权，再缓存 refresh token 自动续期（移植来源：OmniProxy 的
+//! `server/src/utils/sensenovaAuth.ts` 与官网登录页构建产物，逐步对读）。
 //!
 //! ── 流程（四步，与源实现逐条对齐）────────────────────────────
 //!   1. `GET {platform}/oauth2/auth?...`（PKCE + state）—— 跟随跳转直到不带
 //!      location，从**最终地址**的 query 里取 `login_challenge`；
-//!   2. `POST {iam}/iam/authn/v1/auth/nova/login` `{username, password, challenge}`
-//!      → 响应体里的 `redirect`；
-//!   3. 从该 redirect 起继续跟随（带 Cookie），直到地址里出现 `code=`；
-//!   4. `POST {platform}/oauth2/token`（authorization_code + code_verifier）
-//!      → `access_token`（JWT）。
+//!   2. `POST {iam}/iam/authn/v1/auth/nova/sendSmsCode` `{phone, region_code}`
+//!      → `token_code`；若为空，则按 `getCaptcha` / `checkCaptcha` 先完成
+//!      官网滑块，再带 `code_key` 重新发码；
+//!   3. `POST {iam}/iam/authn/v1/auth/nova/smsLogin` `{token_code, verify_code, challenge}`；
+//!   4. 从登录响应或租户选择的 redirect 继续跟随（带 Cookie），直到地址里出现 `code=`；
+//!   5. `POST {platform}/oauth2/token`（authorization_code + code_verifier）
+//!      → `access_token`、`refresh_token`。
+//!   6. access token 临期时用 `refresh_token` 换新，轮换后的 refresh token
+//!      原子回写账号记录；没有 refresh token 的老记录要求重新手机号验证码登录。
 //! 站点常量照抄源实现的「网页端配置」：signinUrl / callbackUrl 都是
 //! `platform.sensenova.cn`，IAM 域是 `iam.sensecoreapi.cn`，clientId = `nova`。
 //!
@@ -30,9 +35,20 @@
 //! `exp`（提前 60 秒视为过期，与源实现同口径）。两者都只读 payload 段，
 //! **不校验签名**：这是网关自己拿到的票，不是需要防伪造的入口数据。
 //!
+//! ── 短信登录为什么需要网关侧暂存 ───────────────────────────────
+//! 上游把短信验证码绑在发码时的 `token_code` 与 PKCE 授权会话上，第二阶段
+//! 必须原样带回。凭证不能只放在前端（会经调试报文与请求日志落盘），所以把
+//! challenge、verifier、state 与 Cookie 存在进程内，前端只拿一次性 ticket。
+//! ticket 十分钟过期，验证码校验成功即删除；网关重启会让未完成的登录失效，
+//! 用户重新发码即可。
+//!
 //! ── 硬约束 ──────────────────────────────────────────────────
 //! release 是 `panic=abort`：本文件零 unwrap / expect / panic。
 //! 失败一律返回可读的 `String`（调用方拼进余额查询的错误文案）。
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -49,28 +65,77 @@ use crate::server::logging;
 pub(super) const PLATFORM_BASE: &str = "https://platform.sensenova.cn";
 /// 余额接口的基址（`/lite` 一级，与 token 平面不同路径）
 pub(super) const PLATFORM_LITE_BASE: &str = "https://platform.sensenova.cn/lite";
-/// IAM 域：账号密码登录接口
+/// IAM 域：短信登录与官网人机验证接口
 const IAM_BASE: &str = "https://iam.sensecoreapi.cn";
 /// OAuth 客户端标识（网页端配置里的 clientId，逐字照抄）
 const CLIENT_ID: &str = "nova";
 /// 授权 scope（离线刷新那两项是网页端的原值）
 const SCOPE: &str = "openid offline offline_access";
+/// 手机号验证码登录的固定区号（当前产品只开放大陆号段）
+const REGION_CODE: &str = "86";
 /// 跟跳转的步数上限（源实现 12）
 const MAX_REDIRECTS: usize = 12;
 /// 单步请求超时：登录链路是案例式动作（不像余额每轮都跑），给 20 秒
 const STEP_TIMEOUT_MS: u64 = 20_000;
+/// 短信登录中间态的有效期（与常见的验证码有效期同量级）
+const SMS_PENDING_TTL_MS: i64 = 10 * 60 * 1000;
 /// UA：登录页面对非常规 UA 有风控，照源实现固定一个普通浏览器 UA
 const USER_AGENT: &str = "Mozilla/5.0";
 /// 过期判定的提前量（秒）：与源实现同口径，避开边界竞态
 const EXPIRY_SKEW_SECONDS: f64 = 60.0;
 
 /// 一次登录的结果（只留余额链路要用的两样）
-pub(super) struct LoginResult {
+pub(crate) struct LoginResult {
     /// 控制台 JWT
     pub access_token: String,
+    /// OAuth refresh token（旧密码登录链路可能为空）
+    pub refresh_token: String,
     /// 到期时刻（毫秒；解析不出 exp 时给 0 = 不确定，调用方当它不能缓存）
     pub expires_at_ms: i64,
 }
+
+/// 发码成功后的公开信息：前端只拿一次 ticket 与脱敏手机号。
+pub(crate) struct SmsChallenge {
+    pub ticket: String,
+    pub phone_masked: String,
+}
+
+/// 官网发码前的人机验证。
+pub(crate) struct SmsCaptcha {
+    pub ticket: String,
+    pub phone_masked: String,
+    pub code_key: String,
+    pub image: String,
+    pub block: String,
+}
+
+/// 发码阶段可能直接成功，也可能先要求人机验证。
+pub(crate) enum SmsStartOutcome {
+    Sent(SmsChallenge),
+    Captcha(SmsCaptcha),
+}
+
+/// 手机号验证码登录完成后可能还要选择租户。
+pub(crate) enum SmsLoginOutcome {
+    Success(LoginResult),
+    TenantRequired(Vec<Value>),
+}
+
+/// 网关侧暂存的短信登录中间态（见模块头）。
+#[derive(Clone)]
+struct PendingSmsLogin {
+    phone: String,
+    challenge: String,
+    verifier: String,
+    state: String,
+    token_code: String,
+    cookies: CookieJar,
+    tenants: Vec<Value>,
+    expires_at_ms: i64,
+}
+
+/// 进程内待完成短信登录表。
+static PENDING_SMS_LOGINS: OnceLock<Mutex<HashMap<String, PendingSmsLogin>>> = OnceLock::new();
 
 /// JWT 是否还能用（`exp` 有效且距到期还有 [`EXPIRY_SKEW_SECONDS`] 以上）。
 /// 解析不出 payload / 没有 `exp` 一律视为不能用 —— 宁多重登一次。
@@ -124,25 +189,24 @@ fn jwt_payload(jwt: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// 账号密码登录，换回控制台 JWT（失败给人类可读的原因）。
-pub(super) async fn login(
-    username: &str,
-    password: &str,
+/// 发起手机号验证码登录：走授权页取 challenge，再发短信。
+///
+/// 只把一次性 ticket 与脱敏手机号交给前端；`token_code`、PKCE verifier、state
+/// 与 Cookie 留在网关进程内，避免它们进入调试报文或前端存储。
+pub(crate) async fn begin_sms_login(
+    phone: &str,
     proxy: Option<&ResolvedProxy>,
-) -> Result<LoginResult, String> {
-    let username = username.trim();
-    if username.is_empty() || password.is_empty() {
-        return Err("商汤日日新的账号 / 密码未配置".to_string());
+) -> Result<SmsStartOutcome, String> {
+    let phone = phone.trim();
+    if !valid_phone(phone) {
+        return Err("请输入 11 位大陆手机号".to_string());
     }
     let verifier = random_secret()?;
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = random_hex()?;
-    // 不自动跟转的出口：这条链路的每一步都要自己读 Location / Set-Cookie
-    // （见 `egress::client_without_redirects`）
     let client = egress::client_without_redirects(proxy);
     let mut jar = CookieJar::default();
 
-    // 1) 发起授权，跟随跳转直到页面停在登录页，取 login_challenge
     let auth_url = authorize_url(&challenge, &state)?;
     let followed = follow(&client, &auth_url, &mut jar).await?;
     if followed.status >= 400 {
@@ -151,68 +215,408 @@ pub(super) async fn login(
     let login_challenge = query_param(&followed.url, "login_challenge")
         .ok_or_else(|| "未能从商汤授权页取到登录 challenge".to_string())?;
 
-    // 2) 密码登录（IAM 域）
     let body = json!({
-        "username": username,
-        "password": password,
-        "challenge": login_challenge,
+        "phone": phone,
+        "region_code": REGION_CODE,
     });
-    let response = client
-        .post(format!("{IAM_BASE}/iam/authn/v1/auth/nova/login"))
-        .header("Content-Type", "application/json")
-        .header("User-Agent", USER_AGENT)
-        .header("Origin", PLATFORM_BASE)
-        .header("Referer", format!("{PLATFORM_BASE}/login"))
-        .timeout(std::time::Duration::from_millis(STEP_TIMEOUT_MS))
-        .json(&body)
-        .with_account_user_agent()
-        .send()
-        .await
-        .map_err(|error| format!("商汤登录接口请求失败：{}", egress::describe_error_detail(&error)))?;
-    let status = response.status().as_u16();
-    let payload = response_json(response).await;
-    if status >= 400 || payload.is_none() {
-        let message = payload
-            .as_ref()
-            .and_then(|value| value.get("message").and_then(Value::as_str))
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(format!("商汤账号登录失败：{}", shorten(&message)));
-    }
-    let redirect = payload
-        .as_ref()
-        .and_then(|value| value.get("redirect").and_then(Value::as_str))
+    let (status, payload) = post_json_with_jar(
+        &client,
+        &format!("{IAM_BASE}/iam/authn/v1/auth/nova/sendSmsCode"),
+        &body,
+        &mut jar,
+    )
+    .await?;
+    let token_code = payload
+        .get("token_code")
+        .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("")
         .to_string();
-    if redirect.is_empty() {
-        return Err("商汤账号登录没有返回跳转地址".to_string());
+    if status >= 400 {
+        let message = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("error").and_then(Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        return Err(format!("商汤短信验证码发送失败：{}", shorten(&message)));
     }
 
-    // 3) 跟着 redirect 回到回调地址，取一次性 code
+    let ticket = random_secret()?;
+    let pending = PendingSmsLogin {
+        phone: phone.to_string(),
+        challenge: login_challenge,
+        verifier,
+        state,
+        token_code,
+        cookies: jar,
+        tenants: Vec::new(),
+        expires_at_ms: logging::now_ms() + SMS_PENDING_TTL_MS,
+    };
+    let sent = {
+        let mut table = pending_table()
+            .lock()
+            .map_err(|_| "商汤短信登录暂存区不可用".to_string())?;
+        prune_pending(&mut table);
+        let sent = !pending.token_code.is_empty();
+        table.insert(ticket.clone(), pending);
+        sent
+    };
+    if sent {
+        return Ok(SmsStartOutcome::Sent(SmsChallenge {
+            ticket,
+            phone_masked: mask_phone(phone),
+        }));
+    }
+    request_captcha(&ticket, phone, proxy).await
+}
+
+/// 用户完成滑块后校验人机验证，并重新发码。
+pub(crate) async fn complete_sms_captcha(
+    ticket: &str,
+    code_key: &str,
+    code_value: u32,
+    proxy: Option<&ResolvedProxy>,
+) -> Result<SmsStartOutcome, String> {
+    let ticket = ticket.trim();
+    let code_key = code_key.trim();
+    if ticket.is_empty() || code_key.is_empty() {
+        return Err("人机验证会话已失效，请重新发送验证码".to_string());
+    }
+    let pending = {
+        let mut table = pending_table()
+            .lock()
+            .map_err(|_| "商汤短信登录暂存区不可用".to_string())?;
+        prune_pending(&mut table);
+        table
+            .get(ticket)
+            .cloned()
+            .ok_or_else(|| "人机验证会话已过期，请重新发送验证码".to_string())?
+    };
+    let client = egress::client_without_redirects(proxy);
+    let mut jar = pending.cookies.clone();
+    let check_url = format!(
+        "{IAM_BASE}/iam/authn/v1/auth/checkCaptcha?code_key={}&code_value={}",
+        url::form_urlencoded::byte_serialize(code_key.as_bytes()).collect::<String>(),
+        code_value
+    );
+    let (status, payload) = get_json_with_jar(&client, &check_url, &mut jar).await?;
+    let passed = payload.get("result").and_then(Value::as_bool).unwrap_or(false);
+    if status >= 400 || !passed {
+        return Err("人机验证未通过，请重新拖动滑块".to_string());
+    }
+    let (status, payload) = post_json_with_jar(
+        &client,
+        &format!("{IAM_BASE}/iam/authn/v1/auth/nova/sendSmsCode"),
+        &json!({
+            "phone": pending.phone,
+            "region_code": REGION_CODE,
+            "code_key": code_key,
+        }),
+        &mut jar,
+    )
+    .await?;
+    let token_code = payload
+        .get("token_code")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    if status >= 400 || token_code.is_empty() {
+        return Err("人机验证已通过，但短信验证码仍未发出，请重试".to_string());
+    }
+    let mut table = pending_table()
+        .lock()
+        .map_err(|_| "商汤短信登录暂存区不可用".to_string())?;
+    if let Some(item) = table.get_mut(ticket) {
+        item.token_code = token_code;
+        item.cookies = jar;
+    }
+    Ok(SmsStartOutcome::Sent(SmsChallenge {
+        ticket: ticket.to_string(),
+        phone_masked: mask_phone(&pending.phone),
+    }))
+}
+
+/// 向官网取人机验证图片，并回传前端拖动的 challenge。
+async fn request_captcha(
+    ticket: &str,
+    phone: &str,
+    proxy: Option<&ResolvedProxy>,
+) -> Result<SmsStartOutcome, String> {
+    let mut jar = {
+        let table = pending_table()
+            .lock()
+            .map_err(|_| "商汤短信登录暂存区不可用".to_string())?;
+        table
+            .get(ticket)
+            .map(|item| item.cookies.clone())
+            .ok_or_else(|| "人机验证会话已过期，请重新发送验证码".to_string())?
+    };
+    let client = egress::client_without_redirects(proxy);
+    let (status, payload) =
+        get_json_with_jar(&client, &format!("{IAM_BASE}/iam/authn/v1/auth/getCaptcha"), &mut jar)
+            .await?;
+    let code_key = payload
+        .get("code_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    let image = payload
+        .get("image")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    let block = payload
+        .get("block")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    if status >= 400 || code_key.is_empty() || image.is_empty() || block.is_empty() {
+        return Err("商汤人机验证初始化失败，请稍后重试".to_string());
+    }
+    if let Ok(mut table) = pending_table().lock() {
+        if let Some(item) = table.get_mut(ticket) {
+            item.cookies = jar;
+        }
+    }
+    Ok(SmsStartOutcome::Captcha(SmsCaptcha {
+        ticket: ticket.to_string(),
+        phone_masked: mask_phone(phone),
+        code_key,
+        image,
+        block,
+    }))
+}
+
+/// 校验短信验证码并完成授权码换票。
+///
+/// `tenant` 为官网多租户选择列表中的一项；单租户时由网关自动取唯一项。
+pub(crate) async fn complete_sms_login(
+    ticket: &str,
+    code: &str,
+    tenant: Option<&Value>,
+    proxy: Option<&ResolvedProxy>,
+) -> Result<SmsLoginOutcome, String> {
+    let ticket = ticket.trim();
+    let code = code.trim();
+    if ticket.is_empty() {
+        return Err("短信登录会话已失效，请重新发送验证码".to_string());
+    }
+    if !code.is_empty() && !(code.len() == 6 && code.bytes().all(|byte| byte.is_ascii_digit())) {
+        return Err("请填写 6 位数字验证码".to_string());
+    }
+    let pending = {
+        let mut table = pending_table()
+            .lock()
+            .map_err(|_| "商汤短信登录暂存区不可用".to_string())?;
+        prune_pending(&mut table);
+        table
+            .get(ticket)
+            .cloned()
+            .ok_or_else(|| "短信登录会话已过期，请重新发送验证码".to_string())?
+    };
+    if pending.expires_at_ms <= logging::now_ms() {
+        return Err("短信登录会话已过期，请重新发送验证码".to_string());
+    }
+    if !pending.tenants.is_empty() {
+        let selected = tenant.ok_or_else(|| "请选择商汤账号所属租户".to_string())?;
+        let client = egress::client_without_redirects(proxy);
+        let mut jar = pending.cookies.clone();
+        return complete_tenant_login(&client, &pending, selected, &mut jar).await;
+    }
+    if code.is_empty() {
+        return Err("请填写 6 位数字验证码".to_string());
+    }
+
+    let client = egress::client_without_redirects(proxy);
+    let body = json!({
+        "token_code": pending.token_code,
+        "verify_code": code,
+        "challenge": pending.challenge,
+    });
+    let mut jar = pending.cookies.clone();
+    let (status, payload) = post_json_with_jar(
+        &client,
+        &format!("{IAM_BASE}/iam/authn/v1/auth/nova/smsLogin"),
+        &body,
+        &mut jar,
+    )
+    .await?;
+    if status >= 400 || payload.is_null() {
+        let message = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("error").and_then(Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        return Err(format!("商汤短信登录失败：{}", shorten(&message)));
+    }
+
+    let redirect = redirect_of(&payload);
+    if redirect.is_empty() {
+        if let Some(tenants) = payload.get("tenant_list").and_then(Value::as_array) {
+            if tenants.len() == 1 {
+                let selected = tenants.first().cloned().unwrap_or(Value::Null);
+                return complete_tenant_login(&client, &pending, &selected, &mut jar).await;
+            }
+            if tenants.len() > 1 {
+                if let Ok(mut table) = pending_table().lock() {
+                    if let Some(item) = table.get_mut(ticket) {
+                        item.cookies = jar;
+                        item.tenants = tenants.clone();
+                    }
+                }
+                return Ok(SmsLoginOutcome::TenantRequired(tenants.clone()));
+            }
+            return Err("商汤短信登录成功，但账号没有返回可用租户".to_string());
+        }
+        return Err("商汤短信登录没有返回跳转地址".to_string());
+    }
+
+    finish_authorization(&client, &pending, &redirect, &mut jar).await
+}
+
+/// 选完租户后调上游 `loginNext`，并继续授权码换票。
+async fn complete_tenant_login(
+    client: &reqwest::Client,
+    pending: &PendingSmsLogin,
+    tenant: &Value,
+    jar: &mut CookieJar,
+) -> Result<SmsLoginOutcome, String> {
+    let body = json!({
+        "challenge": pending.challenge,
+        "username": tenant.get("username").and_then(Value::as_str).unwrap_or(""),
+        "user_id": tenant.get("user_id").and_then(Value::as_str).unwrap_or(""),
+        "sign": tenant.get("sign").and_then(Value::as_str).unwrap_or(""),
+    });
+    let (status, payload) = post_json_with_jar(
+        client,
+        &format!("{IAM_BASE}/iam/authn/v1/auth/nova/loginNext"),
+        &body,
+        jar,
+    )
+    .await?;
+    if status >= 400 {
+        return Err(format!("商汤租户登录失败：HTTP {status}"));
+    }
+    let redirect = redirect_of(&payload);
+    if redirect.is_empty() {
+        return Err("商汤租户登录没有返回跳转地址".to_string());
+    }
+    finish_authorization(client, pending, &redirect, jar).await
+}
+
+/// 跟随登录成功后的 redirect，取 code 并换 access / refresh token。
+async fn finish_authorization(
+    client: &reqwest::Client,
+    pending: &PendingSmsLogin,
+    redirect: &str,
+    jar: &mut CookieJar,
+) -> Result<SmsLoginOutcome, String> {
     let start = Url::parse(PLATFORM_BASE)
         .ok()
-        .and_then(|base| base.join(&redirect).ok())
+        .and_then(|base| base.join(redirect).ok())
         .map(|url| url.to_string())
-        .unwrap_or(redirect);
-    let followed = follow(&client, &start, &mut jar).await?;
+        .unwrap_or_else(|| redirect.to_string());
+    let followed = follow(client, &start, jar).await?;
     let code = query_param(&followed.url, "code")
         .ok_or_else(|| "商汤登录没有拿到一次性授权码".to_string())?;
+    let result = exchange_code(client, &code, &pending.verifier, &pending.state).await?;
+    let mut table = pending_table()
+        .lock()
+        .map_err(|_| "商汤短信登录暂存区不可用".to_string())?;
+    table.retain(|_, item| item.expires_at_ms > logging::now_ms());
+    table.retain(|_, item| item.token_code != pending.token_code);
+    Ok(SmsLoginOutcome::Success(result))
+}
 
-    // 4) 用 code 换 access_token
+/// 用 refresh token 续期（轮换后的 refresh token 由调用方回写）。
+pub(crate) async fn refresh_login(
+    refresh_token: &str,
+    proxy: Option<&ResolvedProxy>,
+) -> Result<LoginResult, String> {
+    let refresh_token = refresh_token.trim();
+    if refresh_token.is_empty() {
+        return Err("商汤 refresh token 为空".to_string());
+    }
+    let client = egress::client_without_redirects(proxy);
     let form = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("grant_type", "authorization_code")
+        .append_pair("grant_type", "refresh_token")
         .append_pair("client_id", CLIENT_ID)
-        .append_pair("code", &code)
-        .append_pair("redirect_uri", PLATFORM_BASE)
-        .append_pair("code_verifier", &verifier)
-        .append_pair("state", &state)
+        .append_pair("refresh_token", refresh_token)
         .finish();
     let response = client
         .post(format!("{PLATFORM_BASE}/oauth2/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("User-Agent", USER_AGENT)
-        .timeout(std::time::Duration::from_millis(STEP_TIMEOUT_MS))
+        .timeout(Duration::from_millis(STEP_TIMEOUT_MS))
+        .body(form)
+        .with_account_user_agent()
+        .send()
+        .await
+        .map_err(|error| format!("商汤续期请求失败：{}", egress::describe_error_detail(&error)))?;
+    let status = response.status().as_u16();
+    let payload = response_json(response).await;
+    let access_token = payload
+        .as_ref()
+        .and_then(|value| value.get("access_token").and_then(Value::as_str))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    if status >= 400 || access_token.is_empty() {
+        let message = payload
+            .as_ref()
+            .and_then(|value| {
+                value
+                    .get("error_description")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.get("error").and_then(Value::as_str))
+            })
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        return Err(format!("商汤登录票续期失败：{}", shorten(&message)));
+    }
+    let next_refresh = payload
+        .as_ref()
+        .and_then(|value| value.get("refresh_token").and_then(Value::as_str))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    Ok(LoginResult {
+        expires_at_ms: jwt_expires_at_ms(&access_token),
+        access_token,
+        refresh_token: if next_refresh.is_empty() {
+            refresh_token.to_string()
+        } else {
+            next_refresh
+        },
+    })
+}
+
+/// 用授权码换 access / refresh token。
+async fn exchange_code(
+    client: &reqwest::Client,
+    code: &str,
+    verifier: &str,
+    state: &str,
+) -> Result<LoginResult, String> {
+    let form = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("grant_type", "authorization_code")
+        .append_pair("client_id", CLIENT_ID)
+        .append_pair("code", code)
+        .append_pair("redirect_uri", PLATFORM_BASE)
+        .append_pair("code_verifier", verifier)
+        .append_pair("state", state)
+        .finish();
+    let response = client
+        .post(format!("{PLATFORM_BASE}/oauth2/token"))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("User-Agent", USER_AGENT)
+        .timeout(Duration::from_millis(STEP_TIMEOUT_MS))
         .body(form)
         .with_account_user_agent()
         .send()
@@ -239,9 +643,16 @@ pub(super) async fn login(
             .unwrap_or_else(|| format!("HTTP {status}"));
         return Err(format!("商汤换取登录票失败：{}", shorten(&message)));
     }
+    let refresh_token = payload
+        .as_ref()
+        .and_then(|value| value.get("refresh_token").and_then(Value::as_str))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
     Ok(LoginResult {
         expires_at_ms: jwt_expires_at_ms(&access_token),
         access_token,
+        refresh_token,
     })
 }
 
@@ -316,6 +727,59 @@ fn resolve_url(current: &str, location: &str) -> Result<String, String> {
         .map_err(|_| "商汤登录跳转地址不是合法 URL".to_string())
 }
 
+/// 调 IAM 的 JSON 接口（发码 / 短信登录 / 租户选择共用一套头），
+/// 并读取 `Set-Cookie` 到给定 Cookie Jar。
+async fn get_json_with_jar(
+    client: &reqwest::Client,
+    url: &str,
+    jar: &mut CookieJar,
+) -> Result<(u16, Value), String> {
+    let mut request = client
+        .get(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Origin", PLATFORM_BASE)
+        .header("Referer", format!("{PLATFORM_BASE}/login"))
+        .timeout(Duration::from_millis(STEP_TIMEOUT_MS));
+    let cookie = jar.header();
+    if !cookie.is_empty() {
+        request = request.header("Cookie", cookie);
+    }
+    let response = request
+        .with_account_user_agent()
+        .send()
+        .await
+        .map_err(|error| format!("商汤登录接口请求失败：{}", egress::describe_error_detail(&error)))?;
+    jar.capture(&response);
+    let status = response.status().as_u16();
+    let payload = response_json(response).await.unwrap_or(Value::Null);
+    Ok((status, payload))
+}
+
+/// 同上，并读取 `Set-Cookie` 到给定 Cookie Jar。
+async fn post_json_with_jar(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+    jar: &mut CookieJar,
+) -> Result<(u16, Value), String> {
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", USER_AGENT)
+        .header("Origin", PLATFORM_BASE)
+        .header("Referer", format!("{PLATFORM_BASE}/login"))
+        .timeout(Duration::from_millis(STEP_TIMEOUT_MS))
+        .json(body)
+        .with_account_user_agent()
+        .send()
+        .await
+        .map_err(|error| format!("商汤登录接口请求失败：{}", egress::describe_error_detail(&error)))?;
+    jar.capture(&response);
+    let status = response.status().as_u16();
+    let payload = response_json(response).await.unwrap_or(Value::Null);
+    Ok((status, payload))
+}
+
 /// 读一个响应体里的 JSON（读不出 / 不是 JSON 给 None；状态码由调用方先读走）
 async fn response_json(response: reqwest::Response) -> Option<Value> {
     let text = response.text().await.ok()?;
@@ -337,8 +801,53 @@ fn query_param(url: &Option<Url>, name: &str) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// 从登录响应里取跳转地址（兼容三种上游字段名）。
+fn redirect_of(payload: &Value) -> String {
+    ["redirect_uri", "redirect_to", "redirect"]
+        .into_iter()
+        .find_map(|key| payload.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// 短信登录中间态表（首次访问时初始化）。
+fn pending_table() -> &'static Mutex<HashMap<String, PendingSmsLogin>> {
+    PENDING_SMS_LOGINS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 删掉已过期的短信登录中间态。
+fn prune_pending(table: &mut HashMap<String, PendingSmsLogin>) {
+    let now = logging::now_ms();
+    table.retain(|_, item| item.expires_at_ms > now);
+}
+
+/// 大陆手机号本地校验（与官网登录页 `^1\d{10}$` 同口径）。
+fn valid_phone(phone: &str) -> bool {
+    let bytes = phone.as_bytes();
+    bytes.len() == 11
+        && bytes.first() == Some(&b'1')
+        && bytes.iter().all(|byte| byte.is_ascii_digit())
+}
+
+/// 手机号脱敏：保留前三后四（与官网 `el` 函数同口径）。
+fn mask_phone(phone: &str) -> String {
+    let digits: String = phone.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    if digits.len() >= 11 {
+        let start = &digits[..3];
+        let end = &digits[digits.len() - 4..];
+        return format!("{start}****{end}");
+    }
+    if digits.len() >= 7 {
+        let start = &digits[..2];
+        let end = &digits[digits.len() - 2..];
+        return format!("{start}****{end}");
+    }
+    "****".to_string()
+}
+
 /// 极简 Cookie Jar：只认 `name=value`，同名覆盖（见模块头）。
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct CookieJar {
     cookies: Vec<(String, String)>,
 }

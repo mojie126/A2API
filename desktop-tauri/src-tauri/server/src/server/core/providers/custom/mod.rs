@@ -17,7 +17,7 @@ pub mod balance_parse;
 mod quota;
 pub mod emulation;
 pub mod forward;
-/// 商汤日日新的账号密码登录（OAuth2 + PKCE 换控制台 JWT），只服务余额查询
+/// 商汤日日新的手机号验证码登录（OAuth2 + PKCE 换控制台 JWT），只服务余额查询
 pub mod sensenova_auth;
 
 pub(crate) fn catalog_providers(store: &AccountStore) -> Vec<(String, Vec<Value>)> {

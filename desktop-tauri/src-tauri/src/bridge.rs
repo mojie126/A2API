@@ -497,6 +497,8 @@ const BRIDGE_JS: &str = r#"
       call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/campaigns/redeem', { code }),
     getOfficeaceSubscription: id =>
       call('GET', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/officeace-subscription'),
+    simulateOfficeaceClient: id =>
+      call('GET', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/officeace-subscription/simulate-client'),
     activateOfficeaceSubscription: (id, confirmAgreements) =>
       call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/officeace-subscription/activate', { confirmAgreements: confirmAgreements === true }),
     // ── Loomy 新手任务（查询 / 一键领取）──
@@ -925,6 +927,7 @@ const BRIDGE_JS: &str = r#"
     // 落到统一库的 debug_traffic 表，请求日志页的「详情」列据此展示。
     getDebug: () => call('GET', '/api/debug'),
     saveDebug: enabled => call('PUT', '/api/debug', { debugMode: enabled }),
+    saveDebugBudget: budget => call('PUT', '/api/debug', { debugBudget: budget }),
     // 按 id 取一条请求的原始报文（列表接口不返回报文，见后端 debug_api 的模块头）。
     // 找不到时后端给 404，前端据此显示「该请求没有保存原始报文」。
     getDebugTraffic: id => call('GET', '/api/debug/traffic?id=' + encodeURIComponent(id)),

@@ -49,10 +49,14 @@ export type BalanceQueryPublic = {
   scheme?: string
   userId?: string
   username?: string
+  /** 商汤：脱敏后的绑定手机号（原始号码只留后端使用） */
+  phone?: string
   /** 三个密字段**只有存在标记**，值绝不透出（与 apiKey 同一纪律） */
   hasAccessToken?: boolean
   hasPassword?: boolean
   hasToken?: boolean
+  /** 商汤：是否已有 refresh token（支持自动续期） */
+  hasRefreshToken?: boolean
 }
 
 export type BalanceField = {
@@ -122,22 +126,8 @@ export const BALANCE_SCHEME_SPECS: Record<BalanceScheme, BalanceSchemeSpec> = {
   sensenova: {
     label: '商汤日日新',
     endpoint: 'platform.sensenova.cn 控制台',
-    note: t('用商汤日日新控制台的账号密码查询（与推理用的 API Key 不是同一套）。网关会自动换取登录票并缓存，过期后自动重登，不需要手动维护。'),
-    fields: [
-      {
-        key: 'username',
-        label: t('账号'),
-        placeholder: t('商汤日日新控制台的登录账号'),
-        hint: t('必填'),
-      },
-      {
-        key: 'password',
-        label: t('密码'),
-        secret: true,
-        placeholder: t('商汤日日新控制台的登录密码'),
-        hint: t('留空 = 不修改，清除用右边的按钮'),
-      },
-    ],
+    note: t('上游已不支持控制台账号密码登录。用绑定手机号 + 短信验证码登录一次，网关会保存 OAuth refresh token，过期后自动续期。'),
+    fields: [],
   },
   zhipu: {
     label: '智谱',
@@ -195,7 +185,7 @@ export function balanceQueryConfigured(query: BalanceQueryPublic | null | undefi
   const scheme = String(query?.scheme || '')
   if (scheme === 'new_api') return query?.hasAccessToken === true
   if (scheme === 'sensenova') {
-    return String(query?.username || '').trim() !== '' && query?.hasPassword === true
+    return query?.hasRefreshToken === true
   }
   if (scheme === 'zhipu') return query?.hasToken === true
   // 其余四家靠账号的 API Key：这里不判（界面上「未配置凭证」徽章由账号层给）

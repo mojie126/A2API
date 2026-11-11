@@ -21,7 +21,7 @@
 //! | `new_api` | `{base}/api/user/self` + `{base}/api/status` | **控制台访问令牌**（Bearer + 可选 `new-api-user` 头） | `data.quota`，按 `/api/status` 的显示口径换算成货币 |
 //! | `deepseek` | `{base}/user/balance` | 账号 API Key（Bearer） | `balance_infos[].total_balance`（多币种） |
 //! | `opencode` | `{base}/v1/usage` | 账号 API Key（Bearer） | rolling / weekly / monthly 三窗口剩余百分比 |
-//! | `sensenova` | `platform.sensenova.cn` 控制面（与 base 无关） | **控制台账号密码**换 JWT（见 `sensenova_auth`） | 通用池 / Flash-Lite 池各 5 小时 / 7 天窗口剩余百分比 + 活动返赠 |
+//! | `sensenova` | `platform.sensenova.cn` 控制面（与 base 无关） | **手机号验证码**换 OAuth token，refresh token 自动续期（见 `sensenova_auth`） | 通用池 / Flash-Lite 池各 5 小时 / 7 天窗口剩余百分比 + 活动返赠 |
 //! | `zhipu` | `bigmodel.cn` 控制台（与 base 无关） | **控制台令牌** | 账户余额（人民币元） |
 //! | `zhipu_zai` | `api.z.ai` 控制面（与 base 无关） | 账号 API Key 铸 **SIGN 签名**（见 `zhipu_sign_jwt`） | 账户余额（美元） |
 //!
@@ -32,7 +32,7 @@
 //!
 //! ── 凭证存哪（与内置家的区别）────────────────────────────────
 //! 内置家的查询凭证多数就是转发凭证（token 一把通用）；这七家里有三家
-//! 要**另一份**凭证（NewAPI 的访问令牌、商汤的控制台账号密码、智谱国内站的
+//! 要**另一份**凭证（NewAPI 的访问令牌、商汤的手机号验证码、智谱国内站的
 //! 控制台令牌），落在账号记录的 `balanceQuery` 键里（见 `custom_accounts`）。
 //! sub2api / deepseek / opencode / zhipu_zai 四家用账号自己的 API Key，
 //! 不需要额外配置 —— 与用户「DeepSeek 不用额外填东西」的口径一致。
@@ -49,6 +49,7 @@
 //! release 是 `panic=abort`：本文件零 unwrap / expect / panic。
 
 use serde_json::Value;
+use std::sync::OnceLock;
 use url::Url;
 
 use crate::server::core::account_store::custom_accounts::{CustomBalanceQuery, CustomCredential};
@@ -79,6 +80,9 @@ const ZHIPU_CONSOLE_BASE: &str = "https://bigmodel.cn";
 /// 提供商 base 无关（余额记在控制台账户上）。
 const ZHIPU_ZAI_BALANCE_URL: &str =
     "https://api.z.ai/api/biz/account/query-customer-account-report";
+
+/// 商汤 refresh token 轮换是单次消费，同一进程内串行化续期请求
+static SENSENOVA_REFRESH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 /// 余额查询方案（与提供商记录的 `balanceScheme` 一一对应）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,7 +131,7 @@ impl Scheme {
                 "账号自己的 API Key"
             }
             Scheme::NewApi => "查询设置里的访问令牌（Access Token）",
-            Scheme::Sensenova => "查询设置里的账号与密码",
+            Scheme::Sensenova => "查询设置里的手机号验证码登录",
             Scheme::Zhipu => "查询设置里的控制台令牌",
         }
     }
@@ -367,10 +371,11 @@ fn zhipu_sign_jwt(api_key: &str) -> Option<String> {
 
 /// 商汤日日新：登录票（缓存优先）→ 控制面的双积分池用量。
 ///
-/// 票的续期策略与源实现一致：缓存里有**没过期**（提前 60 秒算过期）的票就直接
-/// 用，否则用账号密码重登一次并把新票写回记录（下一次查询就不必再登）。
-/// 重登失败是**查询失败**（502）而不是「未配置」—— 用户已经把账号密码配好了，
-/// 失败的原因在上游（密码错、风控、网络），文案要如实反映。
+/// 手机号验证码登录写入 refresh token 后，续期优先走 refresh token：
+/// access token 临期就换一次新票，上游轮换后的 refresh token 由
+/// [`AccountStore::store_custom_balance_sensenova_login`] 原子回写。
+/// 旧记录没有 refresh token 时按「未配置」提示重新手机号验证码登录，
+/// 不再回退上游已关闭的账号密码登录。
 async fn query_sensenova(
     store: &AccountStore,
     credential: &CustomCredential,
@@ -381,29 +386,45 @@ async fn query_sensenova(
     let scheme = Scheme::Sensenova;
     let mut jwt = query.sensenova_jwt.trim().to_string();
     if jwt.is_empty() || !sensenova_auth::jwt_reusable(&jwt) {
-        let username = query.username.trim();
-        if username.is_empty() || query.password.is_empty() {
-            return Err(usage_not_configured(label, scheme.credential_hint()));
+        let _guard = SENSENOVA_REFRESH_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        // 等锁期间另一任务可能已完成轮换与回写，重新读取后再判断，
+        // 不能拿进入查询时的旧 refresh token 再消费一次
+        let latest = store
+            .custom_balance_query_by_id(&credential.account_id)
+            .unwrap_or_else(empty_query);
+        let latest_jwt = latest.sensenova_jwt.trim();
+        if !latest_jwt.is_empty() && sensenova_auth::jwt_reusable(latest_jwt) {
+            jwt = latest_jwt.to_string();
+        } else {
+            let refresh_token = latest.sensenova_refresh_token.trim();
+            if refresh_token.is_empty() {
+                return Err(usage_not_configured(label, scheme.credential_hint()));
+            }
+            let result = sensenova_auth::refresh_login(refresh_token, proxy)
+                .await
+                .map_err(|message| GatewayError::with_status(502, message))?;
+            jwt = result.access_token.clone();
+            // 回写缓存：写失败只影响下一次查询（那次会再登一次），不能让它把
+            // 一次成功的余额读取变成失败
+            if let Err(error) = store.store_custom_balance_sensenova_login(
+                &credential.account_id,
+                &latest.phone,
+                &result.access_token,
+                &result.refresh_token,
+                result.expires_at_ms,
+            ) {
+                logging::verbose(
+                    "[Usage]",
+                    &format!(
+                        "商汤登录票缓存写入失败（账号 {}）：{}",
+                        credential.account_name, error.message
+                    ),
+                );
+            }
         }
-        let result = sensenova_auth::login(username, &query.password, proxy)
-            .await
-            .map_err(|message| GatewayError::with_status(502, message))?;
-        // 回写缓存：写失败只影响下一次查询（那次会再登一次），不能让它把
-        // 一次成功的余额读取变成失败
-        if let Err(error) = store.store_custom_balance_jwt(
-            &credential.account_id,
-            &result.access_token,
-            result.expires_at_ms,
-        ) {
-            logging::verbose(
-                "[Usage]",
-                &format!(
-                    "商汤登录票缓存写入失败（账号 {}）：{}",
-                    credential.account_name, error.message
-                ),
-            );
-        }
-        jwt = result.access_token;
     }
     let tenant = sensenova_auth::jwt_tenant_id(&jwt).ok_or_else(|| {
         GatewayError::with_status(502, format!("{label} 的登录票里没有 tenant_id，无法定位账户"))
@@ -610,5 +631,7 @@ fn empty_query() -> CustomBalanceQuery {
         token: String::new(),
         sensenova_jwt: String::new(),
         sensenova_jwt_expires_at: 0,
+        sensenova_refresh_token: String::new(),
+        phone: String::new(),
     }
 }

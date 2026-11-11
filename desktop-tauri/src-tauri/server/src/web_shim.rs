@@ -1811,6 +1811,9 @@ pub fn shim_js() -> &'static str {
     getOfficeaceSubscription: function (id) {
       return call('GET', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/officeace-subscription');
     },
+    simulateOfficeaceClient: function (id) {
+      return call('GET', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/officeace-subscription/simulate-client');
+    },
     activateOfficeaceSubscription: function (id, confirmAgreements) {
       return call('POST', '/api/accounts/' + encodeURIComponent(String(id || '')) + '/officeace-subscription/activate', { confirmAgreements: confirmAgreements === true });
     },
@@ -2265,6 +2268,7 @@ pub fn shim_js() -> &'static str {
     // ── 调试模式 ──
     getDebug: function () { return call('GET', '/api/debug'); },
     saveDebug: function (enabled) { return call('PUT', '/api/debug', { debugMode: enabled }); },
+    saveDebugBudget: function (budget) { return call('PUT', '/api/debug', { debugBudget: budget }); },
     getDebugTraffic: function (id) {
       return call('GET', '/api/debug/traffic?id=' + encodeURIComponent(id));
     },

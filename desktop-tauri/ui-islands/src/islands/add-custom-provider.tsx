@@ -49,6 +49,7 @@ import { presetOfProvider, sameProviderEndpoint } from './add-provider-metadata'
 import { useAddAccountProxy, useAccountAddBusy } from './add-account-proxy'
 import { UserAgentInput, useUserAgentPresets } from './add-account-user-agent'
 import type { ProxyPayload } from './accounts-proxy-form'
+import { SensenovaSmsLogin } from './sensenova-sms-login'
 import { t } from '../i18n'
 
 /** 展示名长度上限（与后端 custom_providers::MAX_NAME_CHARS 一致，前端先挡一次） */
@@ -291,6 +292,7 @@ export function CustomProviderBlock({
   const [createUa, setCreateUa] = React.useState(() => uaDraft[UA_CREATE_ID] || '')
   const [existingUa, setExistingUa] = React.useState(() => uaDraft[UA_EXISTING_ID] || '')
   const uaPresets = useUserAgentPresets()
+  const proxy = useAddAccountProxy()
 
   const list = React.useMemo(() => customList(), [version])
   const pickedProvider = list.find(item => item.id === providerHint)
@@ -334,6 +336,8 @@ export function CustomProviderBlock({
   const existingScheme = mode === 'existing'
     ? String(list.find(item => item.id === current)?.balanceScheme || '')
     : ''
+  const createSensenova = createScheme === 'sensenova'
+  const existingSensenova = existingScheme === 'sensenova'
   /** 勾选框的统一处理：React 状态 + 草稿一起写（提交动作读草稿） */
   const toggleNoAuth = (id: string, setter: (next: boolean) => void) => (next: boolean) => {
     setter(next)
@@ -427,8 +431,30 @@ export function CustomProviderBlock({
               : t('本地 Ollama、OpenCode Zen 免费档这类上游要勾上，否则账号不可用')}
             onChange={toggleNoAuth(NOAUTH_ID, setNoAuth)}
           />
-          {/* 余额查询：只有预置卡带方案的家才出现（新建时方案随记录写入） */}
-          <BalanceFields scheme={createScheme} prefix={BALANCE_CREATE_PREFIX} />
+          {/* 余额查询：只有预置卡带方案的家才出现（新建时方案随记录写入）。
+              商汤已改为手机号验证码登录，不能再让用户填控制台账号密码。 */}
+          {createSensenova ? (
+            <SensenovaSmsLogin
+              context={{
+                createProvider: () => ({
+                  name: readField(NAME_ID),
+                  protocol: readField(PROTOCOL_ID) || options[0].value,
+                  baseUrl: readField(BASEURL_ID),
+                  presetKey: presetKey || undefined,
+                  balanceScheme: 'sensenova',
+                }),
+                apiKey: () => readField(APIKEY_ID),
+                name: () => readField(NAME_ID),
+                userAgent: () => readUaDraft(UA_CREATE_ID),
+                proxy: proxy.read,
+                onSuccess: async () => {
+                  clearFields([NAME_ID, BASEURL_ID, APIKEY_ID])
+                  writeUaDraft(UA_CREATE_ID, '')
+                  await afterCustomAdd(t('✅ 商汤日日新已连接'))
+                },
+              }}
+            />
+          ) : <BalanceFields scheme={createScheme} prefix={BALANCE_CREATE_PREFIX} />}
           <div className='add-field'>
             <Label htmlFor={UA_CREATE_ID}>{t('User-Agent（可选）')}</Label>
             <UserAgentInput id={UA_CREATE_ID} value={createUa}
@@ -481,8 +507,24 @@ export function CustomProviderBlock({
               : t('同一家可以混着放：有 Key 的账号与无鉴权账号各按各的规则走；无需鉴权的账号也能并存多条（各自可配不同的出网代理）')}
             onChange={toggleNoAuth(EXISTING_NOAUTH_ID, setExistingNoAuth)}
           />
-          {/* 余额查询：这一家登记了方案才出现（方案来自提供商记录，不能改） */}
-          <BalanceFields scheme={existingScheme} prefix={BALANCE_EXISTING_PREFIX} />
+          {/* 余额查询：这一家登记了方案才出现（方案来自提供商记录，不能改）。
+              商汤的查询凭证由手机号验证码登录写入。 */}
+          {existingSensenova ? (
+            <SensenovaSmsLogin
+              context={{
+                providerId: current,
+                apiKey: () => readField(EXISTING_APIKEY_ID),
+                name: () => readField(EXISTING_NAME_ID),
+                userAgent: () => readUaDraft(UA_EXISTING_ID),
+                proxy: proxy.read,
+                onSuccess: async () => {
+                  clearFields([EXISTING_APIKEY_ID, EXISTING_NAME_ID])
+                  writeUaDraft(UA_EXISTING_ID, '')
+                  await afterCustomAdd(t('✅ 商汤日日新账号已连接'))
+                },
+              }}
+            />
+          ) : <BalanceFields scheme={existingScheme} prefix={BALANCE_EXISTING_PREFIX} />}
           <div className='add-field'>
             <Label htmlFor={EXISTING_NAME_ID}>{t('备注名')}</Label>
             <Input
@@ -680,6 +722,10 @@ export function CustomFootActions({
   const [hint, setHint] = React.useState('')
   const [duplicates, setDuplicates] = React.useState<CustomProviderRecord[]>([])
   const context: FootContext = { presetKey, providerId, setBusy, setHint, setDuplicates, readProxy: proxy.read }
+  const existingScheme = String(customList().find(item => item.id === providerId)?.balanceScheme || '')
+  const sensenovaManaged = mode === 'create'
+    ? presetKey === 'sensenova'
+    : existingScheme === 'sensenova'
 
   return (
     <>
@@ -706,7 +752,7 @@ export function CustomFootActions({
         {/* 两颗主按钮都常驻、按模式切显隐（与旧实现一致：文案与提交函数成对写在一处） */}
         <Button
           id={CREATE_BUTTON_ID}
-          hidden={mode !== 'create'}
+          hidden={mode !== 'create' || sensenovaManaged}
           disabled={busy}
           onClick={() => { void submitCreate(context) }}
         >
@@ -714,7 +760,7 @@ export function CustomFootActions({
         </Button>
         <Button
           id={EXISTING_BUTTON_ID}
-          hidden={mode !== 'existing'}
+          hidden={mode !== 'existing' || sensenovaManaged}
           disabled={busy}
           onClick={() => { void submitExisting(context) }}
         >

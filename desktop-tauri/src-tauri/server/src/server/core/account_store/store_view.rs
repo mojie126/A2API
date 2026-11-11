@@ -838,14 +838,41 @@ fn balance_query_public(fields: &Map<String, Value>, scheme: &str) -> Value {
             .to_string()
     };
     let configured = |key: &str| !text_of(key).is_empty();
-    json!({
+    let mut public = json!({
         "scheme": scheme,
         "userId": text_of("userId"),
         "username": text_of("username"),
         "hasAccessToken": configured("accessToken"),
         "hasPassword": configured("password"),
         "hasToken": configured("token"),
-    })
+    });
+    if scheme == "sensenova" {
+        let phone = text_of("phone");
+        if let Some(object) = public.as_object_mut() {
+            object.insert("phone".to_string(), Value::String(mask_phone(&phone)));
+            object.insert(
+                "hasRefreshToken".to_string(),
+                Value::Bool(configured("sensenovaRefreshToken")),
+            );
+        }
+    }
+    public
+}
+
+/// 手机号脱敏：公开形态沿用商汤登录页的前三后四口径。
+fn mask_phone(phone: &str) -> String {
+    let digits: String = phone.chars().filter(|ch| ch.is_ascii_digit()).collect();
+    if digits.len() >= 11 {
+        let start = &digits[..3];
+        let end = &digits[digits.len() - 4..];
+        return format!("{start}****{end}");
+    }
+    if digits.len() >= 7 {
+        let start = &digits[..2];
+        let end = &digits[digits.len() - 2..];
+        return format!("{start}****{end}");
+    }
+    String::new()
 }
 
 /// 记录上的 `lowBalance` → 公开形态的规范化形状。

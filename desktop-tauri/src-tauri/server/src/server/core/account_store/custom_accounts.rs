@@ -289,7 +289,7 @@ impl AccountStore {
             }
         }
         // 余额查询配置（`balanceQuery`，可选）：预置卡带来的余额方案要的那份
-        // 凭证（NewAPI 的访问令牌 / 商汤的控制台账号密码 / 智谱的控制台令牌）。
+        // 凭证（NewAPI 的访问令牌 / 商汤的手机号验证码 / 智谱的控制台令牌）。
         // 与 apiKey 同一层是刻意的：它也是「这条账号的凭证」，只是用于查询
         // 而不是转发（见 `custom_balance_query_by_id` 的说明）。
         if let Some(value) = object.get("balanceQuery") {
@@ -708,9 +708,9 @@ impl AccountStore {
     ///     信封（那会让读数多一层解包、也失去「整行一个信封」的统一处置）。
     ///
     /// ── 为什么换凭证要连 JWT 缓存一起清 ─────────────────────────
-    /// 商汤的查询票（`sensenovaJwt`）是用账号密码换来的：密码一换，旧票代表的
-    /// 还是旧账号 —— 留着它会让「改了密码」这件事看起来没生效（查询继续用旧
-    /// 身份成功）。清掉之后下一次查询自然重登。
+    /// 商汤的查询票（`sensenovaJwt`）与 refresh token 是用手机号验证码换来的：
+    /// 重新绑定手机号后，旧票与旧 refresh token 代表的还是旧账号，留着会让
+    /// 「换绑」看起来没生效，因此换身份字段时一并清掉缓存。
     pub fn update_custom_balance_query(
         &self,
         id: &str,
@@ -797,6 +797,95 @@ impl AccountStore {
         let _ = self.with_conn(&_guard, |conn| sql::update_in_place(conn, &record))?;
         Ok(())
     }
+
+    /// 回写商汤手机号验证码登录换来的 access / refresh token。
+    ///
+    /// 与 [`Self::store_custom_balance_jwt`] 同一落盘路径，额外保存轮换后的
+    /// refresh token 与绑定手机号，并清掉旧版账号密码登录字段 —— 上游已不再
+    /// 支持账密登录，保留密码只会让界面与真实可用凭证不一致。
+    pub fn store_custom_balance_sensenova_login(
+        &self,
+        id: &str,
+        phone: &str,
+        access_token: &str,
+        refresh_token: &str,
+        expires_at_ms: i64,
+    ) -> Result<(), AccountStoreError> {
+        let access_token = access_token.trim();
+        let refresh_token = refresh_token.trim();
+        if access_token.is_empty() || refresh_token.is_empty() {
+            return Err(AccountStoreError::bad_request(
+                "商汤登录结果缺少 access token 或 refresh token",
+            ));
+        }
+        let _guard = self.guard();
+        let Some(mut record) = self.record_by_id(&_guard, id.trim()) else {
+            return Err(AccountStoreError::not_found("账号不存在"));
+        };
+        let mut query = record
+            .fields()
+            .get("balanceQuery")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let phone = phone.trim().to_string();
+        if !phone.is_empty() {
+            query.insert("phone".to_string(), Value::String(phone));
+        }
+        query.insert(
+            "sensenovaJwt".to_string(),
+            Value::String(access_token.to_string()),
+        );
+        query.insert(
+            "sensenovaJwtExpiresAt".to_string(),
+            Value::from(expires_at_ms),
+        );
+        query.insert(
+            "sensenovaRefreshToken".to_string(),
+            Value::String(refresh_token.to_string()),
+        );
+        // 上游关闭账密登录后，这两项不再有配置入口；旧记录在新登录成功后清掉。
+        query.remove("username");
+        query.remove("password");
+        record.set("balanceQuery", Value::Object(query));
+        record.set_updated_at(logging::now_ms());
+        self.with_conn(&_guard, |conn| sql::update_in_place(conn, &record))?;
+        Ok(())
+    }
+
+    /// 商汤短信登录已完成时重新绑定手机号，供多租户续接使用。
+    ///
+    /// 只更新 `phone`，不会覆盖 access / refresh token；调用方在租户列表
+    /// 落定后仍需调用 [`Self::store_custom_balance_sensenova_login`] 回写票。
+    pub fn store_custom_balance_sensenova_phone(
+        &self,
+        id: &str,
+        phone: &str,
+    ) -> Result<(), AccountStoreError> {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(AccountStoreError::bad_request("商汤账号 id 为空"));
+        }
+        let phone = phone.trim();
+        if phone.is_empty() {
+            return Err(AccountStoreError::bad_request("商汤绑定手机号为空"));
+        }
+        let _guard = self.guard();
+        let Some(mut record) = self.record_by_id(&_guard, id) else {
+            return Err(AccountStoreError::not_found("账号不存在"));
+        };
+        let mut query = record
+            .fields()
+            .get("balanceQuery")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        query.insert("phone".to_string(), Value::String(phone.to_string()));
+        record.set("balanceQuery", Value::Object(query));
+        record.set_updated_at(logging::now_ms());
+        self.with_conn(&_guard, |conn| sql::update_in_place(conn, &record))?;
+        Ok(())
+    }
 }
 
 /// 自定义账号的**余额查询配置快照**（`custom_balance_query_by_id` 的返回值）。
@@ -819,6 +908,10 @@ pub struct CustomBalanceQuery {
     pub sensenova_jwt: String,
     /// 商汤：缓存票的到期时刻（毫秒，0 = 未知）
     pub sensenova_jwt_expires_at: i64,
+    /// 商汤：OAuth refresh token（短信登录写入，旧密码登录记录为空）
+    pub sensenova_refresh_token: String,
+    /// 商汤：绑定手机号（短信登录写入，公开形态只给脱敏值）
+    pub phone: String,
 }
 
 /// 记录 → 余额查询快照（读侧只做容错取值，不校验合法性 —— 写入侧已归一）
@@ -848,12 +941,14 @@ fn balance_query_of_record(record: &StoredAccount) -> CustomBalanceQuery {
             .get("sensenovaJwtExpiresAt")
             .and_then(Value::as_i64)
             .unwrap_or(0),
+        sensenova_refresh_token: text_of("sensenovaRefreshToken"),
+        phone: text_of("phone"),
     }
 }
 
 /// 方案可配置的字段（顺序即报错文案与界面顺序）。
 ///
-/// 五个字段横跨三种方案（NewAPI 用前两个、商汤用中间两个、智谱用最后一个），
+/// 五个字段横跨三种方案（NewAPI 用前两个、商汤旧账密用中间两个、智谱用最后一个），
 /// 合成一张表而不是按方案分开：写入侧不认识方案（它只认字段），按方案建表会
 /// 让「同一字段属于谁」在两处各写一遍。
 pub const BALANCE_QUERY_FIELDS: &[&str] = &["userId", "accessToken", "username", "password", "token"];

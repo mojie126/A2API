@@ -178,6 +178,9 @@ pub mod routing_groups;
 pub mod routing_trace;
 pub mod routing_workspace;
 pub mod sanitize;
+// 商汤日日新手机号验证码登录（余额查询凭证）：自定义提供商账号的专用入口，
+// 见该文件模块头。
+pub mod sensenova;
 pub mod scheduled_tasks;
 pub mod session;
 // 侧边栏布局（GET/PUT /api/sidebar-layout）：桌面壳与网页端两个 origin

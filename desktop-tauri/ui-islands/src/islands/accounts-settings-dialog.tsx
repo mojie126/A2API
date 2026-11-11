@@ -29,6 +29,7 @@ import { allAccounts, findAccount, syncBalancesSnapshot } from './accounts-data'
 import { refreshSavedAccounts, updateAccountConfirmed } from './accounts-update'
 import { draftOfProxy, ProxyForm, readProxyDraft, type ProxyDraft, type ProxyPayload } from './accounts-proxy-form'
 import { UserAgentInput, useUserAgentPresets, userAgentEditable } from './add-account-user-agent'
+import { SensenovaSmsLogin } from './sensenova-sms-login'
 import {
   AccountSettingsIcon, BalanceTokenField, CustomCredentialFields, ProviderSection, SettingGroup,
   type ProviderSettings,
@@ -672,10 +673,28 @@ export function AccountSettingsDialog({ id, onClose, initialAccount, initialPane
                       <UsageSettingsSection draft={usageDraft} onChange={setUsageDraft} />
                     </SettingGroup>
                     {balanceSpec ? <SettingGroup title={t('查询凭证')} action={<Badge variant='secondary' shape='tag'>{balanceSpec.label}</Badge>}>
-                      <BalanceQuerySection spec={balanceSpec} values={balanceQueryDraft} configured={balanceConfigured}
-                        onValue={(key, next) => setBalanceQueryDraft(prev => ({ ...prev, [key]: next }))}
-                        onClear={key => void clearBalanceQueryField(key)} clearBusy={interactionBusy} idPrefix='account-balance-query' />
-                      {balanceNeedsCredentials ? <p className='detail acct-dlg-inline-note'>{t('查询凭证还没配齐：填好后余额列才有读数，在此之前会显示「未配置」。')}</p> : null}
+                      {target.balanceQuery?.scheme === 'sensenova' ? (
+                        <SensenovaSmsLogin
+                          disabled={interactionBusy}
+                          context={{
+                            accountId: target.id,
+                            phoneMasked: target.balanceQuery?.phone,
+                            onSuccess: async () => {
+                              setStatus(t('商汤日日新登录成功，正在刷新账号数据…'))
+                              await shared().wbApp?.refresh?.()
+                              await refreshSavedAccounts()
+                              setAccount(findAccount(target.id) || target)
+                              setBalanceQueryDraft(balanceQueryDraftOf(findAccount(target.id)?.balanceQuery))
+                              setStatus(t('商汤日日新余额查询凭证已更新'))
+                            },
+                          }}
+                        />
+                      ) : (
+                        <BalanceQuerySection spec={balanceSpec} values={balanceQueryDraft} configured={balanceConfigured}
+                          onValue={(key, next) => setBalanceQueryDraft(prev => ({ ...prev, [key]: next }))}
+                          onClear={key => void clearBalanceQueryField(key)} clearBusy={interactionBusy} idPrefix='account-balance-query' />
+                      )}
+                      {balanceNeedsCredentials ? <p className='detail acct-dlg-inline-note'>{t('查询凭证还没配齐：登录后余额列才有读数，在此之前会显示「未配置」。')}</p> : null}
                     </SettingGroup> : null}
                     <p className='detail acct-dlg-group-note'><AccountSettingsIcon name='info' size={14} />{t('余额读数也是限制器余额规则的数据来源。')}</p>
                   </> : null}
