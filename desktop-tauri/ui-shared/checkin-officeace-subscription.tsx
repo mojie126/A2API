@@ -53,6 +53,7 @@ export function OfficeaceSubscription({ accountId, api, t, active = true, disabl
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [consent, setConsent] = useState(false)
+  const [simulation, setSimulation] = useState<Record<string, unknown> | null>(null)
   const lock = useRef(false)
   const pollCount = useRef(0)
   const generation = useRef(0)
@@ -63,6 +64,7 @@ export function OfficeaceSubscription({ accountId, api, t, active = true, disabl
     setMessage('')
     setBusy('')
     setConsent(false)
+    setSimulation(null)
     pollCount.current = 0
     lock.current = false
     const current = ++generation.current
@@ -143,6 +145,24 @@ export function OfficeaceSubscription({ accountId, api, t, active = true, disabl
     }
   }
 
+  const simulateClient = async () => {
+    if (!api.simulateClient || lock.current || disabled) return
+    lock.current = true
+    setBusy('query')
+    setError('')
+    setMessage('')
+    try {
+      const result = await api.simulateClient(accountId)
+      setSimulation(result && typeof result === 'object' ? result : {})
+      setMessage(t('已用官方控制面复现客户端状态；本次只读，没有下单或修改续费'))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      lock.current = false
+      setBusy('')
+    }
+  }
+
   const status = data?.status
   const variant = status === 'active' ? 'success' : status === 'inactive' ? 'brand'
     : status === 'pending' ? 'warning' : 'outline'
@@ -151,6 +171,10 @@ export function OfficeaceSubscription({ accountId, api, t, active = true, disabl
       <span className='text-sm font-medium text-foreground'>{t('免费体验套餐')}</span>
       <Badge variant={variant} shape='tag'>{statusLabel(status, t)}</Badge>
       <div className='ml-auto flex flex-wrap gap-2'>
+        {api.simulateClient ? <Button size='sm' variant='outline' disabled={Boolean(busy) || disabled}
+          onClick={() => void simulateClient()}>
+          {busy === 'query' ? <Spinner /> : null}{t('只读模拟客户端')}
+        </Button> : null}
         <Button size='sm' variant='outline' disabled={Boolean(busy) || disabled} onClick={() => void query()}>
           {busy === 'query' ? <Spinner /> : null}{busy === 'query' ? t('查询中…') : t('查询套餐')}
         </Button>
@@ -175,6 +199,15 @@ export function OfficeaceSubscription({ accountId, api, t, active = true, disabl
     </div> : null}
     {data?.autoRenew === false ? <Badge variant='success' shape='tag'>{t('已确认不自动续费')}</Badge> : null}
     {data?.autoRenew === true ? <p role='alert' className='text-sm text-destructive'>{t('官方显示自动续费已开启，请到官方客户端检查')}</p> : null}
+    {simulation ? <div className='rounded-md border border-border p-3 text-xs'>
+      <div className='font-medium'>{t('客户端状态模拟（只读）')}</div>
+      <pre className='mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground'>
+        {JSON.stringify(simulation, null, 2)}
+      </pre>
+      <p className='mt-2 text-[11px] text-muted-foreground'>
+        {t('没有安装果办客户端时，这只能复现云端订阅与控制面状态；客户端本地数据库、TLS 指纹和 CloudWAF 挑战不可模拟')}
+      </p>
+    </div> : null}
     {error ? <p role='alert' className='text-sm text-destructive break-words'>{error}</p> : null}
     {message && message !== data?.message ? <p role='status' className='text-sm text-foreground break-words'>{t(message)}</p> : null}
   </div>

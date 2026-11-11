@@ -117,7 +117,7 @@ async fn query_usage_for(store: &AccountStore, account: &Value) -> Value {
     // `hasCredentials` 是 store 逐条给出的统一判据（缺省视为有）。
     //
     // 自定义家（含「预置 API」卡片建的那些）另有**一份查询凭证**（NewAPI 的
-    // 访问令牌 / 商汤的控制台账号密码 / 智谱的控制台令牌，见
+    // 访问令牌 / 商汤的手机号验证码 / 智谱的控制台令牌，见
     // `providers::custom::balance`）：只靠它也能查余额，所以「有余额方案」
     // 就放行 —— 不然一个没填转发 Key 的账号只会得到笼统的「没有可用凭证」，
     // 而真正该说的是「哪一份凭证缺了」（各方案自己给 400「未配置」）。

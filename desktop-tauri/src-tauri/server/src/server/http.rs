@@ -563,6 +563,20 @@ pub fn panel_router(state: ServerState) -> Router {
             "/api/session/login/tabbit/sms/verify",
             post(api::session::login_tabbit_sms_verify),
         )
+        // 商汤日日新手机号验证码登录（自定义提供商账号的余额查询凭证）：
+        // 上游已关闭控制台账号密码登录，发码与校验两段都写账号记录。
+        .route(
+            "/api/sensenova/sms/send",
+            post(api::sensenova::send_sms),
+        )
+        .route(
+            "/api/sensenova/sms/captcha",
+            post(api::sensenova::verify_captcha),
+        )
+        .route(
+            "/api/sensenova/sms/verify",
+            post(api::sensenova::verify_sms),
+        )
         // AutoClaw OAuth 网页登录（**国际版**的官方主方式）。两段都挂 protected
         // —— 它们要带验证码参数去打上游、并往任务表里登记一次登录，与 sms/*
         // 同级敏感。第三段（loopback 回调）**不再经过网关**：插件自己借 z.ai

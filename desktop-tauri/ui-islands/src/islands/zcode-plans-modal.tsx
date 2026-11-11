@@ -341,7 +341,7 @@ function PlansModal({ options, onClose }: { options: OpenOptions; onClose: () =>
             ) : activityPlans.length === 0 ? (
               <p className='py-1 text-[12.5px] text-muted-foreground'>
                 {queryErrors.length
-                  ? t('部分来源查询失败，暂不能确认本期活动或领取状态')
+              ? t('部分来源查询失败：{message}', { message: queryErrors.join('；') })
                   : t('当前未发现本期活动，不代表账号不符合资格')}
               </p>
             ) : (

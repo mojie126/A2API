@@ -11,11 +11,21 @@
   let active = null;
   let value = null;
   let pausedUntil = 0;
+  let lastBeatAt = 0;
+  let heartbeatDelay = 0;
   const t = (key, params) => window.wbI18n?.t?.(key, params) || key;
 
   function publish(next) {
     value = next;
     window.dispatchEvent(new CustomEvent('zcode-claim-verification', { detail: next }));
+  }
+
+  function presence(state) {
+    window.dispatchEvent(new CustomEvent('zcode-claim-presence', {
+      detail: { state, clientId, at: Date.now(), hint: state === 'stopped'
+        ? '验证界面已关闭；ZCode 自动领取需要重新打开管理页面'
+        : '保持此页面打开；可切到后台，但浏览器不能完全退出' },
+    }));
   }
 
   function schedule(delay) {
@@ -45,6 +55,16 @@
     } catch { /* Worker 不可用（如 CSP 禁止 blob）时只靠主线程定时 */ }
   }
 
+  /**
+   * 页面存活的额外心跳：Worker 被浏览器冻结时，主线程恢复后立即补拍。
+   * 服务端只据此显示「验证界面在线/离线」，不把心跳当成验证成功。
+   */
+  function heartbeat() {
+    if (stopped) return;
+    lastBeatAt = Date.now();
+    heartbeatDelay = POLL_MS;
+  }
+
   function hasAccounts() {
     const accounts = window.wbApp?.getState?.()?.accounts?.accounts;
     return Array.isArray(accounts) && accounts.some(account => account.provider === 'zcode' || account.provider === 'zcode-intl');
@@ -60,6 +80,7 @@
 
   async function poll() {
     if (polling || stopped) return;
+    heartbeat();
     const bridge = window.workbuddyDesktop;
     if (!bridge?.zcodeClaimVerification || !active && !hasAccounts()) {
       due(IDLE_MS);
@@ -156,6 +177,7 @@
 
   function start() {
     stopped = false;
+    presence('active');
     due(1000);
     schedule(1000);
     startTicker();
@@ -163,15 +185,27 @@
 
   function stop() {
     stopped = true;
+    presence('stopped');
     window.clearTimeout(timer);
     cancel();
     if (worker) { worker.terminate(); worker = null; }
   }
 
   window.wbZcodeClaimVerification = { cancel, status: () => value };
+  window.wbZcodeClaimVerificationHeartbeat = {
+    state: () => stopped ? 'stopped' : (document.visibilityState === 'visible' ? 'visible' : 'background'),
+    lastBeatAt: () => lastBeatAt,
+    delay: () => heartbeatDelay,
+  };
   window.addEventListener('pagehide', stop);
   window.addEventListener('pageshow', start);
-  window.addEventListener('visibilitychange', () => { if (!stopped) { due(0); schedule(0); } });
+  window.addEventListener('visibilitychange', () => {
+    if (!stopped) {
+      presence(document.visibilityState === 'visible' ? 'active' : 'background');
+      due(0);
+      schedule(0);
+    }
+  });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
 })();

@@ -20,4 +20,5 @@ export type OfficeaceSubscriptionResult = {
 export type OfficeaceSubscriptionApi = {
   query: (id: string) => Promise<OfficeaceSubscriptionState>
   activate: (id: string, confirmAgreements: boolean) => Promise<OfficeaceSubscriptionResult>
+  simulateClient?: (id: string) => Promise<Record<string, unknown>>
 }

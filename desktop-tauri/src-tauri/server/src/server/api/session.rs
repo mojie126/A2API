@@ -403,7 +403,7 @@ fn checked_login_inputs(
     Ok(inputs)
 }
 
-fn checked_login_proxy(
+pub(super) fn checked_login_proxy(
     value: Option<&Value>,
 ) -> Result<Option<crate::server::core::login::LoginProxySelection>, crate::server::errors::GatewayError> {
     use crate::server::core::login::LoginProxySelection;

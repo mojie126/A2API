@@ -9,11 +9,7 @@ use crate::server::http::{ok_json, parse_body};
 use crate::server::ServerState;
 
 async fn run(state: &ServerState, account: &str, activate: bool) -> Result<Value, GatewayError> {
-    match state.store().account_provider_of(account).as_deref() {
-        Some("officeace") => {}
-        Some(_) => return Err(GatewayError::with_status(400, "该账号不是果办账号")),
-        None => return Err(GatewayError::with_status(404, "找不到该账号")),
-    }
+    require_officeace(state, account)?;
     let adapter = adapter_by_id("officeace")
         .ok_or_else(|| GatewayError::with_status(503, "果办提供商插件未加载"))?;
     let action = if activate { "subscription.ensure" } else { "subscription.preview" };
@@ -54,6 +50,32 @@ async fn run(state: &ServerState, account: &str, activate: bool) -> Result<Value
         result["autoRenew"] = json!(auto_renew);
     }
     Ok(result)
+}
+
+/// 只读模拟官方客户端看到的订阅与续费状态，不提交订单或修改账户。
+pub async fn simulate_client(state: &ServerState, account: &str) -> Response {
+    if let Err(error) = require_officeace(state, account) {
+        return management_error(error.status_code, error.message);
+    }
+    let Some(adapter) = adapter_by_id("officeace") else {
+        return management_error(503, "果办提供商插件未加载");
+    };
+    match tokio::time::timeout(
+        Duration::from_secs(45),
+        adapter.admin_action(state.store(), account, "subscription.simulate-client", &Value::Null),
+    ).await {
+        Ok(Ok(value)) => ok_json(value),
+        Ok(Err(error)) => management_error(error.status_code, error.message),
+        Err(_) => management_error(504, "模拟客户端状态超时，请稍后重试"),
+    }
+}
+
+fn require_officeace(state: &ServerState, account: &str) -> Result<(), GatewayError> {
+    match state.store().account_provider_of(account).as_deref() {
+        Some("officeace") => Ok(()),
+        Some(_) => Err(GatewayError::with_status(400, "该账号不是果办账号")),
+        None => Err(GatewayError::with_status(404, "找不到该账号")),
+    }
 }
 
 pub async fn preview(state: &ServerState, account: &str) -> Response {

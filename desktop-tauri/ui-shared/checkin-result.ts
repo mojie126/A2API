@@ -4,7 +4,7 @@ export type AccountCheckinStatus = 'done' | 'pending' | 'confirming' | 'inactive
 
 /** 新插件的当日状态优先；旧插件仍按 checkedInToday 展示。 */
 export function accountCheckinStatus(account: CheckinAccount): AccountCheckinStatus {
-  if (account.checkedInToday) return 'done'
+  if (account.checkedInToday && account.dailyCheckin?.completed !== false) return 'done'
   switch (account.dailyCheckin?.status) {
     case 'confirming': return 'confirming'
     case 'inactive': return 'inactive'
@@ -69,7 +69,7 @@ export function rowPending(row: CheckinResultRow): boolean {
   if (row.error?.trim() || row.claim?.error?.trim() || rowCompleted(row)) return false
   const claim = row.claim
   if (claim?.outcome !== undefined) return claim.outcome === 'inactive' || claim.outcome === 'ineligible'
-  return /没有可领取的签到活动|未下发每日积分活动|暂未给该账号下发每日积分活动|暂无可领取活动|等待重试/.test(claim?.msg ?? '')
+  return /没有可领取的签到活动|未下发每日积分活动|暂未给该账号下发每日积分活动|暂无可领取活动|当前没有可领取的赠送套餐|等待重试/.test(claim?.msg ?? '')
 }
 
 export function rowMessage(row: CheckinResultRow): string {

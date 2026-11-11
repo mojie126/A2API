@@ -17,6 +17,9 @@
 //!   GET    /api/accounts/usage/snapshot 最近一次**定时查询**的结果快照（形状同 usage）
 //!   GET    /api/accounts/connections     逐账号活跃连接数（账号页「连接数」列，2 秒轮询）
 //!   POST   /api/accounts/checkin        签到（串行，跳过国际版与范围外的提供商）{ id? }
+//!   GET    /api/accounts/{id}/officeace-subscription                果办套餐状态（只读）
+//!   GET    /api/accounts/{id}/officeace-subscription/simulate-client 只读模拟官方客户端状态
+//!   POST   /api/accounts/{id}/officeace-subscription/activate       果办零元套餐开通
 //!   PATCH  /api/accounts/{id}           修改账号属性 { name?, priority?, enabled?, proxy? }
 //!   POST   /api/accounts/{id}/move      与相邻账号交换优先级 { direction: 'up' | 'down' }
 //!   DELETE /api/accounts/{id}           删除账号
@@ -542,6 +545,12 @@ pub async fn dispatch(
     // `?refresh=1` 强制实查上游（手点「查询任务」）；不带则吃结算记忆（一次性
     // 福利领完就不再问上游，见 `api::onboarding` 的模块说明）。
     if method == Method::GET {
+        if let Some(id) = rest.strip_suffix("/officeace-subscription/simulate-client") {
+            let id = decode_segment(id);
+            if !id.is_empty() {
+                return super::officeace_subscription::simulate_client(&state, &id).await;
+            }
+        }
         if let Some(id) = rest.strip_suffix("/officeace-subscription") {
             let id = decode_segment(id);
             if !id.is_empty() {

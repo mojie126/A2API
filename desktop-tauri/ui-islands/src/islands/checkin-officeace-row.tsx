@@ -8,6 +8,7 @@ type SubscriptionWindow = {
   workbuddyDesktop?: {
     getOfficeaceSubscription?: (id: string) => Promise<OfficeaceSubscriptionState>
     activateOfficeaceSubscription?: (id: string, confirmAgreements: boolean) => Promise<OfficeaceSubscriptionResult>
+    simulateOfficeaceClient?: (id: string) => Promise<Record<string, unknown>>
   }
   wbApp?: { refresh?: () => unknown }
 }
@@ -22,6 +23,11 @@ const api: OfficeaceSubscriptionApi = {
     const bridge = (window as unknown as SubscriptionWindow).workbuddyDesktop
     if (!bridge?.activateOfficeaceSubscription) return Promise.reject(new Error(t('果办套餐接口不可用，请更新主程序和提供商插件')))
     return bridge.activateOfficeaceSubscription(id, confirmAgreements)
+  },
+  simulateClient(id) {
+    const bridge = (window as unknown as SubscriptionWindow).workbuddyDesktop
+    if (!bridge?.simulateOfficeaceClient) return Promise.reject(new Error(t('果办模拟客户端不可用，请更新主程序和提供商插件')))
+    return bridge.simulateOfficeaceClient(id)
   },
 }
 
