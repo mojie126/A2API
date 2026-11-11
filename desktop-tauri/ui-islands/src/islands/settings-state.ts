@@ -133,6 +133,32 @@ export type AppState = {
 /** 数值面板：values 为 null 时（loading / unavailable）各输入框保持禁用 */
 export type NumericState = { status: LoadStatus; values: Record<string, number> | null }
 
+/** 调试采集档位与运行读数；数值缺失保持 null，不用 0 伪造成功读数 */
+export type DebugStats = {
+  tier: string
+  label: string
+  captureBytes: number | null
+  storeBodyBytes: number | null
+  totalBytes: number | null
+  queued: number | null
+  queuedBytes: number | null
+  enqueued: number | null
+  written: number | null
+  batches: number | null
+  dropped: number | null
+  truncated: number | null
+  writeMicros: number | null
+}
+
+export type DebugState = {
+  status: LoadStatus
+  on: boolean
+  count: number | null
+  limit: number | null
+  budget: string
+  stats: DebugStats | null
+}
+
 /**
  * 账号路由（策略 + 会话粘性）：两档都是受控枚举，读不到时档位回落后端默认
  * （order / auto，由视图侧按合法值表兜底）。
@@ -147,14 +173,6 @@ export type RoutingState = {
   sink: boolean
   /** 熔断开关：连续失败到阈值后打开（后端默认关） */
   breakerEnabled: boolean
-}
-
-export type DebugState = {
-  status: LoadStatus
-  on: boolean
-  /** 已保存条数 / 上限；后端没给可用的数时为 null（文案里那一句整个不出现） */
-  count: number | null
-  limit: number | null
 }
 
 /** 开发者角色兼容开关 */
@@ -443,7 +461,7 @@ const INITIAL: SettingsSnapshot = {
   imageCompress: { status: 'loading', enabled: true, values: null },
   captchaPool: { status: 'loading', values: null },
   routing: { status: 'loading', strategy: 'order', sticky: 'auto', failoverBackoff: true, sink: true, breakerEnabled: false },
-  debug: { status: 'loading', on: false, count: null, limit: null },
+  debug: { status: 'loading', on: false, count: null, limit: null, budget: 'compact', stats: null },
   sanitize: INITIAL_SANITIZE,
   developerRoleCompat: { status: 'loading', on: false },
   reasoningCollapse: { status: 'loading', on: false },
@@ -1756,12 +1774,35 @@ export function renderDebug(data?: unknown): void {
   }
   const count = Number(record.count)
   const limit = Number(record.limit)
+  const budget = typeof record.debugBudget === 'string' ? record.debugBudget : 'compact'
+  const statsRecord = record.stats && typeof record.stats === 'object' && !Array.isArray(record.stats)
+    ? record.stats as Record<string, unknown> : null
+  const numberOrNull = (key: string) => {
+    const value = Number(statsRecord?.[key])
+    return Number.isFinite(value) ? value : null
+  }
   publish({
     debug: {
       status: 'ready',
       on: record.debugMode,
       count: Number.isInteger(count) ? count : null,
       limit: Number.isInteger(limit) ? limit : null,
+      budget,
+      stats: statsRecord ? {
+        tier: String(statsRecord.tier || budget),
+        label: String(statsRecord.label || budget),
+        captureBytes: numberOrNull('captureBytes'),
+        storeBodyBytes: numberOrNull('storeBodyBytes'),
+        totalBytes: numberOrNull('totalBytes'),
+        queued: numberOrNull('queued'),
+        queuedBytes: numberOrNull('queuedBytes'),
+        enqueued: numberOrNull('enqueued'),
+        written: numberOrNull('written'),
+        batches: numberOrNull('batches'),
+        dropped: numberOrNull('dropped'),
+        truncated: numberOrNull('truncated'),
+        writeMicros: numberOrNull('writeMicros'),
+      } : null,
     },
   })
 }
@@ -1798,6 +1839,27 @@ export async function saveDebug(next: boolean): Promise<void> {
       throw new Error(t('未能读取调试模式设置，请稍后重试'))
     }
     toast(next ? t('✅ 调试模式已开启') : t('✅ 调试模式已关闭'))
+  } catch (error) {
+    toast(t('保存失败：{message}', { message: errorMessage(error) }), 'err')
+    publish({ debug: previous })
+    await readDebug()
+  } finally {
+    endBusy()
+  }
+}
+
+/** 保存调试采集档位；与开关分开，避免翻档时误开启调试 */
+export async function saveDebugBudget(budget: string): Promise<void> {
+  if (busyScope || snapshot.debug.status !== 'ready') return
+  const previous = snapshot.debug
+  debugRevision += 1
+  beginBusy('debug')
+  publish({ debug: { ...previous, budget } })
+  try {
+    const bridge = shared().workbuddyDesktop
+    if (!bridge?.saveDebugBudget) throw new Error(t('主进程桥不可用'))
+    renderDebug(await bridge.saveDebugBudget(budget) ?? null)
+    toast(t('✅ 调试采集档位已更新'))
   } catch (error) {
     toast(t('保存失败：{message}', { message: errorMessage(error) }), 'err')
     publish({ debug: previous })

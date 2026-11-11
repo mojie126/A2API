@@ -95,6 +95,13 @@ pub const KEY_GITHUB_TOKEN: &str = "githubToken";
 /// 迅速膨胀；关闭时采集路径完全不执行（零开销，见各采集点的 `if enabled`）。
 pub const KEY_DEBUG_MODE: &str = "debugMode";
 
+/// 调试模式采集档位（config.json 键）。
+///
+/// 官方实现不设单条上限，本机的低内存部署不能直接沿用；三档把
+/// 单条采集、单条落库、总正文与队列预算收成一组可预期的上限，
+/// 由 `core::debug_traffic` 逐请求读取
+pub const KEY_DEBUG_BUDGET: &str = "debugBudget";
+
 /// 出站请求体黑名单指纹脱敏开关（config.json 键，对应 workbuddy2api 的
 /// `features.sanitize_blacklist_fingerprints`）。
 ///

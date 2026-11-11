@@ -350,7 +350,7 @@ pub async fn clear_stats_requests(
 /// GET /api/stats/requests/raw?id=... —— 单条请求的原始正文。
 ///
 /// 详情弹窗（预览对话）的数据源：`{id, requestBody, responseBody, truncated}`，
-/// 两个文本字段完整返回，`truncated` 仅提示旧版本保存的正文可能不完整。
+/// 两个文本字段按当前调试预算返回，`truncated` 同时覆盖旧版本与本次截断。
 /// 不存在给 404 —— 正文只在**调试模式开启期间**的
 /// 请求上采集（关着时不写行，见 `api::pipeline::capture_raw_body`），
 /// 此外也可能已被清理过；两种情况都是正常状态，不是错误。

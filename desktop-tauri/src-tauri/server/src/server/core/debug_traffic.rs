@@ -26,8 +26,8 @@
 //! 不脱敏等于把各家账号的 token 抄在磁盘上。响应头里的 `set-cookie` 同理。
 //!
 //! ── 留存控制 ──────────────────────────────────────────────
-//! 请求体与响应体在单条上限内完整保存，超过 [`MAX_BODY_BYTES`] 的正文只保留
-//! 状态与头部，按 [`MAX_ENTRIES`] 与 [`MAX_TOTAL_BYTES`] 双重上限淘汰最旧记录
+//! 请求体与响应体按当前预算头尾保留并标注截断，超过预算时淘汰最旧记录；
+//! 采集和落库都有有界队列，调试数据不阻塞真实转发
 //!
 //! ── `Db` 是进程级状态（本模块的两处特殊之处之一）────────────
 //! 与 `AccountStore` / `LogStore` / `RequestStats` 不同，本模块没有「注入式句柄」
@@ -54,7 +54,9 @@
 //! 里用的就是它，这条纪律现在更要紧：库是共享的，而死锁会带走整个进程）。
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{mpsc, OnceLock};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -63,6 +65,106 @@ use crate::server::db::Db;
 use crate::server::logging;
 
 mod sql;
+
+/// 调试采集内存预算档位。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BudgetTier {
+    #[default]
+    Compact,
+    Standard,
+    Full,
+}
+
+impl BudgetTier {
+    pub fn from_id(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "full" | "complete" => Self::Full,
+            "standard" => Self::Standard,
+            _ => Self::Compact,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Standard => "standard",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "精简",
+            Self::Standard => "标准",
+            Self::Full => "完整",
+        }
+    }
+
+    pub fn settings(self) -> DebugBudget {
+        match self {
+            // Docker / NAS 常开排障：每个响应最多两份 1 MiB 缓冲，
+            // 调试写入总量和队列都收紧到机器可接受的量级
+            Self::Compact => DebugBudget {
+                capture_bytes: 1024 * 1024,
+                store_body_bytes: 2 * 1024 * 1024,
+                total_bytes: 32 * 1024 * 1024,
+                queue_entries: 32,
+                batch_size: 8,
+                total_entries: 100,
+            },
+            Self::Standard => DebugBudget {
+                capture_bytes: 2 * 1024 * 1024,
+                store_body_bytes: 8 * 1024 * 1024,
+                total_bytes: 64 * 1024 * 1024,
+                queue_entries: 64,
+                batch_size: 16,
+                total_entries: 100,
+            },
+            Self::Full => DebugBudget {
+                capture_bytes: 4 * 1024 * 1024,
+                store_body_bytes: 16 * 1024 * 1024,
+                total_bytes: 128 * 1024 * 1024,
+                queue_entries: 128,
+                batch_size: 24,
+                total_entries: 100,
+            },
+        }
+    }
+}
+
+/// 一次调试采集使用的完整预算快照。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DebugBudget {
+    pub capture_bytes: usize,
+    pub store_body_bytes: usize,
+    pub total_bytes: i64,
+    pub queue_entries: usize,
+    pub batch_size: usize,
+    pub total_entries: usize,
+}
+
+impl DebugBudget {
+    /// 三档的稳定标识与界面文案；预算本身只读数值，档位名供设置页回显。
+    pub fn tier_id(self) -> &'static str {
+        if self.capture_bytes <= 1024 * 1024 { BudgetTier::Compact.id() }
+        else if self.capture_bytes <= 2 * 1024 * 1024 { BudgetTier::Standard.id() }
+        else { BudgetTier::Full.id() }
+    }
+
+    pub fn label(self) -> &'static str {
+        BudgetTier::from_id(self.tier_id()).label()
+    }
+}
+
+/// 从 `debugBudget` 原始值解析档位，缺省或写坏都回落精简档。
+pub fn budget_tier_from_raw(value: Option<&Value>) -> BudgetTier {
+    value.and_then(Value::as_str).map(BudgetTier::from_id).unwrap_or(BudgetTier::Compact)
+}
+
+/// 当前预算；调试采集热路径读取一次内存快照。
+pub fn budget() -> DebugBudget {
+    crate::server::config::current().debug_budget()
+}
 
 /// 调试报文最多保留 100 条，请求日志条数低于 100 时跟随请求日志上限。
 ///
@@ -91,10 +193,10 @@ pub fn max_entries() -> usize {
 /// 群晖等低内存设备上，历史 500 条平均 1.8 MiB 的报文会占近 1 GiB，
 /// 查询与淘汰时会同时放大 SQLite 页缓存与进程内存，因此条数上限之外
 /// 还必须限制合计正文字节
+/// 所有档位允许的正文合计硬上限：完整档也不超过 128 MiB。
 pub const MAX_TOTAL_BYTES: i64 = 128 * 1024 * 1024;
 
-/// 单条请求体或响应体超过该值时不再写调试报文，避免几十 MB 级请求
-/// 被完整复制到 SQLite 并长期占用内存
+/// 兼容旧采集点的通用最大值，实际采集阈值以下面的预算快照为准。
 pub const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// 凭据类请求头：命中即替换成 `[redacted]`（大小写不敏感）。
@@ -134,9 +236,74 @@ pub const REDACTED: &str = "[redacted]";
 /// 各函数只需判一次。
 static DB: OnceLock<Option<Db>> = OnceLock::new();
 
+/// 调试写入队列；容量取三档中最大值，实际可按当前预算提前拒绝。
+static QUEUE: OnceLock<mpsc::SyncSender<TrafficEntry>> = OnceLock::new();
+
+static QUEUED: AtomicUsize = AtomicUsize::new(0);
+static QUEUED_BYTES: AtomicU64 = AtomicU64::new(0);
+static ENQUEUED: AtomicU64 = AtomicU64::new(0);
+static DROPPED: AtomicU64 = AtomicU64::new(0);
+static TRUNCATED: AtomicU64 = AtomicU64::new(0);
+static WRITTEN: AtomicU64 = AtomicU64::new(0);
+static BATCHES: AtomicU64 = AtomicU64::new(0);
+static WRITE_MICROS: AtomicU64 = AtomicU64::new(0);
+static LAST_WRITE_AT: AtomicU64 = AtomicU64::new(0);
+static LAST_ERROR_AT: AtomicU64 = AtomicU64::new(0);
+
 /// 进程级库句柄（未初始化或库不可用时为 `None`）
 fn db() -> Option<&'static Db> {
     DB.get().and_then(|slot| slot.as_ref())
+}
+
+fn start_writer() {
+    let _ = QUEUE.set({
+        // 队列容量固定为各档最大值，档位只限制本轮允许的排队数。
+        let (sender, receiver) = mpsc::sync_channel::<TrafficEntry>(128);
+        std::thread::Builder::new()
+            .name("a2api-debug-writer".to_string())
+            .spawn(move || writer_loop(receiver))
+            .ok();
+        sender
+    });
+}
+
+fn writer_loop(receiver: mpsc::Receiver<TrafficEntry>) {
+    loop {
+        let first = match receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(entry) => entry,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        let budget = budget();
+        let mut batch = Vec::with_capacity(budget.batch_size);
+        batch.push(first);
+        while batch.len() < budget.batch_size {
+            match receiver.try_recv() {
+                Ok(entry) => batch.push(entry),
+                Err(_) => break,
+            }
+        }
+        let count = batch.len();
+        let bytes: u64 = batch.iter().map(entry_bytes).sum();
+        let started = std::time::Instant::now();
+        let success = record_batch(&batch, budget);
+        if success {
+            WRITTEN.fetch_add(count as u64, Ordering::Relaxed);
+            BATCHES.fetch_add(1, Ordering::Relaxed);
+            WRITE_MICROS.fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+            LAST_WRITE_AT.store(logging::now_ms() as u64, Ordering::Relaxed);
+        } else {
+            DROPPED.fetch_add(count as u64, Ordering::Relaxed);
+            LAST_ERROR_AT.store(logging::now_ms() as u64, Ordering::Relaxed);
+            eprintln!("[Debug] 调试报文批量写入失败，已丢弃 {count} 条");
+        }
+        QUEUED.fetch_sub(count, Ordering::Relaxed);
+        QUEUED_BYTES.fetch_sub(bytes, Ordering::Relaxed);
+    }
+}
+
+fn entry_bytes(entry: &TrafficEntry) -> u64 {
+    sql::payload_bytes(entry).max(0) as u64
 }
 
 /// 初始化存储（启动时调用一次；`OnceLock` 天然幂等 —— 重复调用只有第一次生效）。
@@ -157,6 +324,7 @@ pub fn init(installed_db: Option<Db>) {
     // 那时是覆盖目录 + 重新载入，现在库自己就是真相，覆盖没有意义。
     let installed = installed_db.is_some();
     let _ = DB.set(installed_db);
+    start_writer();
     // 旧库可能已经累积了大量报文，启动时立即按条数与总字节上限收敛，
     // 避免后续每次查询都背着历史峰值工作
     if installed {
@@ -207,6 +375,38 @@ pub fn count() -> usize {
     }
 }
 
+/// 调试采集运行统计：用于设置页与回归验证，不依赖实际打开调试模式。
+pub fn stats() -> Value {
+    let current = budget();
+    let (stored, stored_bytes) = match db() {
+        Some(db) => db.with(sql::count_and_bytes).and_then(Result::ok).unwrap_or((0, 0)),
+        None => (0, 0),
+    };
+    let tier = crate::server::config::current().debug_budget();
+    json!({
+        "tier": tier.tier_id(),
+        "label": tier.label(),
+        "captureBytes": current.capture_bytes,
+        "storeBodyBytes": current.store_body_bytes,
+        "totalBytes": current.total_bytes,
+        "queueEntries": current.queue_entries,
+        "batchSize": current.batch_size,
+        "totalEntries": current.total_entries,
+        "stored": stored,
+        "storedBytes": stored_bytes,
+        "queued": QUEUED.load(Ordering::Relaxed),
+        "queuedBytes": QUEUED_BYTES.load(Ordering::Relaxed),
+        "enqueued": ENQUEUED.load(Ordering::Relaxed),
+        "written": WRITTEN.load(Ordering::Relaxed),
+        "batches": BATCHES.load(Ordering::Relaxed),
+        "dropped": DROPPED.load(Ordering::Relaxed),
+        "truncated": TRUNCATED.load(Ordering::Relaxed),
+        "writeMicros": WRITE_MICROS.load(Ordering::Relaxed),
+        "lastWriteAt": LAST_WRITE_AT.load(Ordering::Relaxed),
+        "lastErrorAt": LAST_ERROR_AT.load(Ordering::Relaxed),
+    })
+}
+
 /// 按当前条数与正文合计上限清理旧调试报文
 pub fn prune() -> usize {
     let Some(db) = db() else { return 0 };
@@ -230,50 +430,43 @@ pub fn prune() -> usize {
     }
 }
 
-/// 落一条完整报文；同 id 覆盖，失败只打日志，不影响转发。
-///
-/// 超过 [`MAX_BODY_BYTES`] 的正文直接跳过：此时完整内容已大到足以拖慢
-/// 序列化、SQLite 页缓存与备份，调试记录保留状态码与头即可
+/// 落一条调试报文；有界异步，失败只丢调试数据，不影响请求。
 pub fn record(entry: TrafficEntry) {
-    let request_size = entry.request_body.to_string().len();
-    let response_size = entry.response_body.as_deref().map(str::len).unwrap_or(0);
-    if payload_exceeds_limit(request_size, response_size) {
-        eprintln!(
-            "[Debug] 报文超过单条上限，已跳过正文保存: id={} request={} response={}",
-            entry.id, request_size, response_size,
-        );
+    let budget = budget();
+    let entry = fit_entry(entry, budget);
+    let bytes = entry_bytes(&entry);
+    let queued = QUEUED.load(Ordering::Relaxed);
+    if queued >= budget.queue_entries
+        || QUEUED_BYTES.load(Ordering::Relaxed).saturating_add(bytes)
+            > budget.total_bytes as u64
+    {
+        DROPPED.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    super::blocking::in_place(|| record_sync(entry));
-}
-
-fn payload_exceeds_limit(request_size: usize, response_size: usize) -> bool {
-    request_size > MAX_BODY_BYTES || response_size > MAX_BODY_BYTES
-}
-
-fn record_sync(entry: TrafficEntry) {
-    let Some(db) = db() else {
-        // 库不可用：静默丢弃（与改造前「STORE 未初始化」同一处理）。
-        // 这里连日志都不打 —— 每个请求都会走到这一步，刷屏反而掩盖真问题。
+    let Some(queue) = QUEUE.get() else {
+        DROPPED.fetch_add(1, Ordering::Relaxed);
         return;
     };
-    // 失败只打控制台：**不能**用 logging::log / verbose —— 它们要写同一个库，
-    // 而此刻我们正握着那把锁（见模块头的死锁约束）。
-    match db.with_mut(|conn| -> rusqlite::Result<()> {
-        let tx = conn.transaction()?;
-        sql::upsert_entry(&tx, &entry)?;
-        sql::enforce_limits(&tx)?;
-        tx.commit()?;
-        Ok(())
-    }) {
-        Some(Ok(())) => {}
-        Some(Err(error)) => {
-            eprintln!("[Debug] 调试报文写入数据库失败: {error}");
-            return;
-        }
-        // 连接中毒（`Db` 的取向：不拿半截数据当真相）
-        None => return,
+    QUEUED.fetch_add(1, Ordering::Relaxed);
+    QUEUED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    ENQUEUED.fetch_add(1, Ordering::Relaxed);
+    if queue.try_send(entry).is_err() {
+        QUEUED.fetch_sub(1, Ordering::Relaxed);
+        QUEUED_BYTES.fetch_sub(bytes, Ordering::Relaxed);
+        DROPPED.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+fn record_batch(batch: &[TrafficEntry], budget: DebugBudget) -> bool {
+    let Some(db) = db() else { return false };
+    db.with_mut(|conn| -> rusqlite::Result<()> {
+        let tx = conn.transaction()?;
+        for entry in batch {
+            sql::upsert_entry(&tx, entry)?;
+        }
+        sql::enforce_limits_with(&tx, budget)?;
+        tx.commit()
+    }).is_some_and(|result| result.is_ok())
 }
 
 /// 按 id 取一条（请求日志页的「详情」列用；库不可用时 `None`）
@@ -378,6 +571,25 @@ pub fn detail_payload(entry: &TrafficEntry) -> Value {
 /// `Arc<TrafficCapture>`，谁最后 drop 谁落库。
 pub struct TrafficCapture {
     state: std::sync::Mutex<CaptureState>,
+    /// 最终上游正文的内容指纹与长度；下游去重只比较指纹，不再复制整份正文
+    response_body_fingerprint: std::sync::Mutex<Option<BodyFingerprint>>,
+}
+
+/// 上游正文的不可逆内容摘要；只用于判断下游是否与上游逐字节一致。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BodyFingerprint {
+    len: usize,
+    digest: [u8; 32],
+}
+
+impl BodyFingerprint {
+    fn of(bytes: &[u8]) -> Self {
+        use sha2::{Digest, Sha256};
+        Self {
+            len: bytes.len(),
+            digest: Sha256::digest(bytes).into(),
+        }
+    }
 }
 
 struct CaptureState {
@@ -394,6 +606,12 @@ struct CaptureState {
     done: bool,
     /// 响应体已超过采集上限，后续分片不再累积
     body_overflow: bool,
+    /// 实际上游响应总字节数
+    body_original_bytes: usize,
+    /// 超限后保留的尾部固定窗口
+    body_tail: Vec<u8>,
+    /// 当前请求的采集预算快照；请求内不随设置变化，避免半途换档
+    budget: DebugBudget,
 }
 
 impl TrafficCapture {
@@ -407,7 +625,11 @@ impl TrafficCapture {
                 sent: false,
                 done: false,
                 body_overflow: false,
+                body_original_bytes: 0,
+                body_tail: Vec::new(),
+                budget: budget(),
             }),
+            response_body_fingerprint: std::sync::Mutex::new(None),
         }
     }
 
@@ -423,19 +645,15 @@ impl TrafficCapture {
         headers: &[(String, String)],
         body: &str,
     ) {
-        if body.len() > MAX_BODY_BYTES {
-            let mut guard = self.lock();
-            guard.entry = blank_entry(&guard.entry.id.clone(), url, provider, headers, None);
-            guard.body.clear();
-            guard.body_overflow = true;
-            guard.sent = true;
-            return;
-        }
-        let body = serde_json::from_str::<Value>(body).unwrap_or(Value::Null);
+        let budget = self.lock().budget;
+        let (body, truncated) = fit_json_text(body, budget.capture_bytes);
         let mut guard = self.lock();
         guard.entry = blank_entry(&guard.entry.id.clone(), url, provider, headers, Some(&body));
         guard.body.clear();
         guard.body_overflow = false;
+        guard.body_original_bytes = 0;
+        guard.body_tail.clear();
+        guard.entry.truncated = truncated;
         // 走到这里说明请求体已构造、即将发出 —— 这条报文有内容可落
         guard.sent = true;
         // done 不重置：本条请求只写一行，重试不产生新条目
@@ -450,6 +668,9 @@ impl TrafficCapture {
         guard.entry.status = Some(status);
         guard.body.clear();
         guard.body_overflow = false;
+        guard.body_original_bytes = 0;
+        guard.body_tail.clear();
+        guard.entry.truncated = false;
         let pairs = headers
             .iter()
             .map(|(name, value)| (name.as_str(), value.to_str().unwrap_or("[binary]")));
@@ -458,20 +679,34 @@ impl TrafficCapture {
 
     pub fn push(&self, chunk: &[u8]) {
         let mut guard = self.lock();
+        guard.body_original_bytes = guard.body_original_bytes.saturating_add(chunk.len());
+        let tail_limit = guard.budget.capture_bytes / 4;
         if guard.body_overflow {
+            update_tail(&mut guard.body_tail, chunk, tail_limit);
             return;
         }
-        if guard.body.len().saturating_add(chunk.len()) > MAX_BODY_BYTES {
-            guard.body.clear();
-            guard.body_overflow = true;
+        if guard.body.len().saturating_add(chunk.len()) <= guard.budget.capture_bytes {
+            guard.body.extend_from_slice(chunk);
             return;
         }
-        guard.body.extend_from_slice(chunk);
+        // 首次超限时保留已经拿到的头部，再从这个分片开始滚动保存尾部
+        guard.body_overflow = true;
+        guard.entry.truncated = true;
+        let head_limit = guard.budget.capture_bytes.saturating_mul(3) / 4;
+        if guard.body.len() > head_limit {
+            guard.body.truncate(head_limit);
+        }
+        update_tail(&mut guard.body_tail, chunk, tail_limit);
     }
 
     #[cfg(test)]
     pub(crate) fn captured_body(&self) -> String {
         String::from_utf8_lossy(&self.lock().body).into_owned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn budget_snapshot(&self) -> DebugBudget {
+        self.lock().budget
     }
 
     /// 落库（幂等：第二次调用什么都不做）。
@@ -487,11 +722,21 @@ impl TrafficCapture {
         if !guard.sent {
             return;
         }
-        let body = if guard.body_overflow {
-            Vec::new()
-        } else {
-            std::mem::take(&mut guard.body)
-        };
+        let mut body = std::mem::take(&mut guard.body);
+        if guard.body_overflow {
+            let marker = format!(
+                "\n[debug body truncated: original={} bytes]\n",
+                guard.body_original_bytes
+            );
+            body.extend_from_slice(marker.as_bytes());
+            body.extend_from_slice(&guard.body_tail);
+            guard.body_tail.clear();
+        }
+        if !body.is_empty() {
+            if let Ok(mut fingerprint) = self.response_body_fingerprint.lock() {
+                *fingerprint = Some(BodyFingerprint::of(&body));
+            }
+        }
         if !body.is_empty() {
             // 字符可能横跨网络分片，完整累积后再解码。
             guard.entry.response_body = Some(match String::from_utf8(body) {
@@ -502,6 +747,24 @@ impl TrafficCapture {
         let entry = std::mem::replace(&mut guard.entry, blank_entry("", "", "", &[], None));
         drop(guard);
         record(entry);
+    }
+
+    /// 判断下游正文是否与本次上游响应逐字节一致。
+    ///
+    /// 用长度和 SHA-256 摘要比较，不复制大正文；内容相同时
+    /// `request_raw` 只回退读取 `debug_traffic`，不会保存第二份。
+    pub fn response_body_matches(&self, bytes: &[u8]) -> bool {
+        let digest: [u8; 32] = BodyFingerprint::of(bytes).digest;
+        self.response_body_matches_sha256(bytes.len(), &digest)
+    }
+
+    /// 已计算摘要的下游正文比对入口；供流式缓冲避免再次扫描整份正文。
+    pub(crate) fn response_body_matches_sha256(&self, len: usize, digest: &[u8; 32]) -> bool {
+        self.response_body_fingerprint
+            .lock()
+            .ok()
+            .and_then(|value| *value)
+            .is_some_and(|expected| expected.len == len && expected.digest == *digest)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, CaptureState> {
@@ -574,10 +837,42 @@ mod tests {
     }
 
     #[test]
-    fn oversized_body_is_not_recorded() {
-        let entry = entry("oversized", 4, MAX_BODY_BYTES);
-        let request_size = entry.request_body.to_string().len();
-        assert!(super::payload_exceeds_limit(request_size, 0));
+    fn oversized_body_is_head_tail_truncated() {
+        let text = "a".repeat(1024);
+        let (kept, truncated) = super::fit_text(text, 128);
+        assert!(truncated);
+        assert!(kept.contains("debug body truncated"));
+        assert!(kept.len() <= 128 + 80, "头尾内容之外只允许固定的截断标记");
+    }
+
+    #[test]
+    fn an_overflowing_stream_keeps_the_head_and_tail_window() {
+        let capture = super::TrafficCapture::begin("overflow-stream");
+        capture.reset_request("https://example.test", "test", &[], "{}");
+        capture.attach_response(200, &Default::default());
+        let limit = capture.budget_snapshot().capture_bytes;
+        capture.push(&vec![b'a'; limit - 1]);
+        capture.push(&vec![b'b'; limit / 4]);
+        capture.finish();
+        let mut expected = vec![b'a'; limit * 3 / 4];
+        let marker = format!(
+            "\n[debug body truncated: original={} bytes]\n",
+            limit - 1 + limit / 4
+        );
+        expected.extend_from_slice(marker.as_bytes());
+        expected.extend_from_slice(&vec![b'b'; limit / 4]);
+        assert!(capture.response_body_matches(&expected));
+    }
+
+    #[test]
+    fn downstream_body_fingerprint_detects_difference_without_copying_upstream() {
+        let capture = super::TrafficCapture::begin("fingerprint");
+        capture.reset_request("https://example.test", "test", &[], "{}");
+        capture.attach_response(200, &Default::default());
+        capture.push(b"same bytes");
+        capture.finish();
+        assert!(capture.response_body_matches(b"same bytes"));
+        assert!(!capture.response_body_matches(b"different"));
     }
 
     #[test]
@@ -611,6 +906,79 @@ fn blank_entry(
         response_body: None,
         truncated: false,
     }
+}
+
+/// 把文本裁成头尾保留的形态；UTF-8 边界按字符回退，避免产生坏字符。
+fn fit_text(text: String, limit: usize) -> (String, bool) {
+    if text.len() <= limit {
+        return (text, false);
+    }
+    let original = text.len();
+    let head_limit = limit.saturating_mul(3) / 4;
+    let tail_limit = limit.saturating_sub(head_limit);
+    let mut head_end = head_limit.min(text.len());
+    while !text.is_char_boundary(head_end) && head_end > 0 {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len().saturating_sub(tail_limit);
+    while !text.is_char_boundary(tail_start) && tail_start < text.len() {
+        tail_start += 1;
+    }
+    let marker = format!("\n[debug body truncated: original={original} bytes]\n");
+    (format!("{}{}{}", &text[..head_end], marker, &text[tail_start..]), true)
+}
+
+/// 追加一个响应分片到固定长度的尾部窗口，旧字节按需从前面移除
+fn update_tail(tail: &mut Vec<u8>, chunk: &[u8], limit: usize) {
+    if limit == 0 {
+        tail.clear();
+        return;
+    }
+    if tail.len().saturating_add(chunk.len()) <= limit {
+        tail.extend_from_slice(chunk);
+        return;
+    }
+    if chunk.len() >= limit {
+        tail.clear();
+        tail.extend_from_slice(&chunk[chunk.len() - limit..]);
+        return;
+    }
+    let keep = limit - chunk.len();
+    if tail.len() > keep {
+        let drop = tail.len() - keep;
+        tail.drain(..drop);
+    }
+    tail.extend_from_slice(chunk);
+}
+
+fn fit_json_text(text: &str, limit: usize) -> (Value, bool) {
+    if text.len() <= limit {
+        return (serde_json::from_str::<Value>(text).unwrap_or(Value::Null), false);
+    }
+    TRUNCATED.fetch_add(1, Ordering::Relaxed);
+    let (clipped, _) = fit_text(text.to_string(), limit);
+    (Value::String(clipped), true)
+}
+
+fn fit_entry(mut entry: TrafficEntry, budget: DebugBudget) -> TrafficEntry {
+    let request = serde_json::to_string(&entry.request_body).unwrap_or_else(|_| "null".to_string());
+    if request.len() > budget.store_body_bytes {
+        let (clipped, _) = fit_text(request, budget.store_body_bytes);
+        entry.request_body = Value::String(clipped);
+        entry.truncated = true;
+        TRUNCATED.fetch_add(1, Ordering::Relaxed);
+    }
+    if let Some(body) = entry.response_body.take() {
+        if body.len() > budget.store_body_bytes {
+            let (clipped, _) = fit_text(body, budget.store_body_bytes);
+            entry.response_body = Some(clipped);
+            entry.truncated = true;
+            TRUNCATED.fetch_add(1, Ordering::Relaxed);
+        } else {
+            entry.response_body = Some(body);
+        }
+    }
+    entry
 }
 
 /// 调试模式是否开启（**唯一**判定入口）：上游报文（本模块各采集点）与

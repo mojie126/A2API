@@ -65,7 +65,7 @@ pub(super) use super::cache_report::{select_summary_rows, sum_cache_windows};
 mod raw;
 pub(super) use raw::{
     count_raw, count_raw_matching, count_upstream_raw, delete_raw_matching, select_raw, trim_raw_rows,
-    upsert_raw,
+    select_upstream_raw, upsert_raw,
 };
 
 /// `requests` 的列顺序（所有 SELECT 都按这个顺序取，`decode_request` 依赖它；

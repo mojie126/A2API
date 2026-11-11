@@ -639,7 +639,10 @@ impl RecordingStream {
         let terminal = if frames.is_empty() { None } else { Some(TerminalScan::new(frames)) };
         // 响应侧采集与请求侧同一道闸：调试模式关着就不攒缓冲（零开销）——
         // 这里定格一次，本请求的响应侧行为此后不再看开关（见 `RawCapture` 的说明）
-        let raw = RawCapture::new(crate::server::core::debug_traffic::enabled());
+        let raw = RawCapture::new(
+            crate::server::core::debug_traffic::enabled(),
+            crate::server::core::debug_traffic::budget().capture_bytes,
+        );
         Self { inner, context: Some(context), terminal, raw }
     }
 
@@ -651,7 +654,13 @@ impl RecordingStream {
         if let Some(mut context) = self.context.take() {
             // 流式路径构造时 raw_response 恒为 None，这里用缓冲定稿直接覆盖；
             // 若未来有入口想预填响应正文，那它不该再走流式包装（自相矛盾的约定）
-            context.raw_response = self.raw.into_text();
+            let upstream = context.telemetry.capture();
+            // 上游采集器随后可能被其他持有者最后释放，先去重会看不到正文指纹；
+            // 主动定稿只写一次，之后再比较下游字节。
+            if let Some(capture) = upstream.as_deref() {
+                capture.finish();
+            }
+            context.raw_response = self.raw.finish(upstream.as_deref());
             record_entry(&context, fallback_error);
             // 手动终止的令牌在此注销：流的结束点 = 请求不再在途（与
             // DisconnectGuard::complete 同一条生命周期；settle 由 Drop 兜底

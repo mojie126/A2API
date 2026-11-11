@@ -189,6 +189,11 @@ pub struct RuntimeConfig {
     /// 就生效，不重启进程），从 `Value` 里翻一次要处理类型判定，解析一次存下来
     /// 最省事 —— 这条判定在转发热路径上。
     debug_mode: bool,
+    /// 调试模式内存预算档位（`debugBudget`）。
+    ///
+    /// 与 `debug_mode` 同一理由：转发层逐请求取一次，改完下一个请求生效，
+    /// 把档位解析成一份数值快照，避免热路径重复解析原始 JSON。
+    debug_budget: crate::server::core::debug_traffic::BudgetTier,
     /// 规则在配置读取 / 保存时编译，请求间共享，同一次转发使用完整快照。
     sanitize: SanitizeSettings,
     /// 开发者角色兼容开关（设置页「网关 → 开发者角色兼容」）。
@@ -320,6 +325,11 @@ impl RuntimeConfig {
     /// 调试模式是否开启（转发层每次发送前判一次，见字段说明）
     pub fn debug_mode(&self) -> bool {
         self.debug_mode
+    }
+
+    /// 调试采集的内存预算快照（转发层逐请求取一次）
+    pub fn debug_budget(&self) -> crate::server::core::debug_traffic::DebugBudget {
+        self.debug_budget.settings()
     }
 
     /// 出站指纹脱敏是否开启（转发层每次发送前判一次，见字段说明）
@@ -612,6 +622,9 @@ fn build(raw: Map<String, Value>) -> RuntimeConfig {
         // 只有字面 `true` 算开启（手改文件写 "1" / "yes" 一律当关）：与
         // 「写坏回落」同一取向 —— 这个开关控制是否把凭据落盘，宁可少采
         debug_mode: raw.get(KEY_DEBUG_MODE).and_then(Value::as_bool).unwrap_or(false),
+        debug_budget: crate::server::core::debug_traffic::budget_tier_from_raw(
+            raw.get(KEY_DEBUG_BUDGET),
+        ),
         sanitize: sanitize_config::from_raw(&raw),
         // 只有字面 `false` 算关闭：**默认开**（缺失 → true）。改写语义无损
         // （developer 与 system 在 OpenAI 语义上等价），而默认关会让发 developer
@@ -1959,6 +1972,18 @@ pub fn set_debug_mode(enabled: bool) -> bool {
             .raw
             .insert(KEY_DEBUG_MODE.to_string(), Value::Bool(enabled));
         config.debug_mode = enabled;
+    })
+}
+
+/// 写入调试采集档位（`debugBudget`）。
+///
+/// 只接受三个稳定档位名，写入内存快照让下一个请求立即生效，并保留原始键
+/// 以便配置同步和回滚；非法值由调用侧先拒绝，不在这里静默替换
+pub fn set_debug_budget(value: &str) -> bool {
+    let tier = crate::server::core::debug_traffic::BudgetTier::from_id(value);
+    update(|config| {
+        config.raw.insert(KEY_DEBUG_BUDGET.to_string(), Value::String(value.to_string()));
+        config.debug_budget = tier;
     })
 }
 

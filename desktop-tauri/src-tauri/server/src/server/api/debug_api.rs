@@ -32,7 +32,7 @@ pub async fn get_debug(State(_state): State<ServerState>) -> Response {
     ok_json(debug_json())
 }
 
-/// PUT /api/debug —— body `{debugMode: true|false}`
+/// PUT /api/debug —— body `{debugMode?: true|false, debugBudget?: compact|standard|full}`
 ///
 /// 写 config.json（键 `debugMode`），下一个请求立即生效（转发层逐请求读快照，
 /// 不重启进程）。开启时顺带在事件日志里留一条记录 —— 它会让凭据类头被脱敏后
@@ -45,26 +45,45 @@ pub async fn put_debug(State(_state): State<ServerState>, body: Bytes) -> Respon
     let Some(object) = payload.as_object() else {
         return errors::management_error(400, "请求体必须是 JSON 对象");
     };
-    let Some(value) = object.get(config::KEY_DEBUG_MODE) else {
-        return errors::management_error(400, format!("缺少 {}", config::KEY_DEBUG_MODE));
-    };
-    let Some(enabled) = value.as_bool() else {
-        return errors::management_error(
-            400,
-            format!("{} 必须是 true 或 false", config::KEY_DEBUG_MODE),
+    if let Some(value) = object.get(config::KEY_DEBUG_MODE) {
+        let Some(enabled) = value.as_bool() else {
+            return errors::management_error(
+                400,
+                format!("{} 必须是 true 或 false", config::KEY_DEBUG_MODE),
+            );
+        };
+        if !config::set_debug_mode(enabled) {
+            logging::log("[Config]", "⚠️  调试模式设置写入 config.json 失败，本次运行内仍生效");
+        }
+        logging::log(
+            "[Config]",
+            if enabled {
+                "调试模式已开启：转发时会把上游原始报文（凭据类头已脱敏）保存到本地"
+            } else {
+                "调试模式已关闭"
+            },
         );
-    };
-    if !config::set_debug_mode(enabled) {
-        logging::log("[Config]", "⚠️  调试模式设置写入 config.json 失败，本次运行内仍生效");
     }
-    logging::log(
-        "[Config]",
-        if enabled {
-            "调试模式已开启：转发时会把上游原始报文（凭据类头已脱敏）保存到本地"
-        } else {
-            "调试模式已关闭"
-        },
-    );
+    if let Some(value) = object.get(config::KEY_DEBUG_BUDGET) {
+        let Some(tier) = value.as_str() else {
+            return errors::management_error(
+                400,
+                format!("{} 必须是 compact、standard 或 full", config::KEY_DEBUG_BUDGET),
+            );
+        };
+        if !matches!(tier, "compact" | "standard" | "full") {
+            return errors::management_error(
+                400,
+                format!("{} 必须是 compact、standard 或 full", config::KEY_DEBUG_BUDGET),
+            );
+        }
+        if !config::set_debug_budget(tier) {
+            logging::log("[Config]", "⚠️  调试采集档位写入配置失败，本次运行内仍生效");
+        }
+    }
+    if !object.contains_key(config::KEY_DEBUG_MODE) && !object.contains_key(config::KEY_DEBUG_BUDGET) {
+        return errors::management_error(400, "没有需要更新的调试设置");
+    }
     ok_json(debug_json())
 }
 
@@ -94,9 +113,14 @@ pub struct Params {
 
 /// 开关状态 + 存储概况（GET 与 PUT 共用，前端直接用响应刷新界面）
 fn debug_json() -> Value {
-    json!({
+    let mut value = json!({
         config::KEY_DEBUG_MODE: config::current().debug_mode(),
         "count": debug_traffic::count(),
         "limit": debug_traffic::max_entries(),
-    })
+    });
+    if let (Some(target), Some(stats)) = (value.as_object_mut(), debug_traffic::stats().as_object()) {
+        target.insert(config::KEY_DEBUG_BUDGET.to_string(), json!(stats.get("tier")));
+        target.insert("stats".to_string(), Value::Object(stats.clone()));
+    }
+    value
 }

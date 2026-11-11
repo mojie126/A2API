@@ -29,7 +29,7 @@
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, Connection};
 
-use super::{max_entries, TrafficEntry, MAX_TOTAL_BYTES};
+use super::{max_entries, DebugBudget, TrafficEntry, MAX_TOTAL_BYTES};
 
 /// 全部列（所有 SELECT 都按这个顺序取，[`decode_row`] 依赖它；
 /// 不写 `SELECT *` 是为了「加列时读侧要显式跟上」这件事在 diff 里可见）
@@ -202,15 +202,24 @@ pub(super) fn select_one(conn: &Connection, id: &str) -> rusqlite::Result<Option
     }
 }
 
-/// 按留存条数与正文合计字节双重上限淘汰旧记录，返回是否真的删除了行
+/// 按当前默认上限裁一次，兼容迁移和启动清理。
 pub(super) fn enforce_limits(conn: &Connection) -> rusqlite::Result<bool> {
+    enforce_limits_with(conn, super::budget())
+}
+
+/// 按指定预算与留存条数裁剪，供后台批量写入复用同一事务。
+pub(super) fn enforce_limits_with(
+    conn: &Connection,
+    budget: DebugBudget,
+) -> rusqlite::Result<bool> {
     let (count, bytes): (i64, i64) = conn.query_row(
         "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM debug_traffic",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let mut removed = false;
-    if bytes > MAX_TOTAL_BYTES {
+    let total_limit = budget.total_bytes.min(MAX_TOTAL_BYTES);
+    if bytes > total_limit {
         // 按实际累计大小删除最旧记录：先算出总超出的字节，再按最新记录
         // 从后向前累计，保留不超过上限的最长尾部集合
         removed = conn.execute(
@@ -221,10 +230,10 @@ pub(super) fn enforce_limits(conn: &Connection) -> rusqlite::Result<bool> {
                  ) AS cumulative FROM debug_traffic\
                ) WHERE cumulative <= ?1\
              )",
-            params![MAX_TOTAL_BYTES],
+            params![total_limit],
         )? > 0;
     }
-    let limit = max_entries() as i64;
+    let limit = max_entries().min(budget.total_entries) as i64;
     if count > limit {
         removed |= conn.execute(
             "DELETE FROM debug_traffic WHERE id NOT IN \

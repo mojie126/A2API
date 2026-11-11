@@ -99,6 +99,7 @@ import {
   saveCors,
   saveCaptchaPoolField,
   saveDebug,
+  saveDebugBudget,
   saveImageCompressEnabled,
   saveImageCompressField,
   saveModelsDev,
@@ -1096,14 +1097,30 @@ function PromptPanel({ snap }: { snap: SettingsSnapshot }) {
   )
 }
 
-/** 调试模式的状态行：条数只在后端给了两个整数时才提 */
+const DEBUG_BUDGET_OPTIONS = [
+  { value: 'compact', label: '精简（低内存默认）' },
+  { value: 'standard', label: '标准（单次复现）' },
+  { value: 'full', label: '完整（大型响应）' },
+] as const
+
+/** 调试模式的状态行：存档读数与运行队列分开显示，不把队列当成已落库 */
 function debugStateText(debug: DebugState): string {
   if (debug.status === 'loading') return STATES.appLoading
   if (debug.status === 'unavailable') return STATES.debugUnavailable
   const stored = debug.count !== null && debug.limit !== null
-    ? t('已保存 {count} / {limit} 条报文（超出后丢弃最旧的）。', { count: debug.count, limit: debug.limit })
+    ? t('已保存 {count} / {limit} 条报文（超出后丢弃最旧的）', { count: debug.count, limit: debug.limit })
     : ''
-  return debug.on ? `${STATES.debugOn}${stored}${t('凭据类请求头已脱敏。')}` : STATES.debugOff
+  const stats = debug.stats
+  const runtime = stats
+    ? t('；队列 {queued} 条 / {bytes}；已写入 {written} 条，截断 {truncated} 次，丢弃 {dropped} 条', {
+      queued: stats.queued ?? 0,
+      bytes: formatBytes(stats.queuedBytes ?? 0),
+      written: stats.written ?? 0,
+      truncated: stats.truncated ?? 0,
+      dropped: stats.dropped ?? 0,
+    })
+    : ''
+  return debug.on ? `${STATES.debugOn}${stored}${runtime}${t('；凭据类请求头已脱敏。')}` : `${STATES.debugOff}${runtime}`
 }
 
 /* ─── 重试 / 超时分类（从「网关」拆出的两个独立菜单）── */
@@ -1387,6 +1404,25 @@ function GatewayPane({ snap, panels }: { snap: SettingsSnapshot; panels: Set<str
               disabled={snap.debug.status !== 'ready' || snap.busy === 'debug'}
               onCheckedChange={next => void saveDebug(next)}
             />
+            <div className='settings-field'>
+              <Label htmlFor='settings-debug-budget'>{t('采集内存预算')}</Label>
+              <Select value={snap.debug.budget} onValueChange={next => {
+                if (next) void saveDebugBudget(String(next))
+              }}>
+                <SelectTrigger id='settings-debug-budget' className='w-[220px]'
+                  disabled={snap.debug.status !== 'ready' || snap.busy === 'debug'}
+                  aria-label={t('调试采集内存预算')}>
+                  <SelectValue>{DEBUG_BUDGET_OPTIONS.find(item => item.value === snap.debug.budget)?.label
+                    || t('精简')}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {DEBUG_BUDGET_OPTIONS.map(item => (
+                    <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className='hint'>{t('精简适合低内存 Docker 与长期排障，标准适合一次复现，完整保留较大的响应；改档不影响已保存报文。')}</div>
+            </div>
           </div>
           <div className='settings-state'>{debugStateText(snap.debug)}</div>
           <div className='hint retention-note'>{NOTES.debug}</div>

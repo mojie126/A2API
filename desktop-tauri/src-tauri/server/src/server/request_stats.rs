@@ -401,9 +401,11 @@ impl RequestStats {
         if id.is_empty() {
             return None;
         }
-        let loaded = {
+        let loaded: Option<(String, String, String, bool)> = {
             let guard = self.guard();
-            self.with_conn(&guard, |conn| sql::select_raw(conn, id))
+            self.with_conn(&guard, |conn| sql::select_raw(conn, id).and_then(|found| {
+                if found.is_some() { Ok(found) } else { sql::select_upstream_raw(conn, id) }
+            }))
         }?;
         let Some((raw_id, request_body, response_body, truncated)) = loaded else {
             return None;

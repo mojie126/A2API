@@ -112,11 +112,21 @@ fn persist(context: &RecordContext, fallback_error: Option<String>) {
     });
     context.stats.record_with_limiter(entry, limiter_event);
     // 正文独立提交，排障数据写入失败不能撤销明细与额度。
+    // 下游与上游正文相同时复用上游抓包，避免同一响应写两份
+    let upstream = context.telemetry.capture();
+    if let Some(capture) = upstream.as_deref() {
+        capture.finish();
+    }
+    let downstream_response = context.raw_response.as_deref().filter(|downstream| {
+        !upstream
+            .as_deref()
+            .is_some_and(|capture| capture.response_body_matches(downstream.as_bytes()))
+    });
     context.stats.store_raw(
         &snapshot.id,
         context.started_at,
         context.raw_request.as_deref(),
-        context.raw_response.as_deref(),
+        downstream_response,
     );
     logging::verbose(
         "[Stats]",

@@ -336,6 +336,7 @@ export type SettingsBridge = {
   saveImageCompress(patch: Record<string, number | boolean>): Promise<unknown>
   getDebug(): Promise<unknown>
   saveDebug(enabled: boolean): Promise<unknown>
+  saveDebugBudget?(budget: string): Promise<unknown>
   getSanitize(): Promise<unknown>
   saveSanitize(patch: boolean | SanitizePatch): Promise<unknown>
   getDeveloperRoleCompat(): Promise<unknown>

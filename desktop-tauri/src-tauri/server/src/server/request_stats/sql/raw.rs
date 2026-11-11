@@ -1,6 +1,7 @@
 //! 两侧原始报文的读写、计数与清理 SQL。
 
 use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::OptionalExtension;
 
 use super::FilterPlan;
 
@@ -72,14 +73,25 @@ pub(in crate::server::request_stats) fn upsert_raw(
     ts: i64,
     request_body: &str,
     response_body: &str,
-    size: i64,
+    _size: i64,
 ) -> rusqlite::Result<()> {
+    // 默认空响应与同 id 的上游抓包一致时，不再复制第二份正文
+    let response_body = if response_body.is_empty() {
+        let existing: Option<String> = conn.query_row(
+            "SELECT response_body FROM debug_traffic WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).optional()?;
+        existing.unwrap_or_default()
+    } else {
+        response_body.to_string()
+    };
     conn.execute(
         "INSERT INTO request_raw (id, ts, request_body, response_body, size, truncated) \
          SELECT ?1, ?2, ?3, ?4, ?5, 0 WHERE EXISTS (SELECT 1 FROM requests WHERE id = ?1) \
          ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, request_body = excluded.request_body, \
          response_body = excluded.response_body, size = excluded.size, truncated = 0",
-        params![id, ts, request_body, response_body, size],
+        params![id, ts, request_body, &response_body, (request_body.len() + response_body.len()) as i64],
     )?;
     Ok(())
 }
@@ -113,6 +125,21 @@ pub(in crate::server::request_stats) fn select_raw(
 ) -> rusqlite::Result<Option<(String, String, String, bool)>> {
     let mut stmt = conn.prepare(
         "SELECT id, request_body, response_body, truncated FROM request_raw WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query(params![id])?;
+    match rows.next()? {
+        Some(row) => Ok(Some((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))),
+        None => Ok(None),
+    }
+}
+
+/// 供请求详情在本地副本缺失时回退读取上游抓包。
+pub(in crate::server::request_stats) fn select_upstream_raw(
+    conn: &Connection,
+    id: &str,
+) -> rusqlite::Result<Option<(String, String, String, bool)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, request_body, response_body, truncated FROM debug_traffic WHERE id = ?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     match rows.next()? {
