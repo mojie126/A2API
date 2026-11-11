@@ -282,7 +282,7 @@
     {
       key: 'sensenova', name: '商汤日日新', icon: 'sensenova.png',
       protocol: P.openai, baseUrl: 'https://token.sensenova.cn/v1',
-      hint: wbI18n.t('商汤日日新的 OpenAI 兼容端点；余额查询走控制台账号密码（见下方「余额查询」一段）'),
+      hint: wbI18n.t('商汤日日新的 OpenAI 兼容端点；余额查询走手机号验证码登录（见下方「余额查询」一段）'),
       balance: { scheme: 'sensenova' },
     },
 
