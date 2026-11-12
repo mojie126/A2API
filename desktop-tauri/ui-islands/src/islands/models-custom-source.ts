@@ -133,8 +133,11 @@ export type CustomProviderRecord = {
   id?: string
   name?: string
   createdAt?: unknown
-  /** `capabilities` 是该条模型的能力位覆盖（可选稀疏表，键名见 `model-capability`） */
-  models?: Array<{ id?: unknown; enabled?: unknown; reasoning?: unknown; capabilities?: unknown }>
+  /** `capabilities` 是用户填写的能力位，`metadataCapabilities` 是自动补全的元数据 */
+  models?: Array<{
+    id?: unknown; enabled?: unknown; reasoning?: unknown; capabilities?: unknown
+    metadataCapabilities?: unknown; modelsDevId?: unknown; modelsDevMatch?: unknown; modelsDevCandidates?: unknown
+  }>
   mappings?: Array<{ alias?: unknown; target?: unknown; enabled?: unknown; reasoning?: unknown }>
 }
 
@@ -209,7 +212,11 @@ export function record(id: string): CustomProviderRecord | null {
  * 每次提交都从**目录缓存的当前值**重建，所以本函数是幂等的：连点两次开关，第二次读到
  * 的就是第一次提交后的值。
  */
-type DraftModel = { id: string; enabled: boolean; reasoning: string; capabilities?: Record<string, number | boolean> }
+type DraftModel = {
+  id: string; enabled: boolean; reasoning: string; capabilities?: Record<string, number | boolean>
+  metadataCapabilities?: Record<string, number | boolean>
+  modelsDevId?: string; modelsDevMatch?: string; modelsDevCandidates?: number
+}
 type DraftMapping = { alias: string; target: string; enabled: boolean; reasoning: string }
 
 /**
@@ -234,9 +241,12 @@ function draftOf(provider: CustomProviderRecord | null): { models: DraftModel[];
         enabled: model?.enabled !== false,
         reasoning: typeof model?.reasoning === 'string' ? model.reasoning : '',
       }
-      // 能力位覆盖**必须原样带回**：整表替换的语义下，草稿漏了它，用户填过的
-      // 能力就会被一次「切开关」的提交顺手清掉
+      // 能力位和自动补全元数据都必须原样带回，否则一次开关提交就会清掉它们
       draft.capabilities = sparseCapabilities(model?.capabilities)
+      draft.metadataCapabilities = sparseCapabilities(model?.metadataCapabilities)
+      if (typeof model?.modelsDevId === 'string') draft.modelsDevId = model.modelsDevId
+      if (typeof model?.modelsDevMatch === 'string') draft.modelsDevMatch = model.modelsDevMatch
+      if (typeof model?.modelsDevCandidates === 'number') draft.modelsDevCandidates = model.modelsDevCandidates
       return draft
     })
     .filter(model => model.id)
@@ -281,6 +291,32 @@ export function buildView(id: string): { models: ManageModel[]; mappings: Manage
   const models: ManageModel[] = []
   const mappings: ManageMapping[] = []
   for (const model of draft.models) {
+    const target = provider.models?.find(item => same(item?.id, model.id))
+    if (!target) {
+      models.push({
+        id: model.id,
+        name: '',
+        provider: id,
+        providerLabel: name,
+        source: '',
+        enabled: model.enabled,
+        aliases: [],
+        capabilities: model.capabilities || {},
+        capOverrides: [],
+      })
+      mappings.push({
+        alias: model.id,
+        target: model.id,
+        provider: id,
+        enabled: model.enabled,
+        reasoning: model.reasoning,
+        isDefault: true,
+        dangling: false,
+        carried: true,
+      })
+      continue
+    }
+    const metadataCapabilities = normalizeCapabilities(target?.metadataCapabilities)
     models.push({
       id: model.id,
       name: '',
@@ -289,20 +325,22 @@ export function buildView(id: string): { models: ManageModel[]; mappings: Manage
       source: '',
       enabled: model.enabled,
       aliases: [],
-      // 能力位是**记录自带的**（用户填的），没有「上游原值」这回事 ——
-      // 覆盖标记恒空，弹窗按「未声明 / 已填」两态呈现
-      capabilities: model.capabilities || {},
+      // 能力位优先使用用户填写的值，缺失项由 models.dev 元数据补齐 ——
+      // 用户字段仍是唯一的可编辑来源，元数据不覆盖用户显式填写的值
+      capabilities: {
+        ...metadataCapabilities,
+        ...(model.capabilities || {}),
+      },
       capOverrides: [],
-    })
-    mappings.push({
-      alias: model.id,
-      target: model.id,
-      provider: id,
-      enabled: model.enabled,
-      reasoning: model.reasoning,
-      isDefault: true,
-      dangling: false,
-      carried: true,
+      capSources: Object.keys(metadataCapabilities).length || Object.keys(model.capabilities || {}).length
+        ? Object.fromEntries([
+          ...Object.keys(metadataCapabilities).map(key => [key, 'modelsdev']),
+          ...Object.keys(model.capabilities || {}).map(key => [key, 'user']),
+        ] as Array<[string, string]>)
+        : undefined,
+      modelsDevId: target?.modelsDevId,
+      modelsDevMatch: target?.modelsDevMatch,
+      modelsDevCandidates: target?.modelsDevCandidates,
     })
   }
   for (const mapping of draft.mappings) {

@@ -51,7 +51,10 @@ mod fill;
 mod refresh;
 mod snapshot;
 
-pub use fill::{apply, mark_user};
+pub use fill::{
+    apply, apply_reasoning_record, mark_user, metadata_details, metadata_lookup,
+    MetadataDetails, MetadataLookup,
+};
 pub use refresh::refresh;
 pub use snapshot::{install, search, status};
 

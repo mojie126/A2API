@@ -166,6 +166,9 @@ pub fn model_blocked_everywhere(model: &str) -> bool {
 
 pub fn wire_target_for_provider(model: &str, provider_id: &str, _account: Option<&Value>) -> WireTarget {
     let requested = model.trim();
+    if provider_id == "routing-group" {
+        return WireTarget { model: requested.to_string(), reasoning: None };
+    }
     // 自定义提供商在自己的转发模块解析一次，避免把别名提前改写后丢失其等级绑定。
     let resolved = if custom_providers::is_custom_provider_id(provider_id) {
         None

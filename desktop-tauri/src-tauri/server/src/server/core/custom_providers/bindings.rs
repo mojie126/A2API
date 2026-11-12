@@ -264,7 +264,36 @@ pub fn public_models(provider: &Value) -> Vec<Value> {
         }
         let capabilities =
             capability::normalize_object(target_model.and_then(|model| model.get("capabilities")));
+        let metadata_capabilities =
+            capability::normalize_object(target_model.and_then(|model| model.get("metadataCapabilities")));
+        capability::apply_overrides(&mut item, &metadata_capabilities);
         capability::apply_overrides(&mut item, &capabilities);
+        let mut cap_sources = target_model.and_then(|model| model.get("capSources")).cloned().unwrap_or_else(|| json!({}));
+        if let Some(object) = cap_sources.as_object_mut() {
+            for key in capability::overridden_keys(&metadata_capabilities) {
+                object.insert(key, json!("modelsdev"));
+            }
+            for key in capability::overridden_keys(&capabilities) {
+                object.insert(key, json!("user"));
+            }
+        }
+        item["capSources"] = cap_sources;
+        item["capOverrides"] = json!(capability::overridden_keys(&capabilities));
+        for key in [
+            "reasoningLevels",
+            "reasoningDefaultLevel",
+            "reasoningFixedLevel",
+            "reasoningBindingSupported",
+            "reasoningSource",
+            "modelsDevId",
+            "modelsDevMatch",
+            "modelsDevCandidates",
+            "modelsDevBinding",
+        ] {
+            if let Some(value) = target_model.and_then(|model| model.get(key)) {
+                item[key] = value.clone();
+            }
+        }
         model_meta::apply(text(provider, "id"), &mut item, Some(&target));
         result.push(item);
     }

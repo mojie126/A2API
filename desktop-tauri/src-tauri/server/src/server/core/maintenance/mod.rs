@@ -9,7 +9,8 @@ use serde_json::{json, Map, Value};
 
 use crate::server::config;
 use crate::server::core::{
-    account_store::AccountStore, credential_maintenance, model_meta, providers, task_state,
+    account_store::AccountStore, capability, credential_maintenance, custom_providers,
+    model_meta, providers, task_state,
 };
 use crate::server::logging;
 use types::{Detail, Item};
@@ -141,7 +142,7 @@ async fn complete(
 ) -> Result<Detail, String> {
     let manual = request.source == "manual";
     let snapshots = types::accounts(store);
-    let raw = if request.task_id == CREDENTIAL {
+    let mut raw = if request.task_id == CREDENTIAL {
         if request.forced_account_ids.is_empty() {
             credential_maintenance::refresh_selected_accounts(store, request.account_ids.as_deref())
                 .await
@@ -163,18 +164,16 @@ async fn complete(
     } else {
         // 自动路径只刷新真正在用的提供商：没有启用账号的家刷了只会在记录里
         // 产生「缺少登录态」的噪音，也白白占用一次上游请求
-        let in_use: Vec<String> = providers::executable_provider_ids()
+        let mut in_use: Vec<String> = providers::executable_provider_ids()
             .into_iter()
             .filter(|provider| !store.accounts_for_provider(provider).is_empty())
             .collect();
+        in_use.extend(custom_providers::list().into_iter().filter_map(|provider| {
+            let id = provider.get("id").and_then(Value::as_str)?;
+            (!store.accounts_for_provider(id).is_empty()).then(|| id.to_string())
+        }));
         providers::adapter::refresh_implemented(store, Some(&in_use)).await
     };
-    let mut items = raw
-        .iter()
-        .enumerate()
-        .map(|(index, row)| types::item(row, index, &snapshots))
-        .collect::<Vec<_>>();
-    complete_missing_targets(&request, &snapshots, &mut items);
     let metadata = if request.task_id == MODEL && request.metadata {
         let started = std::time::Instant::now();
         let mut metadata = types::item(
@@ -187,6 +186,15 @@ async fn complete(
     } else {
         None
     };
+    if request.task_id == MODEL {
+        raw.extend(refresh_custom_catalogs(store, &request).await);
+    }
+    let mut items = raw
+        .iter()
+        .enumerate()
+        .map(|(index, row)| types::item(row, index, &snapshots))
+        .collect::<Vec<_>>();
+    complete_missing_targets(&request, &snapshots, &mut items);
     let (refreshed, _, failed) = types::summary(&items);
     let metadata_failed = metadata
         .as_ref()
@@ -228,6 +236,128 @@ async fn complete(
         return Err(format!("维护结果已保存，但排期更新失败：{error}"));
     }
     Ok(detail)
+}
+
+async fn refresh_custom_catalogs(store: &AccountStore, request: &Request) -> Vec<Value> {
+    let mut results = Vec::new();
+    for provider in custom_providers::list() {
+        let Some(id) = provider.get("id").and_then(Value::as_str).map(str::to_string) else { continue };
+        if provider.get("enabled").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+        if store.accounts_for_provider(&id).is_empty() {
+            continue;
+        }
+        if request.providers.as_ref().is_some_and(|allowed| !allowed.iter().any(|item| item == &id)) {
+            continue;
+        }
+        let label = provider.get("name").and_then(Value::as_str).unwrap_or(&id).to_string();
+        let account = request.accounts.get(&id).and_then(Value::as_str).map(str::trim).filter(|id| !id.is_empty());
+        let mut item = json!({
+            "provider": id,
+            "providerLabel": label,
+            "refreshedAt": 0,
+        });
+        let selected = account.map(str::to_string).or_else(|| {
+            store.accounts_for_provider(&id).first()
+                .and_then(|account| account.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        if let Some(account) = &selected {
+            item["accountId"] = json!(account);
+        }
+        let outcome = custom_providers::fetch_upstream_models_with_account(&id, store, selected.as_deref()).await;
+        match outcome {
+            Ok(models) => merge_custom_catalog(&id, &models, &mut item),
+            Err(message) => {
+                item["status"] = json!("failed");
+                item["message"] = json!(message);
+            }
+        }
+        results.push(item);
+    }
+    results
+}
+
+/// 把上游清单并入该家登记表
+///
+/// 已登记模型按 ID 匹配并补齐缺失能力，用户显式填写的能力与思考等级优先；
+/// 未登记的新模型默认启用，映射表保持不变
+fn merge_custom_catalog(id: &str, upstream: &[String], item: &mut Value) {
+    let Some(provider) = custom_providers::get(id) else {
+        item["status"] = json!("failed");
+        item["message"] = json!(format!("自定义提供商不存在: {id}"));
+        return;
+    };
+    let models = provider.get("models").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mappings = provider.get("mappings").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut merged = models;
+    let mut added = 0usize;
+    let mut enriched = 0usize;
+    for name in upstream.iter().map(|name| name.trim()).filter(|name| !name.is_empty()) {
+        if let Some(known) = merged.iter_mut().find(|model| {
+            model.get("id").and_then(Value::as_str)
+                .is_some_and(|known| known.eq_ignore_ascii_case(name))
+                || model.get("name").and_then(Value::as_str)
+                    .is_some_and(|known| known.eq_ignore_ascii_case(name))
+        }) {
+            if enrich_custom_model(id, known) { enriched += 1; }
+            continue;
+        }
+        merged.push(json!({ "id": name, "enabled": true, "reasoning": "" }));
+        added += 1;
+    }
+    match custom_providers::set_models(id, Value::Array(merged), Value::Array(mappings)) {
+        Ok(_) => {
+            let changed = added > 0 || enriched > 0;
+            item["status"] = json!(if changed { "refreshed" } else { "skipped" });
+            item["count"] = json!(added + enriched);
+            item["refreshedAt"] = json!(logging::now_ms());
+        }
+        Err(error) => {
+            item["status"] = json!("failed");
+            item["message"] = json!(error.message);
+        }
+    }
+}
+
+/// 给一条已登记模型补 models.dev 元数据，返回是否真正改动了能力或档位
+fn enrich_custom_model(provider: &str, model: &mut Value) -> bool {
+    let metadata = model_meta::metadata_details(provider, model, None);
+    let lookup = model_meta::metadata_lookup(provider, model);
+    // 元数据值不从写入模型用户能力位，而是单独存放并由对外出口叠加
+    let mut reasoning = model.clone();
+    if let Some(record) = metadata.record.as_ref() {
+        model_meta::apply_reasoning_record(&mut reasoning, record);
+    }
+    let capabilities = capability::normalize_object(model.get("capabilities"));
+    let mut metadata_capabilities = capability::normalize_object(model.get("metadataCapabilities"));
+    let before = model.clone();
+    for (key, value) in metadata.capabilities {
+        metadata_capabilities.insert(key, value);
+    }
+    metadata_capabilities.retain(|key, _| !capabilities.contains_key(key));
+    if metadata_capabilities.is_empty() {
+        reasoning.as_object_mut().map(|object| object.remove("metadataCapabilities"));
+    } else {
+        reasoning["metadataCapabilities"] = Value::Object(metadata_capabilities);
+    }
+    if lookup.match_source.is_empty() {
+        reasoning.as_object_mut().map(|object| object.remove("modelsDevMatch"));
+    } else {
+        reasoning["modelsDevMatch"] = json!(lookup.match_source);
+    }
+    if let Some(canonical) = lookup.canonical {
+        reasoning["modelsDevId"] = json!(canonical);
+    }
+    if lookup.candidates > 0 {
+        reasoning["modelsDevCandidates"] = json!(lookup.candidates);
+    }
+    if reasoning != *model {
+        *model = reasoning;
+    }
+    *model != before
 }
 
 fn complete_missing_targets(
@@ -331,4 +461,43 @@ pub async fn refresh_single(
         return Err(GatewayError::with_status(500, error));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_enrichment_preserves_explicit_capabilities() {
+        let metadata = json!({
+            "supportsImages": true,
+            "maxInputTokens": 128000
+        });
+        let explicit = json!({
+            "supportsImages": false,
+            "supportsToolCall": true
+        });
+        let mut capabilities = capability::normalize_object(Some(&explicit));
+        for (key, value) in metadata.as_object().cloned().unwrap_or_default() {
+            capabilities.entry(key).or_insert(value);
+        }
+        assert_eq!(capabilities["supportsImages"], json!(false));
+        assert_eq!(capabilities["supportsToolCall"], json!(true));
+        assert_eq!(capabilities["maxInputTokens"], json!(128000));
+    }
+
+    #[test]
+    fn metadata_fields_and_user_overrides_are_kept_separate() {
+        let mut model = json!({
+            "id": "gpt-x",
+            "capabilities": { "supportsImages": false }
+        });
+        let metadata = capability::normalize_object(Some(&json!({
+            "supportsImages": true,
+            "maxInputTokens": 128000
+        })));
+        model["metadataCapabilities"] = Value::Object(metadata);
+        assert_eq!(model["capabilities"]["supportsImages"], json!(false));
+        assert_eq!(model["metadataCapabilities"]["maxInputTokens"], json!(128000));
+    }
 }

@@ -23,7 +23,8 @@
 //!   "createdAt": 1730000000000,
 //!   "models": [                     // 用户登记的模型清单（第二阶段起）
 //!     { "id": "gpt-x", "enabled": true, "reasoning": "",
-//!       "capabilities": { "maxInputTokens": 200000 } }  // 可选：能力位覆盖
+//!       "capabilities": { "maxInputTokens": 200000 },    // 用户填写的能力位
+//!       "metadataCapabilities": { "supportsToolCall": true } } // 自动补全的元数据
 //!   ],
 //!   "mappings": [                   // 对外别名 → 上游模型 id 的映射（同上）
 //!     { "alias": "my-alias", "target": "gpt-x", "enabled": true, "reasoning": "" }
@@ -45,7 +46,7 @@
 //!
 //! `capabilities`（可选的 per-model 能力位覆盖）遵同一条取舍：内置家那层覆盖
 //! 存 `modelRules.capabilities`（清单是适配器给的，「上游值的纠正」是全局规则），
-//! 自定义家的清单与它的元数据**都是这条记录自己的东西**，覆盖就落在条目上。
+//! 自定义家的用户能力位、元数据补全值和清单都属于这条记录自己的数据
 //! 两边的键名 / 归一 / 出口透出规则由 `core::capability` 统一（出口在
 //! `bindings::public_models`：别名继承 target 的能力位）。
 //!
@@ -518,6 +519,20 @@ fn model_entries_of(value: Option<&Value>) -> Vec<Value> {
                 map.insert("capabilities".to_string(), Value::Object(capabilities));
             }
         }
+        if let Some(map) = entry.as_object_mut() {
+            let metadata_capabilities = capability::normalize_object(object.get("metadataCapabilities"));
+            if !metadata_capabilities.is_empty() {
+                map.insert("metadataCapabilities".to_string(), Value::Object(metadata_capabilities));
+            }
+            for key in ["modelsDevId", "modelsDevMatch"] {
+                if let Some(value) = object.get(key).filter(|value| value.is_string()) {
+                    map.insert(key.to_string(), value.clone());
+                }
+            }
+            if let Some(value) = object.get("modelsDevCandidates").and_then(Value::as_u64) {
+                map.insert("modelsDevCandidates".to_string(), Value::from(value));
+            }
+        }
         entries.push(entry);
     }
     entries
@@ -961,6 +976,15 @@ pub async fn fetch_upstream_models(
     provider_id: &str,
     store: &AccountStore,
 ) -> Result<Vec<String>, String> {
+    fetch_upstream_models_with_account(provider_id, store, None).await
+}
+
+/// 指定账号拉取该家上游模型清单，供维护任务展示实际使用的账号。
+pub async fn fetch_upstream_models_with_account(
+    provider_id: &str,
+    store: &AccountStore,
+    account_id: Option<&str>,
+) -> Result<Vec<String>, String> {
     let provider = get(provider_id)
         .ok_or_else(|| format!("自定义提供商不存在: {}", provider_id.trim()))?;
     let protocol = provider
@@ -981,8 +1005,10 @@ pub async fn fetch_upstream_models(
     } else {
         format!("{base_url}/models")
     };
-    let credential = store
-        .first_custom_credential(provider_id)
+    let credential = match account_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => store.custom_credential(provider_id, id),
+        None => store.first_custom_credential(provider_id),
+    }
         .ok_or_else(|| {
             "请先添加账号：拉取模型清单需要一条启用且可用（填了 apiKey，或声明了无需鉴权）的账号"
                 .to_string()
@@ -1066,7 +1092,10 @@ fn validate_model_entries(raw: &[Value]) -> Result<Vec<Value>, String> {
         // 能力位覆盖（可选；校验见 validate_capabilities）—— 它是整表替换里
         // **必须原样带回**的字段：前端草稿漏了它，用户填过的能力就会被一次
         // 「切开关」的提交顺手清掉。
-        let capabilities = validate_capabilities(object.get("capabilities"), position + 1)?;
+        let capabilities = validate_capabilities(object.get("capabilities"), position + 1, "capabilities")?;
+        let metadata_capabilities = validate_capabilities(
+            object.get("metadataCapabilities"), position + 1, "metadataCapabilities",
+        )?;
         let enabled = match object.get("enabled") {
             None => true,
             Some(Value::Bool(enabled)) => *enabled,
@@ -1089,6 +1118,31 @@ fn validate_model_entries(raw: &[Value]) -> Result<Vec<Value>, String> {
         if let Some(capabilities) = capabilities {
             if let Some(map) = entry.as_object_mut() {
                 map.insert("capabilities".to_string(), Value::Object(capabilities));
+            }
+        }
+        if let Some(capabilities) = metadata_capabilities {
+            if let Some(map) = entry.as_object_mut() {
+                map.insert("metadataCapabilities".to_string(), Value::Object(capabilities));
+            }
+        }
+        for key in ["modelsDevId", "modelsDevMatch"] {
+            let Some(value) = object.get(key) else { continue };
+            let Some(text) = value.as_str() else {
+                return Err(format!("models 第 {} 项的 {key} 必须是字符串", position + 1));
+            };
+            if text.chars().count() > MAX_MODEL_ID_CHARS {
+                return Err(format!("models 第 {} 项的 {key} 过长", position + 1));
+            }
+            if let Some(map) = entry.as_object_mut() {
+                map.insert(key.to_string(), json!(text.trim()));
+            }
+        }
+        if let Some(value) = object.get("modelsDevCandidates") {
+            let Some(count) = value.as_u64() else {
+                return Err(format!("models 第 {} 项的 modelsDevCandidates 必须是非负整数", position + 1));
+            };
+            if let Some(map) = entry.as_object_mut() {
+                map.insert("modelsDevCandidates".to_string(), Value::from(count));
             }
         }
         entries.push(entry);
@@ -1159,20 +1213,22 @@ fn validate_mapping_entries(raw: &[Value]) -> Result<Vec<Value>, String> {
 ///
 /// 返回**归一后的稀疏表**；缺省 / null / 归一后为空都返回 `None`
 /// （调用方不落键，见 `model_entries_of`）。
-fn validate_capabilities(value: Option<&Value>, position: usize) -> Result<Option<Map<String, Value>>, String> {
+fn validate_capabilities(
+    value: Option<&Value>, position: usize, field: &str,
+) -> Result<Option<Map<String, Value>>, String> {
     let Some(value) = value.filter(|item| !item.is_null()) else {
         return Ok(None);
     };
     let Some(object) = value.as_object() else {
-        return Err(format!("models 第 {position} 项的 capabilities 必须是对象"));
+        return Err(format!("models 第 {position} 项的 {field} 必须是对象"));
     };
     for (key, item) in object {
         if !capability::KEYS.contains(&key.as_str()) {
-            return Err(format!("models 第 {position} 项的能力字段不存在: {key}"));
+            return Err(format!("models 第 {position} 项的 {field} 能力字段不存在: {key}"));
         }
         if capability::normalize_value(key, item).is_none() {
             return Err(format!(
-                "models 第 {position} 项的能力字段 {key} 取值非法（token 键要 1~1 亿的正整数，能力开关要布尔）"
+                "models 第 {position} 项的 {field} 能力字段 {key} 取值非法（token 键要 1~1 亿的正整数，能力开关要布尔）"
             ));
         }
     }

@@ -10,6 +10,7 @@ use crate::server::core::key_scope::{self, KeyScope};
 use crate::server::core::model_meta;
 use crate::server::core::model_rules;
 use crate::server::core::models::{list_item, list_response_from, model_id, suggest_from};
+use crate::server::core::providers::custom;
 
 use super::routing::{builtin_target, entry_id_in_manifest};
 use super::{active_manifests, aggregate_source, managed_manifests, manifest_for_provider, refresh_meta_for_provider};
@@ -144,7 +145,7 @@ pub fn models_by_provider(store: &AccountStore) -> Value {
         names.sort_by_key(|name| name.to_lowercase());
         map.insert(provider, json!(names));
     }
-    for (provider, items) in super::super::custom::catalog_providers(store) {
+    for (provider, items) in custom::catalog_providers(store) {
         let mut names: Vec<_> = items.iter().map(model_id).collect();
         names.sort_by_key(|name| name.to_lowercase());
         map.insert(provider, json!(names));
@@ -159,6 +160,64 @@ pub fn models_by_provider(store: &AccountStore) -> Value {
         }
     }
     Value::Object(map)
+}
+
+/// 特殊请求路由的候选模型：内置家与自定义家共用一份出口形状。
+///
+/// 对外名与提供商组成候选标识，同名模型分布在不同家时不能互相覆盖；
+/// 能力位取该条模型对下游声明的生效值，图片兼容由它决定哪些模型可用于识图。
+pub fn special_route_models(store: &AccountStore) -> Vec<Value> {
+    let accounts = store.routing_snapshot();
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    for (provider, manifest) in active_manifests(store) {
+        let rules = model_rules::shared();
+        for name in advertised_names(&rules, &provider, &manifest) {
+            let Some(wire) = builtin_target(&rules, &provider, &manifest, &name) else { continue };
+            let Some(item) = manifest.iter().find(|item| model_id(item).eq_ignore_ascii_case(&wire.model)) else { continue };
+            if super::super::images::model_is_image(item) { continue; }
+            push_special_choice(&mut result, &mut seen, &accounts.accounts, &provider, &name, item);
+        }
+    }
+    for (provider, models) in custom::catalog_providers(store) {
+        for item in models {
+            let name = model_id(&item);
+            if name.is_empty() || super::super::images::model_is_image(&item) { continue; }
+            push_special_choice(&mut result, &mut seen, &accounts.accounts, &provider, &name, &item);
+        }
+    }
+    for group in crate::server::core::routing_groups::public_choices(store) {
+        let provider = group.get("provider").and_then(Value::as_str).unwrap_or("");
+        let name = group.get("model").and_then(Value::as_str).unwrap_or("");
+        let key = (provider.to_lowercase(), name.to_lowercase());
+        if provider.is_empty() || name.is_empty() || !seen.insert(key) { continue; }
+        result.push(group);
+    }
+    result
+}
+
+fn push_special_choice(
+    result: &mut Vec<Value>,
+    seen: &mut HashSet<(String, String)>,
+    accounts: &[std::sync::Arc<Value>],
+    provider: &str,
+    name: &str,
+    item: &Value,
+) {
+    let key = (provider.to_lowercase(), name.trim().to_lowercase());
+    if name.trim().is_empty() || !seen.insert(key) { return; }
+    result.push(json!({
+        "id": name,
+        "provider": provider,
+        "providerLabel": super::super::label_of(provider),
+        "model": name,
+        "name": item.get("name").and_then(Value::as_str).unwrap_or(name),
+        "kind": item.get("kind").cloned().unwrap_or_else(|| Value::String("chat".to_string())),
+        "capabilities": capability::effective(item),
+        "accountCount": accounts.iter().filter(|account| {
+            account.get("provider").and_then(Value::as_str) == Some(provider)
+        }).count(),
+    }));
 }
 
 /// 管理视图里的一行模型（`models` 数组的一项）+ 它对应的默认映射。
@@ -444,5 +503,20 @@ mod tests {
         ]));
         let names = advertised_names(&rules, "cline-free", &manifest());
         assert!(!names.iter().any(|name| name == "x-alias"));
+    }
+
+    /// 同名模型在不同提供商各保留一条，同一提供商内才去重
+    #[test]
+    fn special_route_choices_keep_the_provider_dimension() {
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        let accounts = Vec::new();
+        let item = json!({ "id": "shared-model" });
+        push_special_choice(&mut result, &mut seen, &accounts, "provider-a", "shared-model", &item);
+        push_special_choice(&mut result, &mut seen, &accounts, "provider-b", "shared-model", &item);
+        push_special_choice(&mut result, &mut seen, &accounts, "provider-a", "shared-model", &item);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["provider"], "provider-a");
+        assert_eq!(result[1]["provider"], "provider-b");
     }
 }

@@ -11,9 +11,7 @@ use crate::server::http::{ok_json, parse_body};
 use crate::server::{logging, ServerState};
 
 fn available_models(state: &ServerState) -> Vec<Value> {
-    catalog::session_models(state.store()).into_iter()
-        .filter(|model| model.get("kind").and_then(Value::as_str) != Some("image"))
-        .collect()
+    catalog::special_route_models(state.store())
 }
 
 fn view(state: &ServerState) -> Result<Value, GatewayError> {
@@ -46,6 +44,7 @@ struct SaveRoutes {
 fn validate_models(state: &ServerState, settings: &CompactRoutes) -> Result<(), GatewayError> {
     let models = available_models(state);
     let available = |name: &str| models.iter().any(|model| model.get("id").and_then(Value::as_str)
+        .or_else(|| model.get("model").and_then(Value::as_str))
         .is_some_and(|id| compact_routes::model_key(id) == compact_routes::model_key(name)));
     let old = compact_routes::current();
     let previous = old.settings.as_ref().ok();

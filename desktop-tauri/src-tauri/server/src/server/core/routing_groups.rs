@@ -64,7 +64,15 @@ pub fn catalog_model(provider: &str, model: &str) -> Option<Value> {
     manifest(provider).into_iter().find(|item| model_id(item).eq_ignore_ascii_case(model))
 }
 
-pub fn choices(store: &AccountStore) -> Vec<Value> {
+/// 特殊请求路由使用的路由组候选
+///
+/// 只列出当前至少有一个成员可用的路由组，能力位按成员共同具备的能力求交集，
+/// 避免给下游声明成员都不支持的能力。
+pub fn public_choices(store: &AccountStore) -> Vec<Value> {
+    group_choices(store)
+}
+
+fn model_choices(store: &AccountStore) -> Vec<Value> {
     let accounts = store.routing_snapshot();
     let mut ids: Vec<_> = accounts.accounts.iter().map(|account| routing::provider_of(account).to_string()).collect();
     ids.extend(providers::executable_provider_ids());
@@ -87,6 +95,10 @@ pub fn choices(store: &AccountStore) -> Vec<Value> {
     result
 }
 
+pub fn choices(store: &AccountStore) -> Vec<Value> {
+    model_choices(store)
+}
+
 pub fn candidate_key(member: &str, account: &str) -> String { format!("{member}\0{account}") }
 pub fn account_key(key: &str) -> &str { key.split_once('\0').map(|(_, account)| account).unwrap_or(key) }
 pub fn member_key(key: &str) -> Option<&str> { key.split_once('\0').map(|(member, _)| member) }
@@ -107,6 +119,46 @@ pub struct GroupProjection {
 fn provider_active(provider: &str) -> bool {
     super::account_store::store_view::account_visible(provider)
         && custom_providers::get(provider).map_or_else(|| providers::adapter::adapter_by_id(provider).is_some(), |owner| owner.get("enabled") != Some(&Value::Bool(false)))
+}
+
+fn group_choices(store: &AccountStore) -> Vec<Value> {
+    let accounts = store.routing_snapshot();
+    let mut result = Vec::new();
+    for group in config::routing_profiles().groups.values() {
+        let members: Vec<_> = group.members.iter().filter(|member| member.included)
+            .filter(|member| provider_active(&member.provider)
+                && accounts.available_providers.contains(&member.provider)
+                && member.accounts.iter().any(|id| accounts.accounts.iter().any(|account|
+                    routing::account_id(account) == Some(id)
+                        && routing::provider_of(account) == member.provider
+                        && account.get("enabled") != Some(&Value::Bool(false)))))
+            .filter_map(|member| catalog_model(&member.provider, &member.model))
+            .filter(|item| !providers::images::model_is_image(item))
+            .collect();
+        if members.is_empty() { continue; }
+        let capabilities = capability::effective(&json!({
+            "supportsToolCall": members.iter().all(|item| item.get("supportsToolCall").and_then(Value::as_bool) == Some(true)),
+            "supportsImages": members.iter().all(|item| item.get("supportsImages").and_then(Value::as_bool) == Some(true)),
+            "supportsVideo": members.iter().all(|item| item.get("supportsVideo").and_then(Value::as_bool) == Some(true)),
+            "supportsReasoning": members.iter().all(|item| item.get("supportsReasoning").and_then(Value::as_bool) == Some(true)),
+            "maxInputTokens": common_token_limit(&members, "maxInputTokens"),
+            "maxOutputTokens": common_token_limit(&members, "maxOutputTokens"),
+        }));
+        let member_names: Vec<_> = group.members.iter().filter(|member| member.included)
+            .map(|member| member.model.as_str()).collect();
+        result.push(json!({
+            "id": group.model,
+            "provider": "routing-group",
+            "providerLabel": "Routing group",
+            "model": group.model,
+            "name": group.name,
+            "kind": "chat",
+            "capabilities": capabilities,
+            "members": member_names,
+            "accountCount": 0,
+        }));
+    }
+    result
 }
 
 pub fn project(group: &RoutingGroup, accounts: &[Value], needs: &RequestNeeds, scope: Option<&KeyScope>) -> GroupProjection {
@@ -205,4 +257,12 @@ pub fn append_public(store: &AccountStore, scope: Option<&KeyScope>, data: &mut 
         item["is_default"] = false.into();
         data.push(item);
     }
+}
+
+fn common_token_limit(members: &[Value], key: &str) -> Value {
+    members.iter().map(|item| item.get(key).and_then(Value::as_u64))
+        .collect::<Option<Vec<_>>>()
+        .and_then(|values| values.into_iter().min())
+        .map(Value::from)
+        .unwrap_or(Value::Null)
 }

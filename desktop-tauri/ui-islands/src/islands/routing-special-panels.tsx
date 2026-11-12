@@ -37,22 +37,32 @@ import {
 } from './routing-special-state'
 import '../styles/routing-special.css'
 
-type ModelChoice = { id: string; name?: string; providerLabel?: string; provider?: string; kind?: string }
+type ModelChoice = { id: string; model?: string; name?: string; providerLabel?: string; provider?: string; kind?: string }
 
 /** 模型下拉显示 ID，名称与提供商仅用于搜索。 */
 function ModelSelect({ value, models, exclude, onChange, disabled, ariaLabel }: {
   value: string; models: ModelChoice[]; exclude?: string[]; onChange(next: string): void
   disabled?: boolean; ariaLabel: string
 }) {
+  const nameOf = (model: ModelChoice) => model.model || model.id
   // 同一个模型 ID 可能来自多家（别名映射），按 key 去重后再列出。
-  const ids = [...new Map(models.map(model => [modelKey(model.id), model.id])).values()]
+  const ids = [...new Map(models.map(model => [modelKey(nameOf(model)), nameOf(model)])).values()]
     .filter(id => !exclude?.includes(modelKey(id)) || modelKey(id) === modelKey(value))
-  const selectedId = ids.find(id => modelKey(id) === modelKey(value)) || value
+  // 普通模型下拉不重复列路由组聚合名；路由组只出现在明确的「路由组」候选里
+  const grouped = new Set(models.filter(model => model.provider === 'routing-group').map(model => modelKey(nameOf(model))))
+  const visible = ids.filter(id => modelKey(id) === modelKey(value)
+    || !grouped.has(modelKey(id)))
+  const selectedId = visible.find(id => modelKey(id) === modelKey(value)) || value
+  const labels = new Map(visible.map(id => {
+    const owners = [...new Set(models.filter(model => modelKey(nameOf(model)) === modelKey(id))
+      .map(model => model.providerLabel || model.provider || '').filter(Boolean))]
+    return [id, owners.length ? `${owners.join(' / ')} · ${id}` : id]
+  }))
   return <SearchableSelect value={selectedId} disabled={disabled} onValueChange={onChange}
     className='w-full' aria-label={ariaLabel} searchPlaceholder={t('搜索模型')}
-    displayValue={selectedId || t('请选择模型')}
-    options={ids.map(id => ({ value: id, label: id,
-      searchText: models.filter(model => modelKey(model.id) === modelKey(id))
+    displayValue={selectedId ? labels.get(modelKey(selectedId)) || selectedId : t('请选择模型')}
+    options={visible.map(id => ({ value: id, label: labels.get(modelKey(id)) || id,
+      searchText: models.filter(model => modelKey(nameOf(model)) === modelKey(id))
         .map(model => `${model.name || ''} ${model.providerLabel || ''} ${model.provider || ''}`).join(' '),
     }))} />
 }

@@ -30,6 +30,16 @@ pub async fn overview(
         )
         .into_iter()
         .filter(|item| in_use.iter().any(|id| item["id"].as_str() == Some(id)))
+        .chain(crate::server::core::custom_providers::summary_json(|provider| {
+            store.accounts_for_provider(provider).len()
+        }).into_iter()
+        .filter(|item| item["count"].as_u64().is_some_and(|count| count > 0)))
+        .map(|mut item| {
+            if item.get("source").is_none() {
+                item["source"] = json!("custom");
+            }
+            item
+        })
         .collect();
         Ok(json!({
             "tasks": [scheduled_tasks::task_by_id(maintenance::CREDENTIAL), scheduled_tasks::task_by_id(maintenance::MODEL)],

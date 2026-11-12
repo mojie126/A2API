@@ -557,6 +557,16 @@ impl AccountStore {
             .map(|record| credential_of_record(&record))
     }
 
+    /// 只取指定自定义提供商下的一条可用账号凭证，找不到或不属于该家时返回 None。
+    pub fn custom_credential(&self, provider_id: &str, account_id: &str) -> Option<CustomCredential> {
+        let _guard = self.guard();
+        self.records_for_provider(&_guard, provider_id)
+            .into_iter()
+            .find(|record| record.id() == account_id.trim())
+            .filter(|record| record.enabled() && (record.has_api_key() || record.no_auth()))
+            .map(|record| credential_of_record(&record))
+    }
+
     /// 改一条自定义账号的**凭证**：`apiKey`（可清除）与 `noAuth`（无需鉴权
     /// 标记）。返回变更说明（供界面提示与日志），没有任何变化时返回空表。
     ///

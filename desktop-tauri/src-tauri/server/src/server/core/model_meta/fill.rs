@@ -156,6 +156,85 @@ pub fn apply(provider: &str, item: &mut Value, identity_id: Option<&str>) {
     }
 }
 
+/// 取 models.dev 能为本条模型提供的模型元数据
+///
+/// 匹配规则与 [`apply`] 完全一致，调用方据此补充缺失能力并保留用户已有值
+pub fn metadata_details(provider: &str, item: &Value, identity_id: Option<&str>) -> MetadataDetails {
+    let lookup = resolve_metadata(provider, item, identity_id);
+    let Some(record) = lookup.record else {
+        return MetadataDetails::default();
+    };
+    let mut result = Map::new();
+    for (key, pick) in BOOL_BRIDGE {
+        if let Some(value) = pick(&record) {
+            result.insert(key.to_string(), Value::Bool(value));
+        }
+    }
+    for (key, pick) in TOKEN_BRIDGE {
+        if let Some(value) = pick(&record) {
+            result.insert(key.to_string(), Value::from(value));
+        }
+    }
+    MetadataDetails { capabilities: result, record: Some(record) }
+}
+
+/// models.dev 为一条模型提供的可补全数据
+#[derive(Clone, Debug, Default)]
+pub struct MetadataDetails {
+    pub capabilities: Map<String, Value>,
+    pub record: Option<Record>,
+}
+
+/// models.dev 身份查询结果
+#[derive(Clone, Debug)]
+pub struct MetadataLookup {
+    pub canonical: Option<String>,
+    pub match_source: &'static str,
+    pub candidates: usize,
+    record: Option<Record>,
+}
+
+/// 按与 [`apply`] 相同的规则查询 models.dev 身份
+pub fn metadata_lookup(provider: &str, item: &Value) -> MetadataLookup {
+    resolve_metadata(provider, item, None)
+}
+
+fn resolve_metadata(
+    provider: &str,
+    item: &Value,
+    identity_id: Option<&str>,
+) -> MetadataLookup {
+    let Some(id) = item.get("id").and_then(Value::as_str) else {
+        return MetadataLookup {
+            canonical: None,
+            match_source: "unmatched",
+            candidates: 0,
+            record: None,
+        };
+    };
+    let identity_id = identity_id.unwrap_or(id).trim();
+    let display_name = item
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let binding = model_rules::metadata_binding(provider, identity_id);
+    let (record, match_source, candidates) = match resolve(
+        provider, item, identity_id, display_name, binding.as_ref(),
+    ) {
+        Resolution::Matched(record, source) => (Some(record), source, 0),
+        Resolution::Ambiguous(count) => (None, "ambiguous", count),
+        Resolution::Stale => (None, "stale", snapshot::candidate_count(identity_id, display_name)),
+        Resolution::Unmatched => (None, "unmatched", snapshot::candidate_count(identity_id, display_name)),
+    };
+    MetadataLookup {
+        canonical: record.as_ref().map(|record| record.canonical.clone()),
+        match_source,
+        candidates,
+        record,
+    }
+}
+
 enum Resolution {
     Matched(Record, &'static str),
     Ambiguous(usize),
@@ -337,6 +416,24 @@ fn normalize_levels(item: &mut Value, record: Option<&Record>) {
     object.insert("reasoningSource".into(), json!(source));
 }
 
+/// 只按 models.dev 记录补充缺失的思考档位，不覆盖本家已声明的档位
+pub fn apply_reasoning_record(item: &mut Value, record: &Record) {
+    if record.levels.is_empty() {
+        return;
+    }
+    let explicit = LEVEL_KEYS.iter().any(|key| {
+        item.get(*key).and_then(Value::as_array).is_some_and(|levels| !levels.is_empty())
+    });
+    if explicit {
+        return;
+    }
+    let Some(object) = item.as_object_mut() else {
+        return;
+    };
+    object.insert("reasoningLevels".to_string(), json!(record.levels));
+    object.insert("reasoningSource".to_string(), json!("modelsdev"));
+}
+
 fn level_text(value: &Value) -> Option<String> {
     value
         .as_str()
@@ -382,4 +479,27 @@ pub fn mark_user(item: &mut Value, keys: &[String]) {
         sources.insert(key.clone(), json!("user"));
     }
     object.insert("capSources".to_string(), Value::Object(sources));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_record_only_fills_atomically_missing_levels() {
+        let record = Record {
+            canonical: "provider/model".to_string(),
+            levels: vec!["low".to_string(), "high".to_string()],
+            ..Default::default()
+        };
+        let mut item = json!({ "id": "model" });
+        apply_reasoning_record(&mut item, &record);
+        assert_eq!(item["reasoningLevels"], json!(["low", "high"]));
+        assert_eq!(item["reasoningSource"], json!("modelsdev"));
+
+        let mut declared = json!({ "id": "model", "reasoningLevels": ["none"] });
+        apply_reasoning_record(&mut declared, &record);
+        assert_eq!(declared["reasoningLevels"], json!(["none"]));
+        assert!(declared.get("reasoningSource").is_none());
+    }
 }

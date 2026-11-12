@@ -15,9 +15,7 @@ use crate::server::http::{ok_json, parse_body};
 use crate::server::ServerState;
 
 fn available_models(state: &ServerState) -> Vec<Value> {
-    catalog::session_models(state.store()).into_iter()
-        .filter(|model| model.get("kind").and_then(Value::as_str) != Some("image"))
-        .collect()
+    catalog::special_route_models(state.store())
 }
 
 fn view(state: &ServerState) -> Result<Value, GatewayError> {
@@ -61,6 +59,7 @@ fn validate_model(state: &ServerState, settings: &TitleRoutes) -> Result<(), Gat
         if model.is_empty() { continue; }
         let available = available_models(state).iter().any(|item|
             item.get("id").and_then(Value::as_str)
+                .or_else(|| item.get("model").and_then(Value::as_str))
                 .is_some_and(|id| title_routes::model_key(id) == title_routes::model_key(model)));
         if available || before.contains(&title_routes::model_key(model)) { continue; }
         return Err(GatewayError::bad_request(
