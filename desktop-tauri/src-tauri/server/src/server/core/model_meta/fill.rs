@@ -272,6 +272,9 @@ fn resolve(
     if let Some(record) = snapshot::by_key_unique(identity_id) {
         return Resolution::Matched(record, "id");
     }
+    if let Some(record) = snapshot::by_key_preview_unique(identity_id) {
+        return Resolution::Matched(record, "preview");
+    }
 
     if let Some(name) = display_name {
         let Some(normalized) = snapshot::normalize_name(name) else {

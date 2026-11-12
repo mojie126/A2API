@@ -14,9 +14,9 @@
 //! ── 归一化口径必须与脚本逐字一致 ────────────────────────────
 //! [`key_of`] 是 `scripts/sync-modelsdev.mjs` 里 `keyOf` 的孪生实现：取 id 的
 //! **末段**（我们各家的模型名基本等同于模型本名，而 models.dev 的 id 一律带
-//! lab 前缀），小写、只留字母数字。两侧任何一处改了，索引就会「刷新后突然
-//! 全不命中」—— 这个症状不会报错，只会让档位悄悄变回通用表，所以两处都写了
-//! 指向对方的注释。
+//! lab 前缀），同时剥离自定义提供商的冒号命名空间，小写、只留字母数字，
+//! 两侧任何一处改了，索引就会「刷新后突然全不命中」—— 这个症状不会报错，
+//! 只会让档位悄悄变回通用表，所以两处都写了指向对方的注释
 //!
 //! ── 一次装载、之后只读 ──────────────────────────────────────
 //! 索引是「读多写极少」的共享态：读路径（每次清单成型都要按模型查一次）拿读
@@ -126,6 +126,32 @@ impl Snapshot {
         (indexes.len() == 1).then(|| self.models[indexes[0]].clone())
     }
 
+    /// 按归一化模型 ID 的唯一 preview 后缀取记录
+    ///
+    /// 只允许候选键比查询键多出 `preview` 或 `latest`，不把任意包含关系都当匹配，
+    /// 避免把普通版、免费版与能力不同的另一条模型静默合并
+    pub fn by_key_preview_unique(&self, model: &str) -> Option<Record> {
+        let key = key_of(model.trim());
+        if key.is_empty() {
+            return None;
+        }
+        let mut matched = None;
+        for (candidate, indexes) in &self.by_key {
+            let Some(suffix) = candidate.strip_prefix(&key) else {
+                continue;
+            };
+            if !matches!(suffix, "preview" | "latest") {
+                continue;
+            }
+            for index in indexes {
+                if matched.replace(self.models[*index].clone()).is_some() {
+                    return None;
+                }
+            }
+        }
+        matched
+    }
+
     /// 按归一化模型名取唯一记录；多个同名模型时返回 `None`。
     pub fn by_name_unique(&self, name: &str) -> Option<Record> {
         let Some(name) = normalize_name(name) else {
@@ -194,9 +220,12 @@ fn db() -> Option<Db> {
     DB.get().and_then(|slot| slot.as_ref()).cloned()
 }
 
-/// 索引键：id 末段 + 小写 + 只留字母数字（脚本 `keyOf` 的孪生，见模块头）。
+/// 索引键：id 末段 + 小写 + 只留字母数字（脚本 `keyOf` 的孪生，见模块头）
+///
+/// 自定义提供商的模型常写成 `cn:glm-5.3`，冒号前后不是路径层级却承担同样的
+/// 命名空间作用，因此末段同时按 `/` 与 `:` 切分
 pub fn key_of(id: &str) -> String {
-    id.rsplit('/')
+    id.rsplit(|ch| ch == '/' || ch == ':')
         .next()
         .unwrap_or(id)
         .chars()
@@ -223,6 +252,11 @@ pub fn by_name_unique(name: &str) -> Option<Record> {
 
 pub fn candidate_count(model: &str, name: Option<&str>) -> usize {
     snapshot().candidate_count(model, name)
+}
+
+/// 按归一化模型 ID 的唯一 preview 后缀取记录
+pub fn by_key_preview_unique(model: &str) -> Option<Record> {
+    snapshot().by_key_preview_unique(model)
 }
 
 pub fn search(query: &str) -> Vec<Value> {
@@ -533,6 +567,60 @@ mod tests {
             .by_name_unique("CLAUDE-SONNET 4")
             .expect("名称应对齐");
         assert_eq!(record.canonical, "anthropic/claude-sonnet-4");
+    }
+
+    #[test]
+    fn colon_namespace_uses_the_model_tail() {
+        let text = json!({
+            "generatedAt": 1,
+            "models": {
+                "deepseekv41flash": {
+                    "canonical": "deepseek/deepseek-v4.1-flash"
+                }
+            }
+        })
+        .to_string();
+        let snapshot = parse(&text, "builtin").expect("测试快照应能解析");
+        let record = snapshot
+            .by_key_unique("cn:deepseek-v4.1-flash")
+            .expect("冒号命名空间应按末段命中");
+        assert_eq!(record.canonical, "deepseek/deepseek-v4.1-flash");
+    }
+
+    #[test]
+    fn preview_suffix_matches_only_when_unique() {
+        let text = json!({
+            "generatedAt": 1,
+            "models": {
+                "minimaxm31flashpreview": {
+                    "canonical": "minimax/MiniMax-M3.1-Flash-Preview"
+                }
+            }
+        })
+        .to_string();
+        let snapshot = parse(&text, "builtin").expect("测试快照应能解析");
+        let record = snapshot
+            .by_key_preview_unique("cn:minimax-m3.1-flash")
+            .expect("唯一 preview 后缀应对齐");
+        assert_eq!(record.canonical, "minimax/MiniMax-M3.1-Flash-Preview");
+    }
+
+    #[test]
+    fn preview_suffix_rejects_multiple_candidates() {
+        let text = json!({
+            "generatedAt": 1,
+            "models": {
+                "modelpreview": {
+                    "canonical": "vendor/model-preview"
+                },
+                "modellatest": {
+                    "canonical": "other/model-latest"
+                }
+            }
+        })
+        .to_string();
+        let snapshot = parse(&text, "builtin").expect("测试快照应能解析");
+        assert!(snapshot.by_key_preview_unique("model").is_none());
     }
 
     #[test]

@@ -527,22 +527,25 @@ pub(super) fn parse_zhipu(
 }
 
 /// 商汤日日新 `tokenplan/pool-usage`：
-/// `{ plan, pools: [{ id, name, pool_type, model_ids, window_5h, window_7d, grant_balance }] }`。
+/// `{ plan, pools: [{ id, name, pool_type, model_ids, window_5h, window_7d, grant_balance, nearest_grant_expiry, nearest_grant_expiring_balance }] }`。
 ///
-/// 主读数是**通用池（`pool_type = default`）5 小时窗口的剩余百分比**（缺失时
-/// 退 7 天窗口）—— 与 OmniProxy 的自动跳过判定同一口径。
-/// 明细行按池 × 窗口展开（两个池各两层窗口），返赠余额单独一行。
+/// 主读数是各池**返赠余额的合计**，缺失时退通用池 5 小时窗口的剩余百分比。
+/// 返赠按池分别保留，因为各池的可用范围与到期时刻不同，不能当成同一个可相加
+/// 余额；窗口仍作为 `windows[]` 逐池逐窗展示，耗尽项由前端折叠
+struct SensenovaPool {
+    name: String,
+    pool_type: String,
+    window_5h: Option<Value>,
+    window_7d: Option<Value>,
+    grant_balance: Option<f64>,
+    nearest_grant_expiry: Option<i64>,
+    nearest_grant_expiring_balance: Option<f64>,
+}
+
 pub(super) fn parse_sensenova(payload: &Value) -> Option<Value> {
     let data = map_of(payload)?;
     let pools_raw = data.get("pools")?.as_array()?;
-    struct Pool {
-        name: String,
-        pool_type: String,
-        window_5h: Option<Value>,
-        window_7d: Option<Value>,
-        grant_balance: Option<f64>,
-    }
-    let mut pools: Vec<Pool> = Vec::new();
+    let mut pools: Vec<SensenovaPool> = Vec::new();
     for item in pools_raw {
         let Some(map) = map_of(item) else { continue };
         let window_5h = read_sensenova_window(map.get("window_5h"));
@@ -550,7 +553,7 @@ pub(super) fn parse_sensenova(payload: &Value) -> Option<Value> {
         if window_5h.is_none() && window_7d.is_none() {
             continue;
         }
-        pools.push(Pool {
+        pools.push(SensenovaPool {
             name: map
                 .get("name")
                 .and_then(Value::as_str)
@@ -566,6 +569,8 @@ pub(super) fn parse_sensenova(payload: &Value) -> Option<Value> {
             window_5h,
             window_7d,
             grant_balance: number_at(map, "grant_balance"),
+            nearest_grant_expiry: unix_to_ms(map.get("nearest_grant_expiry")),
+            nearest_grant_expiring_balance: number_at(map, "nearest_grant_expiring_balance"),
         });
     }
     if pools.is_empty() {
@@ -575,10 +580,39 @@ pub(super) fn parse_sensenova(payload: &Value) -> Option<Value> {
         .iter()
         .find(|pool| pool.pool_type == "default")
         .or_else(|| pools.first())?;
-    let available = window_remaining_percent(general.window_5h.as_ref())
+    let grants: Vec<f64> = pools
+        .iter()
+        .filter_map(|pool| pool.grant_balance.filter(|value| *value > 0.0))
+        .collect();
+    let general_percent = window_remaining_percent(general.window_5h.as_ref())
         .or_else(|| window_remaining_percent(general.window_7d.as_ref()));
+    let (available, unit) = if grants.is_empty() {
+        (general_percent, "%".to_string())
+    } else {
+        (Some(grants.iter().sum()), "积分".to_string())
+    };
     let mut wallets: Vec<Value> = Vec::new();
+    let mut credits: Vec<Value> = Vec::new();
     for pool in &pools {
+        if let Some(mut row) = wallet(
+            "grant",
+            &format!("{} · 返赠积分", pool.name),
+            pool.grant_balance,
+            "积分",
+        ) {
+            if let Some(object) = row.as_object_mut() {
+                let remaining = object.get("balance").cloned().unwrap_or(Value::Null);
+                object.insert("remain".to_string(), remaining);
+                if let Some(expires) = pool.nearest_grant_expiry {
+                    object.insert("expireAt".to_string(), Value::from(expires));
+                }
+                if let Some(expiring) = pool.nearest_grant_expiring_balance {
+                    object.insert("expiringBalance".to_string(), json!(expiring));
+                }
+            }
+            wallets.push(row.clone());
+            credits.push(row);
+        }
         for (key, label, window) in [
             ("5h", "5 小时", pool.window_5h.as_ref()),
             ("7d", "7 天", pool.window_7d.as_ref()),
@@ -590,14 +624,70 @@ pub(super) fn parse_sensenova(payload: &Value) -> Option<Value> {
                 window_remaining_percent(Some(window)),
                 "%",
             ) {
+                let mut row = row;
+                if let Some(object) = row.as_object_mut() {
+                    if let Some(resets) = window.get("resetsAt") {
+                        object.insert("resetsAt".to_string(), resets.clone());
+                    }
+                    object.insert("group".to_string(), Value::String(pool.name.clone()));
+                    object.insert("key".to_string(), Value::String(format!("{}:{key}", pool.name)));
+                    object.insert("window".to_string(), Value::String(key.to_string()));
+                }
                 wallets.push(row);
             }
         }
-        if let Some(row) = wallet("grant", &format!("{} · 活动返赠", pool.name), pool.grant_balance, "积分") {
-            wallets.push(row);
+    }
+    let windows = sensenova_windows(&pools);
+    let mut document = document(available, &unit, wallets, payload);
+    if let Some(object) = document.as_object_mut() {
+        if !windows.is_empty() {
+            object.insert("windows".to_string(), Value::Array(windows));
+        }
+        if !credits.is_empty() {
+            object.insert("credits".to_string(), Value::Array(credits));
         }
     }
-    Some(document(available, "%", wallets, payload))
+    Some(document)
+}
+
+/// 商汤每池两个窗口 → 前端逐窗口读数
+fn sensenova_windows(pools: &[SensenovaPool]) -> Vec<Value> {
+    let mut windows = Vec::new();
+    for pool in pools {
+        let is_general = pool.pool_type == "default";
+        for (key, label, window) in [
+            ("5h", "5 小时", pool.window_5h.as_ref()),
+            ("7d", "7 天", pool.window_7d.as_ref()),
+        ] {
+            let Some(window) = window else { continue };
+            let mut row = Map::new();
+            row.insert("key".to_string(), Value::String(format!("{}:{key}", pool.name)));
+            row.insert("label".to_string(), Value::String(format!("{} · {}", pool.name, label)));
+            row.insert("group".to_string(), Value::String(pool.name.clone()));
+            row.insert("window".to_string(), Value::String(key.to_string()));
+            row.insert("aside".to_string(), Value::Bool(!is_general));
+            if let Some(percent) = window_remaining_percent(Some(window)) {
+                row.insert("remainingPercent".to_string(), json!(percent));
+                row.insert("view".to_string(), Value::String(format!("剩余 {}%", percent_text(percent))));
+            }
+            if let Some(window_map) = window.as_object() {
+                if let Some(limit) = number_at(window_map, "limit") {
+                    row.insert("limit".to_string(), json!(limit));
+                }
+                if let Some(remaining) = number_at(window_map, "remaining") {
+                    row.insert("remaining".to_string(), json!(remaining));
+                }
+                if let Some(used) = number_at(window_map, "used") {
+                    row.insert("used".to_string(), json!(used));
+                }
+                if let Some(resets) = window_map.get("resetsAt") {
+                    row.insert("resetsAt".to_string(), resets.clone());
+                }
+            }
+            windows.push(Value::Object(row));
+        }
+    }
+    windows
 }
 
 /// 单层窗口 → 只留三个数值（`{limit, used, remaining, reset_at}`）
@@ -631,4 +721,71 @@ fn window_remaining_percent(window: Option<&Value>) -> Option<f64> {
     let limit = number_at(window, "limit").filter(|value| *value > 0.0)?;
     let remaining = number_at(window, "remaining")?;
     Some((remaining / limit * 100.0).clamp(0.0, 100.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sensenova_keeps_pool_grants_and_windows_separate() {
+        let payload = json!({
+            "plan": { "id": "free", "name": "Free Plan" },
+            "pools": [
+                {
+                    "id": "pool-general",
+                    "name": "通用积分池",
+                    "pool_type": "default",
+                    "window_5h": {
+                        "limit": "60000",
+                        "used": "1.12",
+                        "remaining": "59998.88",
+                        "reset_at": "1791012792"
+                    },
+                    "window_7d": {
+                        "limit": "600000",
+                        "used": "70679.296",
+                        "remaining": "529320.704",
+                        "reset_at": "1791181992"
+                    },
+                    "grant_balance": "257",
+                    "nearest_grant_expiry": "1792329599",
+                    "nearest_grant_expiring_balance": "57.1"
+                },
+                {
+                    "id": "pool-lite",
+                    "name": "Flash-Lite积分池",
+                    "pool_type": "dedicated",
+                    "window_5h": {
+                        "limit": "60000",
+                        "used": "0.198",
+                        "remaining": "59999.802",
+                        "reset_at": "1791012792"
+                    },
+                    "window_7d": {
+                        "limit": "600000",
+                        "used": "0.38",
+                        "remaining": "599999.62",
+                        "reset_at": "1791181992"
+                    },
+                    "grant_balance": "100",
+                    "nearest_grant_expiry": "1792425000"
+                }
+            ]
+        });
+        let report = parse_sensenova(&payload).expect("real pool shape should parse");
+        assert_eq!(report["available"], json!(357.0));
+        assert_eq!(report["unit"], json!("积分"));
+        let credits = report["credits"].as_array().expect("grant credits should be present");
+        assert_eq!(credits.len(), 2);
+        assert_eq!(credits[0]["remain"], json!(257.0));
+        assert_eq!(credits[0]["expireAt"], json!(1792329599_000_i64));
+        assert_eq!(credits[1]["remain"], json!(100.0));
+        let windows = report["windows"].as_array().expect("pool windows should be present");
+        assert_eq!(windows.len(), 4);
+        assert_eq!(windows[0]["group"], json!("通用积分池"));
+        assert_eq!(windows[2]["aside"], json!(true));
+        let remaining = windows[2]["remainingPercent"].as_f64().expect("window percentage should be numeric");
+        assert!((remaining - 99.99967).abs() < 0.00001);
+    }
 }

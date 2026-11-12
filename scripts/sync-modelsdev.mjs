@@ -48,10 +48,11 @@ const TIMEOUT_MS = 120_000
  * 为什么取末段：我们各家的模型名基本等同于模型本名（`glm-5.3`、
  * `deepseek-v4.1-flash`、`kimi-k3`），而 models.dev 的 id 一律带 lab 前缀
  * （`zhipuai/glm-5.3`）。取末段让两侧落进同一个键空间；归一去掉点与连字符，
- * 于是 `glm-5.3` / `glm-5-3` / `GLM-5.3` 是同一个键。
+ * 于是 `glm-5.3` / `glm-5-3` / `GLM-5.3` 是同一个键，自定义提供商的
+ * `cn:glm-5.3` 也按冒号后的模型名归一。
  */
 function keyOf(id) {
-  const tail = String(id ?? '').split('/').pop() ?? ''
+  const tail = String(id ?? '').split(/[/:]/).pop() ?? ''
   return tail.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 

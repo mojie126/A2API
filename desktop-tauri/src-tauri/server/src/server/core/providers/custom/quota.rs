@@ -37,7 +37,9 @@ pub(super) fn sources(provider: &str, scheme: Scheme, report: &Value) -> Vec<Val
                 if let Some(remaining) = number_of(pool.get("grant_balance")) {
                     sources.push(json!({ "id": format!("pool:{id}:grant"), "provider": provider,
                         "label": format!("{name} · 活动返赠"), "models": models,
-                        "planId": plan, "planName": plan, "unit": "积分", "remaining": remaining }));
+                        "planId": plan, "planName": plan, "unit": "积分", "remaining": remaining,
+                        "expiresAt": unix_to_ms(pool.get("nearest_grant_expiry")).unwrap_or(0),
+                        "expiringBalance": number_of(pool.get("nearest_grant_expiring_balance")) }));
                 }
             }
         }

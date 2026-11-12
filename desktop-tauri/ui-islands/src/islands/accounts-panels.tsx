@@ -1067,7 +1067,10 @@ function UsageReadingCell({ account, entry }: { account: AccountRecord; entry: U
     )
   }
   const rawSummary = usageSummary(entry)
-  const creditRows = supportsCreditDetail(account) && !usageFailureOf(entry) ? creditRowsOf(entry, now) : []
+  const customCreditDetail = providerOf(account).startsWith('custom-')
+    && Array.isArray((entry as Record<string, unknown> | null | undefined)?.credits)
+  const creditRows = (supportsCreditDetail(account) || customCreditDetail) && !usageFailureOf(entry)
+    ? creditRowsOf(entry, now) : []
   const expiring = creditExpirySummaryOf(creditRows.flatMap(row => row.expiry ? [row.expiry] : []), now)
   const expiryText = creditExpiryText(expiring, t, numberText, creditExpiryUnitOf(entry))
   const summary = expiryText.detail ? { ...rawSummary, title: [rawSummary.title, expiryText.detail].filter(Boolean).join(' · ') } : rawSummary

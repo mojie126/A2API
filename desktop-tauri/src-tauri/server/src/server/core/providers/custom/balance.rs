@@ -21,7 +21,7 @@
 //! | `new_api` | `{base}/api/user/self` + `{base}/api/status` | **控制台访问令牌**（Bearer + 可选 `new-api-user` 头） | `data.quota`，按 `/api/status` 的显示口径换算成货币 |
 //! | `deepseek` | `{base}/user/balance` | 账号 API Key（Bearer） | `balance_infos[].total_balance`（多币种） |
 //! | `opencode` | `{base}/v1/usage` | 账号 API Key（Bearer） | rolling / weekly / monthly 三窗口剩余百分比 |
-//! | `sensenova` | `platform.sensenova.cn` 控制面（与 base 无关） | **手机号验证码**换 OAuth token，refresh token 自动续期（见 `sensenova_auth`） | 通用池 / Flash-Lite 池各 5 小时 / 7 天窗口剩余百分比 + 活动返赠 |
+//! | `sensenova` | `platform.sensenova.cn` 控制面（与 base 无关） | **手机号验证码**换 OAuth token，refresh token 自动续期（见 `sensenova_auth`） | 各积分池返赠余额与最近到期 + 通用池 / Flash-Lite 池 5 小时 / 7 天窗口 |
 //! | `zhipu` | `bigmodel.cn` 控制台（与 base 无关） | **控制台令牌** | 账户余额（人民币元） |
 //! | `zhipu_zai` | `api.z.ai` 控制面（与 base 无关） | 账号 API Key 铸 **SIGN 签名**（见 `zhipu_sign_jwt`） | 账户余额（美元） |
 //!
