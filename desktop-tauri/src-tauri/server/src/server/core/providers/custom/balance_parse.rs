@@ -529,7 +529,7 @@ pub(super) fn parse_zhipu(
 /// 商汤日日新 `tokenplan/pool-usage`：
 /// `{ plan, pools: [{ id, name, pool_type, model_ids, window_5h, window_7d, grant_balance, nearest_grant_expiry, nearest_grant_expiring_balance }] }`。
 ///
-/// 主读数是各池**返赠余额的合计**，缺失时退通用池 5 小时窗口的剩余百分比。
+/// 主读数是通用池的**返赠余额**，缺失时退通用池 5 小时窗口的剩余百分比。
 /// 返赠按池分别保留，因为各池的可用范围与到期时刻不同，不能当成同一个可相加
 /// 余额；窗口仍作为 `windows[]` 逐池逐窗展示，耗尽项由前端折叠
 struct SensenovaPool {
@@ -580,16 +580,11 @@ pub(super) fn parse_sensenova(payload: &Value) -> Option<Value> {
         .iter()
         .find(|pool| pool.pool_type == "default")
         .or_else(|| pools.first())?;
-    let grants: Vec<f64> = pools
-        .iter()
-        .filter_map(|pool| pool.grant_balance.filter(|value| *value > 0.0))
-        .collect();
     let general_percent = window_remaining_percent(general.window_5h.as_ref())
         .or_else(|| window_remaining_percent(general.window_7d.as_ref()));
-    let (available, unit) = if grants.is_empty() {
-        (general_percent, "%".to_string())
-    } else {
-        (Some(grants.iter().sum()), "积分".to_string())
+    let (available, unit) = match general.grant_balance {
+        Some(grant) => (Some(grant), "积分".to_string()),
+        None => (general_percent, "%".to_string()),
     };
     let mut wallets: Vec<Value> = Vec::new();
     let mut credits: Vec<Value> = Vec::new();
@@ -774,7 +769,7 @@ mod tests {
             ]
         });
         let report = parse_sensenova(&payload).expect("real pool shape should parse");
-        assert_eq!(report["available"], json!(357.0));
+        assert_eq!(report["available"], json!(257.0));
         assert_eq!(report["unit"], json!("积分"));
         let credits = report["credits"].as_array().expect("grant credits should be present");
         assert_eq!(credits.len(), 2);
