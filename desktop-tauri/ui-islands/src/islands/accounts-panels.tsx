@@ -200,13 +200,21 @@ export function GroupBandRow({ group, collapsed, colSpan }: {
   // 分页不参与 —— 见 groupBalanceOf 的说明。
   const filtered = getStore().groupTotalFiltered
   const members = filtered ? group.accounts : group.members
-  // 「值不值得画合计」看的是**整组**有几个账号（一个账号的组，合计与下面那行读数
-  // 逐字重复）；而**加哪些账号**看的是当前口径。两者不能合成一个判据：按筛选口径下
-  // 筛出唯一一行时，合计正是用户要的那个数（100），不能因为「可见只剩一行」就藏掉。
-  const worthSumming = group.members.length > 1 && members.length > 0
-  const balance = worthSumming && members.some(supportsUsage)
+  // **加哪些账号**看的是当前口径；按筛选口径下筛出唯一一行时，合计正是用户要的
+  // 那个数（100），不能因为「可见只剩一行」就藏掉。
+  const balance = members.length > 0 && members.some(supportsUsage)
     ? groupBalanceOf(members, filtered ? 'filtered' : 'group', now)
     : null
+  /**
+   * 一个读数都没计入时**不画**合计徽章。
+   *
+   * 这种组的读数要么是「这家不支持余额查询」、要么是「查询凭证还没配」、
+   * 要么是「只给百分比读数、加不起来」—— 都不是「余额为零」。画出来的
+   * 「可用合计 — 计入 0/1」是个空壳：破折号让人以为这家没额度，
+   * 而底下那行余额列才写着真正的理由（「未配置」/「可用最低 42%」）。
+   * 有读数就画（含不限额度那种 ∞）。
+   */
+  const showBalance = balance !== null && (balance.counted > 0 || balance.unlimited > 0)
   /**
    * 整条分组带可点折叠。
    *
@@ -243,7 +251,7 @@ export function GroupBandRow({ group, collapsed, colSpan }: {
             disabled: group.disabled,
             limited: group.limited > 0 ? t(' · 限流 {n}', { n: group.limited }) : '',
           })}</span>
-          {balance ? <GroupBalanceBadge balance={balance} /> : null}
+          {balance && showBalance ? <GroupBalanceBadge balance={balance} /> : null}
           {sortSummary ? (
             <Button size='default' variant='ghost' type='button' className='grp-sort-mark'
               title={t('当前排序规则：{rules}。点击调整', { rules: sortSummary })}

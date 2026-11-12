@@ -4,12 +4,21 @@
  * 上游控制台已关闭账号密码登录，发码与校验由网关的 `/api/sensenova/sms/*`
  * 两段接口完成。组件只处理手机号、验证码与一次性 ticket，验证码不落草稿，
  * refresh token 由后端加密保存。
+ *
+ * ── 布局口径 ──────────────────────────────────────────────────
+ * 两种宿主：
+ *   · 账号设置弹窗（`variant='field'`）—— 用 `acct-dlg-field` 那套字段行，
+ *     与同一张卡里的「自动查询余额」「查询间隔」等行对齐；
+ *   · 添加提供商弹窗（`variant='add'`）—— 用 `.add-field` 的标签网格，
+ *     与上面「名称」「协议」「Base URL」等行对齐。
+ * 两种宿主都用同一份字段结构，只是外层类名不同 —— 字段各写一遍必然漂。
  */
 
 import * as React from 'react'
-import { Button, Field, FieldLabel, Input } from '@ui'
+import { Button, Input, Label } from '@ui'
 
 import { describeError, shared, toast } from './add-account-bridge'
+import { SensenovaCaptchaDialog } from './sensenova-captcha-dialog'
 import { t } from '../i18n'
 
 export type SensenovaSmsContext = {
@@ -54,9 +63,12 @@ function request(path: string, body: Record<string, unknown>): Promise<unknown> 
 export function SensenovaSmsLogin({
   context,
   disabled,
+  variant = 'field',
 }: {
   context: SensenovaSmsContext
   disabled?: boolean
+  /** 宿主形态：账号设置弹窗（字段行） / 添加提供商弹窗（标签网格） */
+  variant?: 'field' | 'add'
 }): React.ReactElement {
   const [phone, setPhone] = React.useState('')
   const [code, setCode] = React.useState('')
@@ -65,7 +77,6 @@ export function SensenovaSmsLogin({
   const [tenants, setTenants] = React.useState<Tenant[]>([])
   const [tenantIndex, setTenantIndex] = React.useState(0)
   const [captcha, setCaptcha] = React.useState<{ codeKey: string; image: string; block: string } | null>(null)
-  const [captchaOffset, setCaptchaOffset] = React.useState(0)
   const [busy, setBusy] = React.useState<'send' | 'verify' | null>(null)
   const [hint, setHint] = React.useState('')
 
@@ -103,7 +114,6 @@ export function SensenovaSmsLogin({
           image: String(data.captcha?.image || ''),
           block: String(data.captcha?.block || ''),
         })
-        setCaptchaOffset(0)
         setHint(t('请完成滑块验证后继续发送验证码'))
       } else {
         setCaptcha(null)
@@ -117,14 +127,14 @@ export function SensenovaSmsLogin({
     }
   }
 
-  async function verifyCaptcha(): Promise<void> {
+  async function verifyCaptcha(offset: number): Promise<void> {
     if (busy || !captcha || !ticket) return
     setBusy('send')
     try {
       const data = (await request('/api/sensenova/sms/captcha', {
         ticket,
         codeKey: captcha.codeKey,
-        codeValue: captchaOffset,
+        codeValue: offset,
         accountId: context.accountId || undefined,
         proxy: context.proxy?.(),
       })) as {
@@ -139,7 +149,6 @@ export function SensenovaSmsLogin({
           image: String(data.captcha?.image || ''),
           block: String(data.captcha?.block || ''),
         })
-        setCaptchaOffset(0)
         setHint(t('滑块验证又刷新了一次，请重新拖动'))
         return
       }
@@ -212,10 +221,20 @@ export function SensenovaSmsLogin({
   }
 
   return (
-    <div className='flex flex-col gap-3'>
-      <Field orientation='horizontal' className='field-row mt-2.5'>
-        <FieldLabel htmlFor='sensenova-sms-phone'>{t('手机号')}</FieldLabel>
-        <div className='flex min-w-[260px] flex-1 items-center gap-2'>
+    <div className={variant === 'add' ? 'sensenova-sms sensenova-sms-add' : 'sensenova-sms sensenova-sms-field'}>
+      {variant === 'add' ? (
+        <div className='add-field sensenova-sms-section'>
+          <Label>{t('余额查询')}</Label>
+          <span className='hint sensenova-sms-section-note'>
+            {t('余额查询走手机号验证码登录；短信由商汤官方发送，验证码不落草稿。')}
+          </span>
+        </div>
+      ) : null}
+      <div className='add-field sensenova-sms-field'>
+        <Label htmlFor='sensenova-sms-phone' className={variant === 'add' ? '' : 'acct-dlg-label'}>
+          {t('手机号')}
+        </Label>
+        <div className='sensenova-sms-control'>
           <Input
             id='sensenova-sms-phone'
             type='tel'
@@ -229,49 +248,27 @@ export function SensenovaSmsLogin({
           <Button
             type='button'
             variant='outline'
+            className='sensenova-sms-send'
             disabled={disabled || busy !== null}
             onClick={() => { void send() }}
           >
             {busy === 'send' ? t('发送中…') : t('获取验证码')}
           </Button>
         </div>
-      </Field>
+        <span className='hint'>{t('手机号与短信验证码由商汤官方发送；每次发码的有效期约 5 分钟。')}</span>
+      </div>
       {captcha ? (
-        <div className='flex flex-col gap-2 rounded-md border border-border bg-surface-inset p-3'>
-          <p className='text-xs text-subtle'>{t('拖动下方滑块，让拼图与缺口对齐，然后点「完成验证」。')}</p>
-          <div className='relative h-[190px] w-[316px] max-w-full overflow-hidden rounded-md bg-slate-100'>
-            <img src={`data:image/png;base64,${captcha.image}`} alt='' className='h-full w-full select-none' draggable={false} />
-            <img
-              src={`data:image/png;base64,${captcha.block}`}
-              alt=''
-              draggable={false}
-              className='pointer-events-none absolute inset-y-0 h-full select-none'
-              style={{ left: `${(captchaOffset / 316) * 100}%`, width: '14.873417721518987%' }}
-            />
-          </div>
-          <input
-            type='range'
-            min={0}
-            max={256}
-            step={1}
-            value={captchaOffset}
-            disabled={disabled || busy !== null}
-            onChange={event => setCaptchaOffset(Number(event.currentTarget.value) || 0)}
-            aria-label={t('拖动滑块完成人机验证')}
-          />
-          <div className='flex items-center gap-2'>
-            <Button type='button' size='sm' disabled={disabled || busy !== null} onClick={() => { void verifyCaptcha() }}>
-              {busy === 'send' ? t('验证中…') : t('完成验证')}
-            </Button>
-            <span className='text-xs text-subtle'>{t('滑块未对齐时不会通过，请重新拖动。')}</span>
-          </div>
-        </div>
+        <p className='sensenova-sms-need'>
+          {t('商汤要求先完成滑块验证才能发送短信验证码，点上面的「获取验证码」会弹出验证窗口。')}
+        </p>
       ) : null}
-      <Field orientation='horizontal' className='field-row'>
-        <FieldLabel htmlFor='sensenova-sms-code'>{t('验证码')}</FieldLabel>
+      <div className='add-field sensenova-sms-field'>
+        <Label htmlFor='sensenova-sms-code' className={variant === 'add' ? '' : 'acct-dlg-label'}>
+          {t('验证码')}
+        </Label>
         <Input
           id='sensenova-sms-code'
-          className='min-w-[260px]'
+          className='sensenova-sms-code'
           inputMode='numeric'
           autoComplete='one-time-code'
           maxLength={6}
@@ -280,13 +277,16 @@ export function SensenovaSmsLogin({
           placeholder={t('6 位数字')}
           onChange={event => setCode(event.currentTarget.value.replace(/\D/g, ''))}
         />
-      </Field>
+        <span className='hint'>{t('填入刚收到的 6 位数字验证码。')}</span>
+      </div>
       {tenants.length > 1 ? (
-        <Field orientation='horizontal' className='field-row'>
-          <FieldLabel htmlFor='sensenova-sms-tenant'>{t('租户')}</FieldLabel>
+        <div className='add-field sensenova-sms-field'>
+          <Label htmlFor='sensenova-sms-tenant' className={variant === 'add' ? '' : 'acct-dlg-label'}>
+            {t('租户')}
+          </Label>
           <select
             id='sensenova-sms-tenant'
-            className='min-w-[260px] rounded-md border border-border bg-surface px-2 py-1.5 text-sm'
+            className='sensenova-sms-tenant'
             value={String(tenantIndex)}
             onChange={event => setTenantIndex(Number(event.currentTarget.value) || 0)}
           >
@@ -296,9 +296,11 @@ export function SensenovaSmsLogin({
               </option>
             ))}
           </select>
-        </Field>
+          <span className='hint'>{t('该手机号绑定了多个租户，请选择账号所属的那个。')}</span>
+        </div>
       ) : null}
-      <div className='flex items-center gap-3'>
+      <div className='sensenova-sms-foot'>
+        {hint ? <span className='sensenova-sms-hint'>{hint}</span> : null}
         <Button
           type='button'
           disabled={disabled || busy !== null}
@@ -310,8 +312,17 @@ export function SensenovaSmsLogin({
               ? t('登录并更新查询凭证')
               : t('登录并添加账号')}
         </Button>
-        {hint ? <span className='text-xs text-subtle'>{hint}</span> : null}
       </div>
+      <SensenovaCaptchaDialog
+        open={Boolean(captcha)}
+        payload={captcha ? { image: captcha.image, block: captcha.block } : null}
+        busy={busy !== null}
+        onSubmit={offset => { void verifyCaptcha(offset) }}
+        onClose={() => {
+          setCaptcha(null)
+          setHint(t('滑块验证已取消，点「获取验证码」可重新开始'))
+        }}
+      />
     </div>
   )
 }

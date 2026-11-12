@@ -300,6 +300,60 @@
   color: var(--text-2);
 }
 
+/* ── 商汤日日新：手机号验证码登录 ──────────────────────────────
+   与「添加账号」弹窗里那一段**同一套排版**（标签列定宽、控件落同一条竖线，
+   说明文字在控件下面）—— 两处是同一段功能，样式必须一致，不能一处左标签
+   一处上标签。因此这里直接复用 `.add-field` 那套标签列网格，只把列宽与内边距
+   调到与设置弹窗其它分组一致。 */
+
+.acct-settings-dialog .sensenova-sms-field {
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 5px 12px;
+  padding: 10px 14px;
+}
+.acct-settings-dialog .sensenova-sms-field > label,
+.acct-settings-dialog .sensenova-sms-field > [data-slot='label'] {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-2);
+}
+/* 分组框的行分隔由 `.acct-dlg-group > * + *` 统一给，`.add-field` 自己那条
+   会在两个相邻字段之间叠出双线 —— 这里只留一条。 */
+.acct-settings-dialog .sensenova-sms-field + .sensenova-sms-field { border-top: 0; }
+.acct-settings-dialog .sensenova-sms-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.acct-settings-dialog .sensenova-sms-control > [data-slot='input'] { flex: 1 1 auto; min-width: 0; }
+.acct-settings-dialog .sensenova-sms-send { flex: none; height: 28px; }
+.acct-settings-dialog .sensenova-sms-code { width: 118px; font-family: var(--font-mono); letter-spacing: .06em; }
+.acct-settings-dialog .sensenova-sms-tenant {
+  height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  padding: 0 8px;
+  font-size: 12.5px;
+}
+.acct-settings-dialog .sensenova-sms-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.acct-settings-dialog .sensenova-sms-hint {
+  margin-right: auto;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+/* 主按钮靠右：提示在左、按钮在右。提示为空时按钮就是唯一子元素，
+   靠 `margin-left: auto` 才能顶到右边（只给提示加 auto 不够）。 */
+.acct-settings-dialog .sensenova-sms-foot > button { margin-left: auto; }
+.acct-settings-dialog .sensenova-sms-need {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
 /* ── 窄窗口 ─────────────────────────────────────────────────── */
 
 @media (max-width: 950px) {

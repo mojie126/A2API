@@ -260,7 +260,7 @@
   gap: 0;
 }
 .acct-add-form-dialog .add-field {
-  grid-template-columns: 84px minmax(0, 1fr);
+  grid-template-columns: 112px minmax(0, 1fr);
   align-items: center;
   gap: 5px 12px;
   padding: 11px 14px;
@@ -270,11 +270,11 @@
 .acct-add-form-dialog .add-field > .hint { font-size: 11px; line-height: 1.5; color: var(--text-3); }
 .acct-add-form-dialog .add-form + .add-form { margin-top: 10px; }
 
-/* 手机验证码：三行收完（标签列 84px 与上面的表单网格同一条竖线）。
+/* 手机验证码：三行收完（标签列 112px 与上面的表单网格同一条竖线）。
    .sms-form 只是那两行的壳，行自己的内边距已经够了，别让分组框再叠一层 */
 .acct-add-form-dialog .add-group-box > .sms-form { padding: 0; }
 .acct-add-form-dialog .sms-form { display: block; padding: 0; }
-.acct-add-form-dialog .sms-field { grid-template-columns: 84px minmax(0, 1fr); gap: 12px; padding: 11px 14px; }
+.acct-add-form-dialog .sms-field { grid-template-columns: 112px minmax(0, 1fr); gap: 12px; padding: 11px 14px; }
 .acct-add-form-dialog .sms-field + .sms-field { border-top: 1px solid var(--hairline); }
 .acct-add-form-dialog .sms-field > .lb { font-size: 11.5px; color: var(--text-2); }
 .acct-add-form-dialog .sms-foot {
@@ -282,7 +282,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  margin-left: 84px;
+  margin-left: 112px;
   padding: 11px 14px 11px 0;
   border-top: 1px solid var(--hairline);
 }
@@ -327,8 +327,8 @@
   .acct-add-dialog .add-provider-search { width: 100%; margin-left: 0; }
   .acct-add-dialog .add-provider-grid { height: 418px; }
   .acct-add-form-dialog .add-field,
-  .acct-add-form-dialog .sms-field { grid-template-columns: 76px minmax(0, 1fr); }
-  .acct-add-form-dialog .sms-foot { margin-left: 76px; }
+  .acct-add-form-dialog .sms-field { grid-template-columns: 100px minmax(0, 1fr); }
+  .acct-add-form-dialog .sms-foot { margin-left: 100px; }
 }
 @media (max-width: 560px) {
   .acct-add-form-dialog .add-field,
@@ -337,3 +337,64 @@
   .acct-add-form-dialog .sms-foot { margin-left: 0; }
   .acct-add-foot-host { flex-wrap: wrap; }
 }
+
+/* ── 商汤日日新：手机号验证码登录 ──────────────────────────────
+   这一段的字段行与上面的 .add-field 同口径（标签列定宽、控件落同一条竖线），
+   但控件本身比普通字段多一个「获取验证码」按钮，且底部那行是主按钮 + 提示。
+   分组框由调用方给（新建时是「余额查询」那一组），这里只管内部排版。 */
+
+.acct-add-form-dialog .sensenova-sms-add { display: block; }
+.acct-add-form-dialog .sensenova-sms-add .add-field + .add-field { border-top: 1px solid var(--hairline); }
+.acct-add-form-dialog .sensenova-sms-add .add-field > label { align-self: center; }
+.acct-add-form-dialog .sensenova-sms-control { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.acct-add-form-dialog .sensenova-sms-control > [data-slot='input'] { flex: 1 1 auto; min-width: 0; }
+.acct-add-form-dialog .sensenova-sms-send { flex: none; height: 28px; }
+.acct-add-form-dialog .sensenova-sms-code { width: 118px; font-family: var(--font-mono); letter-spacing: .06em; }
+.acct-add-form-dialog .sensenova-sms-tenant {
+  height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  padding: 0 8px;
+  font-size: 12.5px;
+}
+.acct-add-form-dialog .sensenova-sms-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 11px 14px;
+}
+/* 提示在左、主按钮在右（与弹窗底栏的按钮位一致） */
+.acct-add-form-dialog .sensenova-sms-hint {
+  margin-right: auto;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+/* 主按钮靠右：提示在左、按钮在右。提示为空时按钮就是唯一子元素，
+   靠 `margin-left: auto` 才能顶到右边（只给提示加 auto 不够）。 */
+.acct-add-form-dialog .sensenova-sms-foot > button { margin-left: auto; }
+
+/* 「余额查询」那一行：与上面的「名称 / 协议 / Base URL」同一排版 ——
+   标签在左、内容在右，说明文字在下一行。商汤这一段是「上游信息」框里的
+   普通条目，不单独成组。 */
+.acct-add-form-dialog .sensenova-sms-section > label {
+  align-self: center;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-2);
+}
+.acct-add-form-dialog .sensenova-sms-section-note {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+}
+.acct-add-form-dialog .sensenova-sms-need {
+  margin: 0;
+  padding: 0 14px 11px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+

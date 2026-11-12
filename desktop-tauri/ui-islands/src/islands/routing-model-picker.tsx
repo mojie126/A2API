@@ -26,15 +26,29 @@ export function RoutingModelPicker({ choices, accounts, lastUsed, selected, onCh
       ids.add(account.id)
       accountIds.set(id, ids)
     }
+    // **只列有账号的提供商**：这一栏是用来选「谁的模型参与路由」的，而成员
+    // 最终要落到账号上 —— 列一堆 0 账号的家进去，选完发现没有账号可参与，
+    // 白挑一遍。目录里那些一家模型都没有账号的条目（多数是别的实例带进来的
+    // 残留目录）在这里一律不出现。
     return [...new Map(choices.map(choice => [choice.provider, {
       id: choice.provider, label: choice.providerLabel, accounts: accountIds.get(choice.provider)?.size || 0,
-    }])).values()].sort((left, right) => Number(right.accounts > 0) - Number(left.accounts > 0)
-      || left.label.localeCompare(right.label) || left.id.localeCompare(right.id))
+    }])).values()].filter(item => item.accounts > 0)
+      .sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id))
   }, [choices, accounts])
   const providerQuery = providerSearch.trim().toLowerCase()
   const providers = React.useMemo(() => allProviders.filter(item => `${item.label} ${item.id}`.toLowerCase().includes(providerQuery)), [allProviders, providerQuery])
   const current = allProviders.find(item => item.id === provider)
   const visibleProviders = React.useMemo(() => new Set(providers.map(item => item.id)), [providers])
+  /**
+   * 可选的模型总数：左侧列表里那些家（都带账号）名下的模型。
+   *
+   * 用它当「已选择 N / M 个」的分母，而不是 `choices.length` —— 后者含那些
+   * 根本没列出来的家的模型，分母会大出一截，看起来像是还有几百个没选完。
+   */
+  const selectableCount = React.useMemo(() => {
+    const ids = new Set(allProviders.map(item => item.id))
+    return orderedChoices.filter(choice => ids.has(choice.provider)).length
+  }, [orderedChoices, allProviders])
   const query = modelSearch.trim().toLowerCase()
   const models = React.useMemo(() => orderedChoices.filter(choice => (current ? choice.provider === current.id : visibleProviders.has(choice.provider))
     && (!query || choice.model.toLowerCase().includes(query))), [orderedChoices, current, visibleProviders, query])
@@ -80,7 +94,7 @@ export function RoutingModelPicker({ choices, accounts, lastUsed, selected, onCh
         </div>
       </section>
     </div>
-    <div className='routing-model-selection-summary'><span>{t('已选择 {count} / {total} 个', { count: picked.size, total: choices.length })}</span>
+    <div className='routing-model-selection-summary'><span>{t('已选择 {count} / {total} 个', { count: picked.size, total: selectableCount })}</span>
       <Button variant='link' size='sm' disabled={disabled || !picked.size} onClick={() => onChange([])}>{t('清空选择')}</Button></div>
     {picked.size >= limit ? <p className='routing-config-note'>{t('一个路由组最多允许 {n} 个成员', { n: ROUTING_MEMBER_LIMIT })}</p> : null}
   </div>

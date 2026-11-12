@@ -435,6 +435,7 @@ export function CustomProviderBlock({
               商汤已改为手机号验证码登录，不能再让用户填控制台账号密码。 */}
           {createSensenova ? (
             <SensenovaSmsLogin
+              variant='add'
               context={{
                 createProvider: () => ({
                   name: readField(NAME_ID),
@@ -511,6 +512,7 @@ export function CustomProviderBlock({
               商汤的查询凭证由手机号验证码登录写入。 */}
           {existingSensenova ? (
             <SensenovaSmsLogin
+              variant='add'
               context={{
                 providerId: current,
                 apiKey: () => readField(EXISTING_APIKEY_ID),

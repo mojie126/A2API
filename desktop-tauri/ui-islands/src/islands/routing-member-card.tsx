@@ -11,11 +11,11 @@ import { RoutingAccountRow, RoutingActions, RoutingProviderMark, routingOrderKey
 import { RouteIcon } from './routing-ui'
 
 export function RoutingMemberCard({ member, accounts, label, name, index, first, last, open, locked, query, drag, sorting, now, activity,
-  onOpen, onJoin, onMove, onAccounts, onToggleAccount, onMoveAccount, onAccount, onSort }: {
+  onOpen, onJoin, onMove, onAccounts, onToggleAccount, onMoveAccount, onAccount, onSort, onRemove }: {
   member: RouteMember; accounts: AccountRecord[]; label: string; name: string; index: number; first: boolean; last: boolean; open: boolean; locked: boolean; query: string
   drag: ReturnType<typeof useRoutingDrag>; onOpen(open: boolean): void; onJoin(on: boolean): void; onMove(direction: number): void
   onAccounts(): void; onToggleAccount(id: string): void; onMoveAccount(id: string, direction: number): void; onAccount(id: string): void
-  sorting?: AccountSorting | null; now: number; activity: RoutingCanvasActivity; onSort(): void
+  sorting?: AccountSorting | null; now: number; activity: RoutingCanvasActivity; onSort(): void; onRemove(): void
 }) {
   const available = accounts.filter(account => providerOf(account) === member.provider)
   const runningAccounts = activity.members[member.id] || {}
@@ -43,6 +43,7 @@ export function RoutingMemberCard({ member, accounts, label, name, index, first,
         { label: t('提高优先级'), icon: 'arrowUp', disabled: orderLocked || !member.included || first, onClick: () => onMove(-1) },
         { label: t('降低优先级'), icon: 'arrowDown', disabled: orderLocked || !member.included || last, onClick: () => onMove(1) },
         { label: t('参与账号'), icon: 'accounts', disabled: locked, onClick: onAccounts },
+        { label: t('删除此成员'), destructive: true, disabled: locked, onClick: onRemove },
       ]} />
     </header>
     <RoutingConsumptionOrder provider={member.provider} sorting={sorting} independent disabled={locked} onSettings={onSort} />

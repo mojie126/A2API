@@ -97,6 +97,7 @@ function Frame() {
       if (item?.dataset.page) host().wbApp?.showPage(item.dataset.page)
     }}><Navigation /></NavList>
     <SidebarFooter className='sidebar-foot'>
+      <CheckinVerificationNotice />
       <div className='sidebar-status' id='sidebar-status' title={t('本地网关监听状态')} />
       <div id='theme-switch'><ThemeControl /></div>
     </SidebarFooter>
@@ -123,7 +124,6 @@ function Frame() {
         <section className={`page${page.startsWith('plugin:') ? ' active' : ''}`} data-page='__plugin__' id='plugin-page-host' />
       </div></div>
     </main>
-    <CheckinVerificationNotice />
   </AppFrame>
 }
 

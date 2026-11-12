@@ -57,6 +57,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::server::core::egress;
+use crate::server::core::providers::custom::sensenova_captcha;
 use crate::server::core::proxies::ResolvedProxy;
 use crate::server::core::user_agent::AccountRequest;
 use crate::server::logging;
@@ -366,15 +367,87 @@ async fn request_captcha(
     let image = payload
         .get("image")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or("")
+        .map(|text| clean_base64(text))
+        .unwrap_or_default()
         .to_string();
     let block = payload
         .get("block")
         .and_then(Value::as_str)
+        .map(|text| clean_base64(text))
+        .unwrap_or_default()
+        .to_string();
+    if status >= 400 || code_key.is_empty() || image.is_empty() || block.is_empty() {
+        return Err("商汤人机验证初始化失败，请稍后重试".to_string());
+    }
+    if let Ok(mut table) = pending_table().lock() {
+        if let Some(item) = table.get_mut(ticket) {
+            item.cookies = jar;
+        }
+    }
+    // 先自己解一遍：滑块是纯图像题，缺口位置就在背景图上（见
+    // `sensenova_captcha`）。解出来就直接提交，省掉用户手工拖动；
+    // 解不出来（图像形态变了）或上游判错，再回落到人工拖动那一路。
+    if let Some(offset) = sensenova_captcha::solve_offset(&image, &block) {
+        match complete_sms_captcha(ticket, &code_key, offset, proxy).await {
+            Ok(outcome) => {
+                logging::verbose("sensenova", &format!("captcha solved automatically, offset {offset}"));
+                return Ok(outcome);
+            }
+            Err(message) => {
+                logging::verbose("sensenova", &format!("captcha auto-solve rejected (offset {offset}): {message}"));
+                // 求解没通过：上游多半已作废这一张图，重新取一张交回用户
+                return request_captcha_for_user(ticket, phone, proxy).await;
+            }
+        }
+    }
+    logging::verbose("sensenova", "captcha auto-solve found no match, falling back to manual");
+    Ok(SmsStartOutcome::Captcha(SmsCaptcha {
+        ticket: ticket.to_string(),
+        phone_masked: mask_phone(phone),
+        code_key,
+        image,
+        block,
+    }))
+}
+
+/// 重新取一张人机验证图，交给用户手工拖动。
+///
+/// 自动求解失败时走这里：上游判错意味着当前这张图已经作废，继续让用户拖
+/// 它只会白拖一次，因此换成新图。
+async fn request_captcha_for_user(
+    ticket: &str,
+    phone: &str,
+    proxy: Option<&ResolvedProxy>,
+) -> Result<SmsStartOutcome, String> {
+    let mut jar = {
+        let table = pending_table()
+            .lock()
+            .map_err(|_| "商汤短信登录暂存区不可用".to_string())?;
+        table
+            .get(ticket)
+            .map(|item| item.cookies.clone())
+            .ok_or_else(|| "人机验证会话已过期，请重新发送验证码".to_string())?
+    };
+    let client = egress::client_without_redirects(proxy);
+    let (status, payload) =
+        get_json_with_jar(&client, &format!("{IAM_BASE}/iam/authn/v1/auth/getCaptcha"), &mut jar)
+            .await?;
+    let code_key = payload
+        .get("code_key")
+        .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("")
         .to_string();
+    let image = payload
+        .get("image")
+        .and_then(Value::as_str)
+        .map(clean_base64)
+        .unwrap_or_default();
+    let block = payload
+        .get("block")
+        .and_then(Value::as_str)
+        .map(clean_base64)
+        .unwrap_or_default();
     if status >= 400 || code_key.is_empty() || image.is_empty() || block.is_empty() {
         return Err("商汤人机验证初始化失败，请稍后重试".to_string());
     }
@@ -459,10 +532,6 @@ pub(crate) async fn complete_sms_login(
     let redirect = redirect_of(&payload);
     if redirect.is_empty() {
         if let Some(tenants) = payload.get("tenant_list").and_then(Value::as_array) {
-            if tenants.len() == 1 {
-                let selected = tenants.first().cloned().unwrap_or(Value::Null);
-                return complete_tenant_login(&client, &pending, &selected, &mut jar).await;
-            }
             if tenants.len() > 1 {
                 if let Ok(mut table) = pending_table().lock() {
                     if let Some(item) = table.get_mut(ticket) {
@@ -471,6 +540,16 @@ pub(crate) async fn complete_sms_login(
                     }
                 }
                 return Ok(SmsLoginOutcome::TenantRequired(tenants.clone()));
+            }
+            // 只有一条租户时上游会**同时**给出 `redirect` 与 `tenant_list`：
+            // 直接用这个 redirect 走完换票即可。这一步不能多调一次
+            // `loginNext` —— 官网前端在「只有一条租户」时也是直接取响应里的跳转
+            // 地址，`loginNext` 只在用户**手动选了租户**之后才调。
+            //
+            // 万一上游只给了租户、没给 redirect（形态变了），仍按租户走一次
+            // `loginNext`，而不是直接报「没有返回可用租户」。
+            if let Some(selected) = tenants.first() {
+                return complete_tenant_login(&client, &pending, selected, &mut jar).await;
             }
             return Err("商汤短信登录成功，但账号没有返回可用租户".to_string());
         }
@@ -805,8 +884,15 @@ fn query_param(url: &Option<Url>, name: &str) -> Option<String> {
 fn redirect_of(payload: &Value) -> String {
     ["redirect_uri", "redirect_to", "redirect"]
         .into_iter()
-        .find_map(|key| payload.get(key).and_then(Value::as_str))
+        // 空串要**跳过**而不是当选中：上游在 `redirect_uri` / `redirect_to` 上都
+        // 放空串，真正有值的是 `redirect`。用 `find_map` 会命中第一个空串就
+        // 返回，轮不到 `redirect` —— 于是单租户登录走到「没有返回跳转地址」，
+        // 而真正需要 `loginNext` 的多租户分支又拿着错误的 challenge 去调，
+        // 上游回 `tryToReLogin`（HTTP 400）。官网前端用的是
+        // `t && t || s && s || r && r`，空串同样被跳过。
+        .filter_map(|key| payload.get(key).and_then(Value::as_str))
         .map(str::trim)
+        .find(|value| !value.is_empty())
         .unwrap_or("")
         .to_string()
 }
@@ -828,6 +914,19 @@ fn valid_phone(phone: &str) -> bool {
     bytes.len() == 11
         && bytes.first() == Some(&b'1')
         && bytes.iter().all(|byte| byte.is_ascii_digit())
+}
+
+/// 洗掉 base64 字段里的控制字符。
+///
+/// 上游的人机验证图片字段会在 base64 末尾堆一长串填充（2026-11-12 实测
+/// `image` 尾部有 128453 个 NUL，以 `\u0000` 转义出现在 JSON 里）。那不是
+/// base64 的一部分，原样透传给前端会让 `data:image/png;base64,` 渲染失败。
+fn clean_base64(text: &str) -> String {
+    text.chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// 手机号脱敏：保留前三后四（与官网 `el` 函数同口径）。
@@ -909,4 +1008,39 @@ fn shorten(text: &str) -> String {
     }
     let head: String = trimmed.chars().take(157).collect();
     format!("{head}...")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 上游在 `redirect_uri` / `redirect_to` 上放空串、真正有值的是 `redirect`
+    /// （2026-11-12 实测的单租户短信登录响应）。取跳转地址时必须**跳过空串**，
+    /// 否则单租户登录拿不到 redirect，登录链路走不通。
+    #[test]
+    fn redirect_of_skips_empty_fields() {
+        let payload = json!({
+            "redirect_uri": "",
+            "redirect_to": "",
+            "redirect": "https://platform.sensenova.cn/oauth2/auth?code_challenge=x",
+        });
+        assert_eq!(
+            "https://platform.sensenova.cn/oauth2/auth?code_challenge=x",
+            redirect_of(&payload)
+        );
+    }
+
+    /// 三个字段都为真空时给出空串（调用方据此报「没有返回跳转地址」）。
+    #[test]
+    fn redirect_of_returns_empty_when_all_blank() {
+        let payload = json!({ "redirect_uri": "  ", "redirect_to": "", "redirect": null });
+        assert_eq!("", redirect_of(&payload));
+    }
+
+    /// `redirect_uri` 有值时优先用它（上游多租户分支走这个形态）。
+    #[test]
+    fn redirect_of_prefers_redirect_uri() {
+        let payload = json!({ "redirect_uri": "https://a", "redirect": "https://b" });
+        assert_eq!("https://a", redirect_of(&payload));
+    }
 }

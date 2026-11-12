@@ -259,7 +259,7 @@ function AddAccountModal({
       <AddAccountProxyProvider>
         <DialogContent keepMounted overlayForceRender className={isDeepseek
           ? 'compact-login-dialog acct-add-form-dialog w-[min(540px,calc(100vw-48px))]'
-          : 'acct-add-form-dialog w-[min(620px,calc(100vw-48px))]'}>
+          : 'acct-add-form-dialog w-[min(760px,calc(100vw-48px))]'}>
           <DialogHeader>
             <ProviderMark provider={state.provider} label={providerLabel} />
             <DialogTitle>{heading}</DialogTitle>

@@ -495,7 +495,12 @@ export function CenterTab({ center }: { center: CheckinCenter }): React.ReactEle
   const planGroups = groupByProvider([...campaignRows, ...plansRows])
 
   const railOptions: ProviderOption[] = section === 'daily'
-    ? daily.providers.map(group => ({ id: group.id, label: group.label, done: group.doneCount, total: group.totalCount }))
+    // **只列有账号的提供商**：网关那份清单的判据是「插件接管了这家」，装上
+    // 插件但还没加账号的家也在里面（图上那一排 0/0）。左栏的说明写的是
+    // 「只列当前任务里有账号的提供商」，点进去空空如也的行只是噪音 ——
+    // 这一栏就是给用户挑「今天要给谁签到」用的。
+    ? daily.providers.filter(group => group.totalCount > 0)
+      .map(group => ({ id: group.id, label: group.label, done: group.doneCount, total: group.totalCount }))
     : section === 'onboarding'
       ? onboardingGroups.map(group => ({
         id: group.id, label: providerLabel(group.id),
@@ -507,6 +512,16 @@ export function CenterTab({ center }: { center: CheckinCenter }): React.ReactEle
           done: group.rows.filter(row => growthDone(row as GrowthEntry)).length, total: group.rows.length,
         }))
         : planGroups.map(group => ({ id: group.id, label: providerLabel(group.id), done: null, total: group.rows.length }))
+
+  // 选中的提供商可能已经从左栏消失（它的账号被删了、或这一档不再有它的行）。
+  // 这时右栏会空着，而左栏也没有能点回来的那一项 —— 直接回到「全部」。
+  // 依赖用 id 的连接串而不是 railOptions 本身：后者每次渲染都是新数组，
+  // 拿它当依赖会让这个 effect 每帧都跑一遍。
+  const railOptionIds = railOptions.map(option => option.id).join('|')
+  React.useEffect(() => {
+    if (!providerId || railOptionIds.split('|').includes(providerId)) return
+    setProviderId('')
+  }, [providerId, railOptionIds, setProviderId])
 
   const railTotal = railOptions.reduce<{ done: number; all: number }>((sum, option) => ({
     done: sum.done + (option.done ?? 0), all: sum.all + option.total,

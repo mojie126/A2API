@@ -19,6 +19,8 @@ pub mod emulation;
 pub mod forward;
 /// 商汤日日新的手机号验证码登录（OAuth2 + PKCE 换控制台 JWT），只服务余额查询
 pub mod sensenova_auth;
+/// 商汤日日新登录页滑块的人机验证求解（纯图像题，见模块头）
+pub mod sensenova_captcha;
 
 pub(crate) fn catalog_providers(store: &AccountStore) -> Vec<(String, Vec<Value>)> {
     let accounts = store.routing_snapshot();

@@ -64,6 +64,18 @@ export function RoutingGroupPanel({ editor, accounts, lastUsed, reserved, baseUr
       title: t('全部移出本路由'), confirmText: t('全部移出'),
     })) update(next => { next.members.forEach(member => { member.included = false }) })
   }
+  /**
+   * 删除一个成员模型：整条成员从路由组里去掉（不只是「移出路由」）。
+   *
+   * 「移出路由」是让这一条不再参与转发、但记录还留着，随时能再打开；「删除」
+   * 是把它从组里彻底删掉 —— 成员列表里不该攒着一堆用不上的条目，那与
+   * 「添加模型」是同一件事的两面：加进来的能删掉，才是完整的增删。
+   */
+  const removeMember = async (member: RouteMember) => {
+    if (await confirmDialog(t('会把这个成员模型从路由组里删除。它的账号不受影响，别的路由组也不受影响；保存后生效。'), {
+      title: t('删除成员模型'), confirmText: t('删除'), destructive: true,
+    })) update(next => { next.members = next.members.filter(item => item.id !== member.id) })
+  }
   const copy = async (value: string) => {
     try { await navigator.clipboard.writeText(value); notify(t('已复制')) }
     catch { notify(t('复制失败，请手动选择并复制'), 'error') }
@@ -81,7 +93,8 @@ export function RoutingGroupPanel({ editor, accounts, lastUsed, reserved, baseUr
     onOpen={open => setOpened(current => ({ ...current, [member.id]: open }))} onJoin={on => editMember(member.id, next => { next.included = on })}
     onMove={direction => move(member.id, direction)} onAccounts={() => setAccountMember(member.id)} onMoveAccount={(id, direction) => moveAccount(member, id, direction)}
     onToggleAccount={id => editMember(member.id, next => { next.accounts = next.accounts.includes(id) ? next.accounts.filter(key => key !== id) : [...next.accounts, id] })}
-    onAccount={onAccount} sorting={sorting} now={now} onSort={() => onSort(member.provider)} />
+    onAccount={onAccount} sorting={sorting} now={now} onSort={() => onSort(member.provider)}
+    onRemove={() => { void removeMember(member) }} />
   const selectedAccountMember = group.members.find(member => member.id === accountMember)
   const members = <section className='routing-groups-column'>
     <div className='routing-column-head'><RouteIcon name='plugins' size={14} /><b>{t('成员模型')}</b><span>{t('{n} 项参与', { n: active.length })}</span>

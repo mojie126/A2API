@@ -1,0 +1,75 @@
+/* ── 人机验证弹窗：拼图 + 与之对齐的滑块条 ──────────────────────
+   滑块条是自绘的（底槽 + 圆形手柄），不用原生 range 控件：原生滑杆的轨道
+   与拇指跟图里那条不是一回事，看着不像同一个东西。拖动手柄时拼图切片
+   跟着一起走，手柄落在哪，切片就贴在哪。 */
+
+.sensenova-captcha { display: flex; flex-direction: column; gap: 10px; }
+.sensenova-captcha-stage {
+  position: relative;
+  align-self: center;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: #f1f5f9;
+  user-select: none;
+}
+.sensenova-captcha-bg { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sensenova-captcha-block {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  pointer-events: none;
+  object-fit: cover;
+}
+.sensenova-captcha-track {
+  position: relative;
+  width: 316px;
+  max-width: 100%;
+  height: 44px;
+  align-self: center;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  cursor: grab;
+  touch-action: none;
+}
+.sensenova-captcha-track:active { cursor: grabbing; }
+.sensenova-captcha-track:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.sensenova-captcha-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--primary-soft);
+}
+.sensenova-captcha-handle {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 47px;
+  height: 40px;
+  /* 左边缘对齐 `left`（与拼图切片的左边缘同一位置），只做垂直居中 */
+  transform: translateY(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+}
+.sensenova-captcha-handle-grip {
+  width: 16px;
+  height: 12px;
+  background:
+    linear-gradient(to right, var(--text-2) 0 2px, transparent 2px 7px, var(--text-2) 7px 9px,
+      transparent 9px 14px, var(--text-2) 14px 16px);
+}
+.sensenova-captcha-hint {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+/* 手柄一离开起点就把提示收掉：提示压在轨道正中，会与手柄叠在一起看不清 */
+.sensenova-captcha-track[data-moved] .sensenova-captcha-hint { opacity: 0; }

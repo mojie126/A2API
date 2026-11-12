@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Button, Checkbox, Spinner } from '@ui'
+import { Badge, Button, Checkbox, Collapsible, CollapsibleContent, CollapsibleTrigger, Spinner } from '@ui'
 import type { OfficeaceSubscriptionApi, OfficeaceSubscriptionState, OfficeaceSubscriptionStatus } from './checkin-officeace-types'
 
 type Translate = (key: string, params?: Record<string, string | number>) => string
@@ -54,6 +54,8 @@ export function OfficeaceSubscription({ accountId, api, t, active = true, disabl
   const [message, setMessage] = useState('')
   const [consent, setConsent] = useState(false)
   const [simulation, setSimulation] = useState<Record<string, unknown> | null>(null)
+  /** 模拟结果默认收起：那一大段 JSON 是排障用的，平时占着地方没意义 */
+  const [simulationOpen, setSimulationOpen] = useState(false)
   const lock = useRef(false)
   const pollCount = useRef(0)
   const generation = useRef(0)
@@ -199,15 +201,27 @@ export function OfficeaceSubscription({ accountId, api, t, active = true, disabl
     </div> : null}
     {data?.autoRenew === false ? <Badge variant='success' shape='tag'>{t('已确认不自动续费')}</Badge> : null}
     {data?.autoRenew === true ? <p role='alert' className='text-sm text-destructive'>{t('官方显示自动续费已开启，请到官方客户端检查')}</p> : null}
-    {simulation ? <div className='rounded-md border border-border p-3 text-xs'>
-      <div className='font-medium'>{t('客户端状态模拟（只读）')}</div>
-      <pre className='mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground'>
-        {JSON.stringify(simulation, null, 2)}
-      </pre>
-      <p className='mt-2 text-[11px] text-muted-foreground'>
-        {t('没有安装果办客户端时，这只能复现云端订阅与控制面状态；客户端本地数据库、TLS 指纹和 CloudWAF 挑战不可模拟')}
-      </p>
-    </div> : null}
+    {simulation ? <Collapsible open={simulationOpen} onOpenChange={setSimulationOpen}
+      className='rounded-md border border-border text-xs'>
+      <CollapsibleTrigger render={<Button variant='ghost' size='default' />}
+        className='w-full justify-between gap-2 px-3 py-2 text-left font-medium'>
+        <span className='min-w-0 truncate'>{t('客户端状态模拟（只读）')}</span>
+        <span className='flex-none text-[11px] font-normal text-muted-foreground'>
+          {simulationOpen ? t('收起') : t('展开')}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className='px-3 pb-3'>
+        <pre className='mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground'>
+          {JSON.stringify(simulation, null, 2)}
+        </pre>
+        <p className='mt-2 text-[11px] text-muted-foreground'>
+          {t('这一段是官方控制面返回的原始状态，用来核对套餐与自动续费；点「只读模拟客户端」重新读取。')}
+        </p>
+        <p className='mt-1 text-[11px] text-muted-foreground'>
+          {t('没有安装果办客户端时，这只能复现云端订阅与控制面状态；客户端本地数据库、TLS 指纹和 CloudWAF 挑战不可模拟')}
+        </p>
+      </CollapsibleContent>
+    </Collapsible> : null}
     {error ? <p role='alert' className='text-sm text-destructive break-words'>{error}</p> : null}
     {message && message !== data?.message ? <p role='status' className='text-sm text-foreground break-words'>{t(message)}</p> : null}
   </div>
