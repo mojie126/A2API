@@ -16,6 +16,60 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare:
+    name: 准备发布标题
+    runs-on: ubuntu-latest
+    outputs:
+      title: ${{ steps.title.outputs.value }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 校验应用版本
+        id: release
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop-tauri/src-tauri/server/Cargo.toml | head -1)"
+          desktop_version="$(jq -r .version desktop-tauri/package.json)"
+          app_version="$(jq -r .version package.json)"
+          tauri_version="$(jq -r .version desktop-tauri/src-tauri/tauri.conf.json)"
+          desktop_rust_version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop-tauri/src-tauri/Cargo.toml | head -1)"
+          mobile_version="$(jq -r .version desktop-tauri/mobile/package.json)"
+          if [[ -z "$version" || "$desktop_version" != "$version" || "$app_version" != "$version" || "$tauri_version" != "$version" || "$desktop_rust_version" != "$version" || "$mobile_version" != "$version" ]]; then
+            echo "::error::应用版本号不一致，服务端=$version 桌面端=$desktop_version 根目录=$app_version Tauri=$tauri_version 桌面端Rust=$desktop_rust_version 手机端=$mobile_version"
+            exit 1
+          fi
+          provider_protocol_tag="$(sed -n '/agent2api-provider-protocol =/s/.*tag = "v\([^"]*\)".*/\1/p' desktop-tauri/src-tauri/server/Cargo.toml | head -1)"
+          if [[ "$provider_protocol_tag" != "$version" ]]; then
+            echo "::error::提供商协议库版本与网关不一致，网关=$version 协议库=$provider_protocol_tag"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: 读取已发布版本
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.release.outputs.version }}"
+          echo "current=$(gh release view "$tag" --json isDraft --jq '.isDraft == false' 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: 计算发布标题
+        id: title
+        env:
+          CURRENT_PUBLISHED: ${{ steps.published.outputs.current }}
+          RUN_NUMBER: ${{ github.run_number }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          title="v$VERSION"
+          if [[ "$CURRENT_PUBLISHED" == "true" ]]; then
+            title="${title}-r${RUN_NUMBER}"
+          fi
+          echo "value=$title" >> "$GITHUB_OUTPUT"
+
   windows:
     name: Windows 桌面端
     runs-on: windows-latest
@@ -98,6 +152,8 @@ jobs:
   docker:
     name: GHCR linux/amd64 镜像
     runs-on: ubuntu-latest
+    needs:
+      - prepare
     permissions:
       contents: read
       packages: write
@@ -114,14 +170,6 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 读取应用版本
-        id: version
-        run: |
-          set -euo pipefail
-          version="$(jq -r .version package.json)"
-          test -n "$version" -a "$version" != "null"
-          echo "tag=$version" >> "$GITHUB_OUTPUT"
-
       - name: 生成镜像标签
         id: meta
         uses: docker/metadata-action@v6
@@ -133,9 +181,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             type=raw,value=latest
-            type=raw,value=${{ steps.version.outputs.tag }}
-            type=sha,prefix=sha-,format=short
-            type=raw,value=run-${{ github.run_number }}
+            type=raw,value=${{ needs.prepare.outputs.title }}
 
       - name: 构建并推送镜像
         uses: docker/build-push-action@v7
@@ -151,6 +197,7 @@ jobs:
   release:
     name: 创建草稿 Release
     needs:
+      - prepare
       - windows
       - windows-server
       - docker
@@ -173,7 +220,6 @@ jobs:
           path: dist
 
       - name: 校验 Release 附件
-        id: release
         run: |
           set -euo pipefail
           cd dist
@@ -184,39 +230,6 @@ jobs:
             find . -maxdepth 1 -type f -printf '%f\n' | sort
             exit 1
           fi
-          cd ..
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop-tauri/src-tauri/server/Cargo.toml | head -1)"
-          desktop_version="$(jq -r .version desktop-tauri/package.json)"
-          app_version="$(jq -r .version package.json)"
-          tauri_version="$(jq -r .version desktop-tauri/src-tauri/tauri.conf.json)"
-          desktop_rust_version="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop-tauri/src-tauri/Cargo.toml | head -1)"
-          mobile_version="$(jq -r .version desktop-tauri/mobile/package.json)"
-          if [[ -z "$version" || "$desktop_version" != "$version" || "$app_version" != "$version" || "$tauri_version" != "$version" || "$desktop_rust_version" != "$version" || "$mobile_version" != "$version" ]]; then
-            echo "::error::应用版本号不一致，服务端=$version 桌面端=$desktop_version 根目录=$app_version Tauri=$tauri_version 桌面端Rust=$desktop_rust_version 手机端=$mobile_version"
-            exit 1
-          fi
-          provider_protocol_tag="$(sed -n '/agent2api-provider-protocol =/s/.*tag = "v\([^"]*\)".*/\1/p' desktop-tauri/src-tauri/server/Cargo.toml | head -1)"
-          if [[ "$provider_protocol_tag" != "$version" ]]; then
-            echo "::error::提供商协议库版本与网关不一致，网关=$version 协议库=$provider_protocol_tag"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: 清理未发布的同 tag 草稿
-        id: tag_guard
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="v${{ steps.release.outputs.version }}"
-          state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)"
-          if [[ "$state" == "true" ]]; then
-            gh release delete "$TAG" --yes
-            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$TAG" 2>/dev/null || true
-          elif [[ -n "$state" ]]; then
-            # 已发布的同 tag：加后缀区分，避免与正式发布冲突
-            echo "suffix=-r${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: 创建或更新草稿 Release
         uses: ncipollo/release-action@v1.21.0
@@ -226,6 +239,6 @@ jobs:
           artifacts: "dist/*"
           bodyFile: docs/release-notes_3.5.0-beta.1.md
           draft: true
-          tag: "v${{ steps.release.outputs.version }}${{ steps.tag_guard.outputs.suffix }}"
+          tag: ${{ needs.prepare.outputs.title }}
           token: ${{ secrets.GITHUB_TOKEN }}
           updateOnlyUnreleased: true
