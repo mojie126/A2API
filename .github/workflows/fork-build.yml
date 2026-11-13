@@ -114,15 +114,28 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 读取应用版本
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version package.json)"
+          test -n "$version" -a "$version" != "null"
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
+
       - name: 生成镜像标签
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/a2api
+          flavor: |
+            latest=false
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             type=raw,value=latest
+            type=raw,value=${{ steps.version.outputs.tag }}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=run-${{ github.run_number }}
 
       - name: 构建并推送镜像
         uses: docker/build-push-action@v7
