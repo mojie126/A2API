@@ -244,6 +244,13 @@ pub struct TelemetrySnapshot {
     /// 最终出现在报表与前端 —— 契约里它就是 id 字符串（architecture §3.6）。
     /// 存字符串省掉一次「kind → id」的转换与两处枚举依赖。
     pub provider: Option<String>,
+    /// 本次最终生成上游请求身份的客户端标识
+    ///
+    /// 账号自定义 User-Agent 优先于显式供应商归属客户端
+    /// 两者都未配置时保持空串，上游收到的是插件自身默认身份
+    pub outbound_client: String,
+    /// 上游实际收到的 User-Agent
+    pub outbound_user_agent: String,
     /// 实际发给上游的模型名（映射 + 备援按家改写后的**最终值**；空串 =
     /// 一次都没发出去，例如转发前就失败）。
     ///
@@ -418,6 +425,8 @@ pub type LiveSink = Arc<dyn Fn(&TelemetrySnapshot) + Send + Sync>;
 #[derive(Default, PartialEq)]
 struct LiveStamp {
     provider: String,
+    outbound_client: String,
+    outbound_user_agent: String,
     account_id: String,
     account_name: String,
     upstream_model: String,
@@ -445,6 +454,8 @@ impl LiveStamp {
         let last = snapshot.attempts_detail.last();
         Self {
             provider: snapshot.provider.clone().unwrap_or_default(),
+            outbound_client: snapshot.outbound_client.clone(),
+            outbound_user_agent: snapshot.outbound_user_agent.clone(),
             account_id: snapshot.account_id.clone(),
             account_name: snapshot.account_name.clone(),
             upstream_model: snapshot.upstream_model.clone(),
@@ -881,6 +892,17 @@ impl RequestTelemetry {
         if let Some(last) = guard.current_attempt_mut().filter(|last| last.finished_at.is_none()) { last.model = model.to_string(); }
         // 在途回写：上游真名是发送体定稿那一刻就确定的，比请求真正发出去还早
         // —— 模型列因此能在转发期间就显示「⬆️ 上游 / ⬇️ 下游」两行
+        self.flush_live(&guard);
+    }
+
+    /// 记录本次请求最终使用的上游客户端身份
+    ///
+    /// 账号自定义 User-Agent 与显式供应商归属客户端共用这一处覆盖口径
+    /// 两者都未配置时写空串，表示沿用提供商插件自身构造的默认身份
+    pub fn note_outbound_identity(&self, client: &str, user_agent: Option<&str>) {
+        let mut guard = self.lock();
+        guard.outbound_client = client.trim().to_string();
+        guard.outbound_user_agent = user_agent.map(str::trim).unwrap_or("").to_string();
         self.flush_live(&guard);
     }
 

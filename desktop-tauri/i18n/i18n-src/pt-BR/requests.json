@@ -24,6 +24,7 @@
   "上游没有返回积分消耗": "O upstream não informou o consumo de pontos",
   "上游状态码: {status}": "Status do upstream: {status}",
   "上游请求已发出，正在等第一个字节到达（模型的思考时间也在这段）": "A requisição foi enviada ao upstream; aguardando a chegada do primeiro byte (o tempo de raciocínio do modelo também faz parte disso)",
+  "上游身份": "Identidade upstream",
   "上游返回错误": "O upstream retornou um erro",
   "下游请求的模型：{model}": "Modelo solicitado pelo downstream: {model}",
   "仅清空报文原文": "Limpar apenas os payloads",

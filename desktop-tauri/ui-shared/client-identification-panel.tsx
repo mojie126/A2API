@@ -34,8 +34,8 @@ import {
  * `api.load / save / preview` 三个调用，保存带 revision 做并发校验，改完派
  * `IDENTIFICATION_CHANGED` 让设置页别处跟着刷新。两个规则层各管一段：
  * 「头匹配规则」按请求头识别真实客户端（顺序即匹配优先级，上移 / 下移直接
- * 落盘），「供应商归属规则」在记账时按路由供应商改写最终归属，未命中回落
- * 默认归属客户端。
+ * 落盘），「供应商归属规则」按路由供应商改写最终归属，并作为账号没有自定义
+ * User-Agent 时的上游身份，未命中回落默认归属客户端。
  */
 
 /** 头匹配规则的匹配方式 → 界面文案。四种取值各自写死字面量，方便 i18n 扫描器取键 */
@@ -152,7 +152,7 @@ export function ClientIdentificationPanel({ api, t, active = true }: { api: Clie
         <FoldChevron />
         <h2>{t('客户端识别')}</h2>
       </CollapsibleTrigger>
-      <Tip label={t('客户端识别')} text={t('按每条请求的软件标识识别真实客户端，不依赖 API Key；归属规则再按路由供应商把请求改写到所选客户端，未命中时用默认归属客户端。修改只影响新请求，内置规则随软件更新，自定义数据参与备份与云同步。')} />
+      <Tip label={t('客户端识别')} text={t('从入站请求的 User-Agent 或专用请求头识别真实客户端，不依赖 API Key；供应商归属规则再按路由供应商改写最终归属。账号设置中的 User-Agent 优先成为上游实际身份，其次使用归属客户端，两者都未配置时沿用提供商默认身份。修改只影响新请求。')} />
       {view ? <span className='flex items-center gap-1.5 text-[12px] text-muted-foreground'>
         <StatusDot variant={view.config.providerRules.length || view.config.defaultClientId ? 'success' : 'muted'} />
         {view.config.providerRules.length
@@ -172,16 +172,17 @@ export function ClientIdentificationPanel({ api, t, active = true }: { api: Clie
                  不限宽的话「规则名 → 右侧操作」会隔出近千像素的空白）── */}
           <div className='flex min-w-0 max-w-[720px] flex-col gap-6'>
             <Section title={t('来源声明')}>
+              <p className='px-4 pt-3 text-[12px] leading-[1.7] text-muted-foreground'>{t('最终归属同时决定请求日志与上游身份；账号设置里的 User-Agent 优先级最高，留空时使用这里选中的归属客户端。')}</p>
               <div className='flex items-center gap-3 px-4 py-3'>
                 <Switch checked={view.config.acceptDeclarations} disabled={busy} aria-label={t('接受调用方来源声明')} onCheckedChange={enabled => {
                   if (!enabled) { void save({ ...view.config, acceptDeclarations: false }); return }
-                  setConfirmation({ revision: view.revision, title: t('开启来源声明'), message: t('开启后，调用方可以用专用请求头声明已登记的客户端名称。这不是身份认证，只用于日志和统计，不会获得额外权限。'), config: { ...view.config, acceptDeclarations: true } })
+                  setConfirmation({ revision: view.revision, title: t('开启来源声明'), message: t('开启后，调用方可以用专用请求头声明已登记的客户端名称。这不是身份认证，但声明结果既用于日志和统计，也会在账号没有自定义 User-Agent、且供应商归属未配置时作为上游身份，不会获得额外权限。'), config: { ...view.config, acceptDeclarations: true } })
                 }} />
                 <span className='text-[13px]'>{t('接受调用方来源声明')}</span>
                 <span className='ml-auto text-[12px] text-muted-foreground'>{view.config.acceptDeclarations ? t('已开启') : t('已关闭')}</span>
               </div>
               <div className='px-4 py-3'>
-                <p className='max-w-[64ch] text-[12px] leading-[1.7] text-muted-foreground'>{t('开启后，调用方可以用专用请求头声明已登记的客户端名称。这不是身份认证，只用于日志和统计，不会获得额外权限。')}</p>
+                <p className='max-w-[64ch] text-[12px] leading-[1.7] text-muted-foreground'>{t('开启后，调用方可以用专用请求头声明已登记的客户端名称。这不是身份认证，但声明结果既用于日志和统计，也会在账号没有自定义 User-Agent、且供应商归属未配置时作为上游身份，不会获得额外权限。')}</p>
                 <div className='mt-2.5 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground'>
                   <span>{t('示例请求头')}</span>
                   <code className={CHIP}>{view.declarationHeader}: hermes</code>
@@ -195,7 +196,7 @@ export function ClientIdentificationPanel({ api, t, active = true }: { api: Clie
               <PriorityRow index={3} title={t('来源声明')} note={view.config.acceptDeclarations ? t('已开启') : t('已关闭')} dim={!view.config.acceptDeclarations} />
               <PriorityRow index={4} title={t('自定义头匹配规则')} note={t('按列表自上而下匹配')} />
               <PriorityRow index={5} title={t('内置规则')} note={t('随软件更新')} />
-              <p className='px-4 py-3 text-[12px] leading-[1.7] text-muted-foreground'>{t('按列表顺序决定最终归属：命中供应商规则用规则客户端，未命中用默认归属客户端；两者都未设置时，回落到按请求头识别的真实客户端。')}</p>
+              <p className='px-4 py-3 text-[12px] leading-[1.7] text-muted-foreground'>{t('按列表顺序决定最终归属：命中供应商规则用规则客户端，未命中用默认归属客户端；两者都未设置时保留请求头识别结果。账号自定义 User-Agent 优先于这里的归属客户端。')}</p>
             </Section>
 
             <Section title={t('供应商归属规则')} note={view.config.providerRules.length ? t('{n} 条', { n: view.config.providerRules.length }) : undefined}>
@@ -235,7 +236,7 @@ export function ClientIdentificationPanel({ api, t, active = true }: { api: Clie
                 <Button size='xs' variant='ghost' disabled={busy} onClick={() => setDraftRule(null)}>{t('取消')}</Button>
               </div> : null}
               <div className='flex flex-wrap items-center justify-between gap-3 px-4 py-3'>
-                <p className='m-0 max-w-[64ch] text-[12px] leading-[1.7] text-muted-foreground'>{t('选中的供应商，其请求在记账时归属到所选客户端；请求头识别的真实客户端保留为依据。')}</p>
+                <p className='m-0 max-w-[64ch] text-[12px] leading-[1.7] text-muted-foreground'>{t('选中的供应商，其请求最终归属到所选客户端，并作为账号没有自定义 User-Agent 时的上游身份；真实识别结果保留为依据。')}</p>
                 <Button size='sm' variant='outline' disabled={busy || Boolean(draftRule) || view.config.providerRules.length >= view.maxProviderRules}
                   onClick={() => setDraftRule({ provider: '', clientId: '' })}>{t('新增规则')}</Button>
               </div>

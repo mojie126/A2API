@@ -124,7 +124,8 @@ impl GatewayCallbacks for StoreCallbacks {
             };
             self.check_account(&id, Some(&provider))?;
             let store = self.store.clone();
-            let record = crate::server::core::blocking::run(move || store.plugin_account(&id)).await
+            let account_id = id.clone();
+            let record = crate::server::core::blocking::run(move || store.plugin_account(&account_id)).await
                 .map_err(|error| proto::WireError::with_code(error.message, proto::WireError::INTERNAL))?;
             let Some(record) = record else {
                 return Err(proto::WireError::with_code(
@@ -132,6 +133,12 @@ impl GatewayCallbacks for StoreCallbacks {
                     proto::WireError::NOT_FOUND,
                 ));
             };
+            let mut record = record;
+            if let Some(user_agent) = super::account_egress::user_agent_for(&provider, &id) {
+                if let Some(public) = record.get_mut("public").and_then(serde_json::Value::as_object_mut) {
+                    public.insert("userAgent".to_string(), serde_json::Value::String(user_agent));
+                }
+            }
             // 读归属与读记录之间可能有并行迁移；出口再次核对，不泄漏错家 secret。
             if record.get("provider").and_then(serde_json::Value::as_str) != Some(provider.as_str()) {
                 return Err(proto::WireError::with_code(

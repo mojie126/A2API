@@ -75,12 +75,15 @@ pub(super) use raw::{
 /// 前面字段的序号（中间插一列会让所有后续字段整体挪一位，那种改动在整个文件里
 /// 看不出错，只会静默取错值）。因此后加的列都在最后：
 ///   - `attempt_details` / `sensitive_hits`（schema v2 的 JSON 文本列）；
-///   - `credit`（schema v23 的积分消耗，可空 REAL）。
+///   - `credit`（schema v23 的积分消耗，可空 REAL）；
+///   - `identified_client` / `outbound_client` / `outbound_user_agent`
+///     （schema v30 的入站识别身份与最终出站身份）。
 pub(super) const REQUEST_COLUMNS: &str = "id, ts, model, account_id, account_name, status, duration_ms, \
      first_response_ms, attempts, error, prompt_tokens, completion_tokens, total_tokens, \
      cache_read_tokens, provider, client_model, upstream_model, attempt_details, sensitive_hits, \
      client_reasoning, upstream_reasoning, phase, phase_started_at, is_test, route, client, \
-     api_key_id, api_key_name, api_key_source, credit, client_evidence";
+     api_key_id, api_key_name, api_key_source, credit, client_evidence, \
+     identified_client, outbound_client, outbound_user_agent";
 
 // `request_daily`（按天聚合）那一支的列常量、编解码与读-改-写语句在
 // `daily.rs` —— 两张表的语句分文件后各自独立演化。
@@ -144,13 +147,26 @@ pub(super) fn decode_request(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         // 读出 —— 空串 = 没有记录（前端显示占位符），与无 UA 的请求同一形态
         source: super::RequestSource {
             client: row.get(25)?,
+            identified_client: row.get(31)?,
+            outbound_client: row.get(32)?,
+            outbound_user_agent: row.get(33)?,
             api_key: super::ApiKeyIdentity {
                 id: row.get(26)?,
                 name: row.get(27)?,
                 source: row.get(28)?,
             },
             evidence: serde_json::from_str::<crate::server::core::client::ClientEvidence>(&row.get::<_, String>(30)?).ok()
-                .filter(|evidence| !evidence.method.is_empty()),
+                .filter(|evidence| !evidence.method.is_empty())
+                .map(|mut evidence| {
+                    if evidence.client_id.is_empty() {
+                        evidence.client_id = row.get::<_, String>(31).unwrap_or_default();
+                        evidence.client_name = crate::server::core::client::display_name(
+                            &evidence.client_id,
+                            &evidence.client_name,
+                        );
+                    }
+                    evidence
+                }),
             behavior_client: String::new(),
         },
         // 末列是 schema v23 加的（积分消耗）；旧行 / 没上报的行是 NULL ——
@@ -441,8 +457,12 @@ pub(super) fn source_filter_options(conn: &Connection, max: usize) -> rusqlite::
     let mut client_stmt = conn.prepare(
         "SELECT grouped.client, CASE WHEN json_valid(r.client_evidence) \
          THEN COALESCE(json_extract(r.client_evidence, '$.clientName'), '') ELSE '' END \
-         FROM (SELECT client, MAX(row_id) AS latest, COUNT(*) AS n FROM requests \
-         GROUP BY client ORDER BY n DESC, client LIMIT ?1) grouped \
+         FROM (SELECT client, MAX(row_id) AS latest, COUNT(*) AS n FROM ( \
+           SELECT client, row_id FROM requests \
+           UNION ALL \
+           SELECT outbound_client AS client, row_id FROM requests WHERE outbound_client <> '' \
+             AND outbound_client <> client \
+         ) GROUP BY client ORDER BY n DESC, client LIMIT ?1) grouped \
          JOIN requests r ON r.row_id = grouped.latest ORDER BY grouped.n DESC, grouped.client",
     )?;
     let clients = client_stmt.query_map(params![max as i64], |row| {
@@ -587,10 +607,12 @@ pub(super) fn insert_started_request(
     // 进行中行也应带上 —— 等收尾再补会让列表里「客户端」列在转发期间空一格
     conn.execute(
         "INSERT INTO requests (id, ts, model, client_model, client_reasoning, status, \
-         phase, phase_started_at, is_test, client, api_key_id, api_key_name, api_key_source, client_evidence) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, 'connecting', ?2, ?6, ?7, ?8, ?9, ?10, ?11)",
+         phase, phase_started_at, is_test, client, api_key_id, api_key_name, api_key_source, client_evidence, \
+         identified_client, outbound_client, outbound_user_agent) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, 'connecting', ?2, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![id, ts, model, client_model, client_reasoning, is_test as i64,
-            source.client, source.api_key.id, source.api_key.name, source.api_key.source, source.evidence_json()],
+            source.client, source.api_key.id, source.api_key.name, source.api_key.source, source.evidence_json(),
+            source.identified_client, source.outbound_client, source.outbound_user_agent],
     )?;
     Ok(true)
 }
@@ -677,7 +699,9 @@ pub(super) fn update_running_progress(
         "UPDATE requests SET provider = ?2, account_id = ?3, account_name = ?4, \
          upstream_model = ?5, upstream_reasoning = ?6, attempts = ?7, first_response_ms = ?8, \
          attempt_details = ?9, sensitive_hits = ?10, phase = ?11, phase_started_at = ?12, \
-         route = COALESCE(?13, route), client = COALESCE(NULLIF(?14, ''), client) \
+         route = COALESCE(?13, route), client = COALESCE(NULLIF(?14, ''), client), \
+         outbound_client = COALESCE(NULLIF(?15, ''), outbound_client), \
+         outbound_user_agent = COALESCE(NULLIF(?16, ''), outbound_user_agent) \
          WHERE id = ?1 AND status = 0",
         params![
             id,
@@ -694,6 +718,8 @@ pub(super) fn update_running_progress(
             progress.phase_started_at,
             progress.route.as_ref().map(Value::to_string),
             progress.client,
+            progress.outbound_client,
+            progress.outbound_user_agent,
         ],
     )
 }
@@ -727,7 +753,8 @@ pub(super) fn update_running_request(
          client_model = ?16, upstream_model = ?17, attempt_details = ?18, sensitive_hits = ?19, \
          client_reasoning = ?20, upstream_reasoning = ?21, phase = '', phase_started_at = NULL, \
          is_test = ?22, route = ?23, client = ?24, \
-         api_key_id = ?25, api_key_name = ?26, api_key_source = ?27, credit = ?28, client_evidence = ?29 \
+         api_key_id = ?25, api_key_name = ?26, api_key_source = ?27, credit = ?28, client_evidence = ?29, \
+         identified_client = ?30, outbound_client = ?31, outbound_user_agent = ?32 \
          WHERE id = ?1 AND status = 0",
         params![
             entry.id,
@@ -763,6 +790,9 @@ pub(super) fn update_running_request(
             entry.source.api_key.source,
             entry.credit,
             entry.source.evidence_json(),
+            entry.source.identified_client,
+            entry.source.outbound_client,
+            entry.source.outbound_user_agent,
         ],
     )
 }
@@ -789,9 +819,10 @@ pub(super) fn insert_request(conn: &Connection, entry: &RequestEntry) -> rusqlit
          first_response_ms, attempts, error, prompt_tokens, completion_tokens, total_tokens, \
          cache_read_tokens, provider, client_model, upstream_model, attempt_details, \
          sensitive_hits, client_reasoning, upstream_reasoning, is_test, route, client, \
-         api_key_id, api_key_name, api_key_source, credit, client_evidence) \
+         api_key_id, api_key_name, api_key_source, credit, client_evidence, \
+         identified_client, outbound_client, outbound_user_agent) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-         ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+         ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32)",
         params![
             entry.id,
             entry.ts,
@@ -822,6 +853,9 @@ pub(super) fn insert_request(conn: &Connection, entry: &RequestEntry) -> rusqlit
             entry.source.api_key.source,
             entry.credit,
             entry.source.evidence_json(),
+            entry.source.identified_client,
+            entry.source.outbound_client,
+            entry.source.outbound_user_agent,
         ],
     )?;
     Ok(())

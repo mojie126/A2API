@@ -26,7 +26,8 @@ export type ClientRule = {
 export type CustomClient = { id: string; name: string }
 /**
  * 供应商归属规则：路由命中该供应商时，请求归属到指定客户端。
- * 请求头识别的真实客户端保留在 evidence 里，这里是记账时的最终归属改写。
+ * 请求头识别的真实客户端保留在 evidence 里；归属客户端在账号没有自定义
+ * User-Agent 时同时作为上游实际身份。
  */
 export type ProviderRule = { provider: string; clientId: string }
 export type ClientSettings = {

@@ -86,6 +86,10 @@ pub(crate) async fn forward(
             "没有可用账号，无账号可转发：请在账号页为该自定义提供商添加并启用账号",
         ));
     }
+    let request_user_agent = crate::server::core::plugin_host::account_egress::user_agent_for(
+        provider_id,
+        account_id,
+    );
     // 凭证（内部形态：含 apiKey 明文与已解析代理）。取不到说明账号在两次
     // 读盘之间被删了 —— 报一条明确的错，与「顺延」语义同等可操作。
     let credential_store = store.clone();
@@ -95,6 +99,7 @@ pub(crate) async fn forward(
     }).await?.ok_or_else(|| {
         GatewayError::with_status(503, format!("自定义账号不存在或已被删除: {account_id}"))
     })?;
+    let user_agent = request_user_agent.as_deref().unwrap_or(&credential.user_agent);
     // baseUrl：账号覆盖项优先（缺省回落到提供商的配置）。两层都拦过空值，
     // 这里防御一次 —— 没有基址的转发只会变成一条难定位的连接错误
     let base_url = credential
@@ -125,7 +130,7 @@ pub(crate) async fn forward(
             return Err(GatewayError::with_status(409, "提供商协议在转发前发生变化，请重试；未发送错误协议的请求"));
         }
         return native::forward(
-            native_protocol, provider_id, account_id, &credential.api_key, &credential.user_agent,
+            native_protocol, provider_id, account_id, &credential.api_key, user_agent,
             &base_url, &quirks, body, route_model, client_headers, proxy, stream, telemetry, slot, connections,
         ).await;
     }
@@ -135,7 +140,7 @@ pub(crate) async fn forward(
             provider_id,
             account_id,
             &credential.api_key,
-            &credential.user_agent,
+            user_agent,
             &base_url,
             &quirks,
             body,
@@ -220,7 +225,7 @@ pub(crate) async fn forward(
     // 写了 UA（`quirks.headers` 里就有），而账号设置里填的值是用户对**这一条
     // 账号**的最新意图，优先级最高。大小写不敏感地摘掉同名头再追加，避免留下
     // 两个 `user-agent` 让上游取哪个变成实现细节。
-    apply_user_agent_override(&mut headers, &credential.user_agent);
+    apply_user_agent_override(&mut headers, user_agent);
 
     logging::verbose(
         "[CustomProvider]",
@@ -432,6 +437,25 @@ impl ProviderQuirks {
 /// 值在落库时已校验（无控制字符、能转成合法头值），这里不做二次兜底。
 fn apply_user_agent_override(headers: &mut Vec<(String, String)>, user_agent: &str) {
     crate::server::core::user_agent::apply(headers, user_agent);
+}
+
+#[cfg(test)]
+mod user_agent_tests {
+    use super::apply_user_agent_override;
+
+    #[test]
+    fn final_override_replaces_every_user_agent_header() {
+        let mut headers = vec![
+            ("user-agent".to_string(), "provider/default".to_string()),
+            ("User-Agent".to_string(), "quirks/static".to_string()),
+        ];
+        apply_user_agent_override(&mut headers, "final/1.0");
+        let values: Vec<_> = headers.iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+            .map(|(_, value)| value.as_str())
+            .collect();
+        assert_eq!(values, vec!["final/1.0"]);
+    }
 }
 
 /// **翻译协议**（responses / anthropic）的一次转发。

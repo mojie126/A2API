@@ -635,16 +635,29 @@ export function AccountSettingsDialog({ id, onClose, initialAccount, initialPane
                       </SettingGroup>
                       <p className='detail acct-dlg-hint'>{concDefault > 0
                         ? t('0 = 按本家默认 {default}', { default: concDefault }) : t('0 = 不限')}</p>
-                      {uaEditable ? <SettingGroup title={t('请求标识')}>
+                      {uaEditable ? <SettingGroup title={t('上游请求身份')}>
                         <Field className='acct-dlg-field'>
                           <FieldLabel htmlFor='account-user-agent'>User-Agent</FieldLabel>
                           <UserAgentInput id='account-user-agent' value={userAgent}
                             onChange={setUserAgent} presets={uaPresets} disabled={interactionBusy} />
                           <FieldDescription>
-                            {t('用于当前账号的对话、余额查询、模型拉取、模型测试、签到及凭证刷新等上游请求。留空使用提供商默认值；可选预置或直接填写。')}
+                            {t('请求发往上游时携带的 User-Agent，决定上游看到的客户端身份。用于当前账号的对话、余额查询、模型拉取、模型测试、签到及凭证刷新；留空使用供应商归属客户端，仍未配置时使用提供商默认值。')}
                           </FieldDescription>
                         </Field>
                       </SettingGroup> : null}
+                      <div className='acct-dlg-related'>
+                        <AccountSettingsIcon name='agent' size={18} />
+                        <div><h3>{t('区分入站识别与上游身份')}</h3><p>{t('真实客户端与供应商归属在「设置 → 网关 → 客户端识别」中查看；本账号的 User-Agent 优先作为上游身份，留空时使用该供应商命中的归属客户端，仍为空则使用提供商默认值。')}</p></div>
+                        <Button variant='link' size='xs' onClick={() => {
+                          if (dirtyCount > 0) {
+                            toast(t('请先保存或取消当前账号修改，再前往客户端识别设置'), 'err')
+                            return
+                          }
+                          onClose()
+                          shared().wbApp?.showPage?.('settings')
+                          shared().wbSettingsPanel?.showCategory?.('gateway')
+                        }}>{t('客户端识别设置')}<AccountSettingsIcon name='caretRight' size={12} /></Button>
+                      </div>
                       {routeContext ? <div className='acct-dlg-route-context'>{routeContext}</div>
                         : <p className='detail acct-dlg-group-note'><AccountSettingsIcon name='route' size={14} />
                           {t('在账号列表中拖动分组或行首把手，调整转发顺序。')}</p>}

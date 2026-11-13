@@ -44,6 +44,7 @@ type RequestEntry = {
 /** 一次尝试的明细（后端 AttemptDetail；字段名是后端契约） */
 type AttemptDetail = {
   provider?: unknown
+  userAgent?: unknown
   account?: unknown
   status?: unknown
   error?: unknown
@@ -221,6 +222,7 @@ function RetryRows({ item }: { item: AttemptDetail }) {
  */
 function AttemptRow({ item, index, inFlight }: { item: AttemptDetail; index: number; inFlight: boolean }) {
   const name = providerLabel(item.provider)
+  const userAgent = String(item.userAgent ?? '').trim()
   const account = String(item.account ?? '').trim()
   const status = Number(item.status)
   const hasStatus = item.status !== null && item.status !== undefined && Number.isFinite(status)
@@ -232,6 +234,9 @@ function AttemptRow({ item, index, inFlight }: { item: AttemptDetail; index: num
         {/* 序号从 1 起（后端明细数组本身就是发生顺序，不需要另存 attempt_no） */}
         <span className='rh-no mr-1 text-muted-foreground'>{t('尝试 {n} ·', { n: index + 1 })}</span>
         <span className='rh-who mr-1 font-semibold text-foreground'>{name || t('未知')}</span>
+        {userAgent ? (
+          <span className='rh-account mr-1 text-muted-foreground [overflow-wrap:anywhere]'>{userAgent}</span>
+        ) : null}
         {account ? (
           <span className='rh-account mr-1 text-muted-foreground [overflow-wrap:anywhere]'>{account}</span>
         ) : null}

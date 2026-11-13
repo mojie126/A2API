@@ -8,6 +8,7 @@ pub(super) fn stored_attempt_details(list: &[usage::AttemptDetail]) -> Vec<Attem
     list.iter()
         .map(|item| AttemptDetail {
             provider: item.provider.clone(),
+            user_agent: item.user_agent.clone(),
             account: item.account.clone(),
             account_id: item.account_id.clone(),
             candidate_id: item.candidate_id.clone(),
@@ -90,6 +91,9 @@ fn persist(context: &RecordContext, fallback_error: Option<String>) {
             }
         }
     }
+    entry.source.outbound_client = if !snapshot.outbound_client.is_empty() { snapshot.outbound_client }
+        else { entry.source.client.clone() };
+    entry.source.outbound_user_agent = snapshot.outbound_user_agent;
     entry.error = error;
     entry.prompt_tokens = snapshot.prompt_tokens;
     entry.completion_tokens = snapshot.completion_tokens;

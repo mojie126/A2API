@@ -87,6 +87,8 @@ const DEFAULT_TAB: TabKey = 'detail'
 type AttemptDetail = {
   provider?: string
   providerLabel?: string
+  /** 这一轮实际发给上游的 User-Agent（空 = 插件默认身份） */
+  userAgent?: string
   account?: string
   /** 上游状态码；null / 缺省 = 这次尝试没有结果记录 */
   status?: number | string | null
@@ -137,6 +139,9 @@ type RequestRow = {
   isTest?: boolean
   client?: string
   clientLabel?: string
+  identifiedClient?: string
+  outboundClient?: string
+  outboundUserAgent?: string
   clientEvidence?: ClientEvidence
   apiKeyId?: string
   apiKeyName?: string
@@ -412,7 +417,7 @@ function AttemptsTable({ row }: { row: RequestRow }) {
     <Table className='text-[11.5px]'>
       <TableHeader>
         <TableRow className={NO_HOVER}>
-          {[t('轮次'), t('提供商'), t('账号'), t('结果'), t('体积'), t('内部重试'), t('提示')].map(label => (
+          {[t('轮次'), t('提供商'), t('上游身份'), t('账号'), t('结果'), t('体积'), t('内部重试'), t('提示')].map(label => (
             <TableHead key={label} className={ATTEMPT_HEAD}>{label}</TableHead>
           ))}
         </TableRow>
@@ -448,6 +453,7 @@ function AttemptsTable({ row }: { row: RequestRow }) {
               <TableCell className={ATTEMPT_CELL}>
                 {providerName(item) || (item?.provider ? String(item.provider) : t('未知'))}
               </TableCell>
+              <TableCell className={`${ATTEMPT_CELL} break-all`}>{item?.userAgent || '—'}</TableCell>
               <TableCell className={ATTEMPT_CELL}>{item?.account ? String(item.account) : '—'}</TableCell>
               <TableCell className={ATTEMPT_CELL}>{attemptResult(item)}</TableCell>
               <TableCell className={`${ATTEMPT_CELL} whitespace-nowrap`} title={bodyTitle}>
@@ -462,7 +468,7 @@ function AttemptsTable({ row }: { row: RequestRow }) {
         })}
         {details.length < attempts ? (
           <TableRow className={NO_HOVER}>
-            <TableCell colSpan={7} className={`${ATTEMPT_CELL} text-muted-foreground`}>
+            <TableCell colSpan={8} className={`${ATTEMPT_CELL} text-muted-foreground`}>
               {t('另有 {missing} 次尝试未记录明细（只保留最早的 {kept} 条）', {
                 missing: attempts - details.length, kept: details.length,
               })}

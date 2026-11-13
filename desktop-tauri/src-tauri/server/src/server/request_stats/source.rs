@@ -37,6 +37,15 @@ impl ApiKeyIdentity {
 pub struct RequestSource {
     #[serde(default)]
     pub client: String,
+    /// 请求头识别出的真实客户端，保留用于依据和排障。
+    #[serde(rename = "identifiedClient", default, skip_serializing_if = "String::is_empty")]
+    pub identified_client: String,
+    /// 用于生成上游请求身份的客户端标识
+    #[serde(rename = "outboundClient", default, skip_serializing_if = "String::is_empty")]
+    pub outbound_client: String,
+    /// 上游实际收到的 User-Agent
+    #[serde(rename = "outboundUserAgent", default, skip_serializing_if = "String::is_empty")]
+    pub outbound_user_agent: String,
     #[serde(flatten)]
     pub api_key: ApiKeyIdentity,
     #[serde(rename = "clientEvidence", default, skip_serializing_if = "Option::is_none")]
@@ -59,8 +68,18 @@ impl RequestSource {
         self.evidence.as_ref().map(|evidence| evidence.client_name.as_str()).unwrap_or("")
     }
 
+    /// 最终出站客户端标识
+    ///
+    /// 优先使用显式出站身份，旧行没有被写入时回落最终归属客户端
+    pub fn outbound_identity(&self) -> &str {
+        if self.outbound_client.is_empty() { &self.client } else { &self.outbound_client }
+    }
+
     pub(super) fn normalized(mut self) -> Self {
         self.client = self.client.trim().to_string();
+        self.identified_client = self.identified_client.trim().to_string();
+        self.outbound_client = self.outbound_client.trim().to_string();
+        self.outbound_user_agent = self.outbound_user_agent.trim().to_string();
         self.evidence = self.evidence.map(|evidence| evidence.normalized());
         self.api_key.id = self.api_key.id.trim().to_string();
         self.api_key.name = self.api_key.name.trim().to_string();

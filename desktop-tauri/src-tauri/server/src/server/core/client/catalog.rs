@@ -152,6 +152,28 @@ pub fn target<'a>(settings: &'a ClientSettings, id: &str) -> Option<(&'a str, &'
     settings.clients.iter().find(|client| client.id == id).map(|client| (client.id.as_str(), client.name.as_str()))
 }
 
+/// 把已登记的客户端标识转换为可用于出站请求的 User-Agent
+///
+/// 内置客户端使用代表性 User-Agent，自定义客户端使用其显示名
+/// 未登记的标识返回 `None`，由调用方保留插件自身的默认身份
+pub fn outbound_user_agent(settings: &ClientSettings, id: &str) -> Option<String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    if let Some(client) = builtin(id) {
+        return Some(client.ua.to_string());
+    }
+    if let Some(client) = settings.clients.iter().find(|client| client.id == id) {
+        return normalize_outbound_user_agent(&client.name);
+    }
+    declared_client(settings, id).and_then(|resolved| {
+        builtin(resolved).map(|client| client.ua.to_string())
+            .or_else(|| settings.clients.iter().find(|client| client.id == resolved)
+                .and_then(|client| normalize_outbound_user_agent(&client.name)))
+    }).filter(|value| normalize_outbound_user_agent(value).is_some())
+}
+
 pub fn declared_client<'a>(settings: &'a ClientSettings, name: &str) -> Option<&'a str> {
     let name = name.trim();
     if let Some(client) = CLIENTS.iter().find(|client|
@@ -162,6 +184,31 @@ pub fn declared_client<'a>(settings: &'a ClientSettings, name: &str) -> Option<&
     }
     settings.clients.iter().find(|client| client.id.eq_ignore_ascii_case(name)
         || client.name.eq_ignore_ascii_case(name)).map(|client| client.id.as_str())
+}
+
+/// 出站身份只返回显式配置的供应商归属客户端
+///
+/// 命中供应商归属规则时用规则客户端，未命中回落默认归属客户端
+/// 两者都未配置时返回 `None`，不会把入站识别结果自动变成改写目标
+pub fn configured_attribution_client(provider: &str, settings: &ClientSettings) -> Option<String> {
+    if !provider.is_empty() {
+        if let Some(rule) = settings.provider_rules.iter()
+            .find(|rule| rule.provider.eq_ignore_ascii_case(provider)) {
+            return Some(rule.client_id.clone());
+        }
+    }
+    (!settings.default_client_id.trim().is_empty()).then(|| settings.default_client_id.trim().to_string())
+}
+
+/// 将显式出站身份规整成合法请求头值
+///
+/// 账号 User-Agent 在落库时已校验，这里只兜住由客户端名称生成的取值
+pub fn normalize_outbound_user_agent(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > MAX_UA_BYTES || value.chars().any(char::is_control) {
+        return None;
+    }
+    axum::http::HeaderValue::from_str(value).ok().map(|_| value.to_string())
 }
 
 pub fn validate(settings: &ClientSettings) -> Result<(), String> {
@@ -262,6 +309,27 @@ mod tests {
         // 两者都没配置：保留请求头识别出的真实客户端
         let empty = ClientSettings::default();
         assert_eq!(attribution_client("codex", "zcode", &empty), "codex");
+    }
+
+    #[test]
+    fn configured_attribution_ignores_identified_client_fallback() {
+        let mut settings = ClientSettings::default();
+        settings.provider_rules.push(ProviderRule { provider: "zcode".into(), client_id: "codex".into() });
+        assert_eq!(configured_attribution_client("ZCODE", &settings).as_deref(), Some("codex"));
+        settings.default_client_id = "claude-code".into();
+        assert_eq!(configured_attribution_client("raccoon", &settings).as_deref(), Some("claude-code"));
+        assert_eq!(configured_attribution_client("raccoon", &ClientSettings::default()), None);
+    }
+
+    #[test]
+    fn outbound_user_agent_uses_registered_client_identity() {
+        let mut settings = ClientSettings::default();
+        settings.clients.push(CustomClient { id: "custom:abcdef123456".into(), name: "gateway-relay/1.0".into() });
+        assert_eq!(outbound_user_agent(&settings, "codex").as_deref(), Some(CLIENTS[1].ua));
+        assert_eq!(outbound_user_agent(&settings, "custom:abcdef123456").as_deref(), Some("gateway-relay/1.0"));
+        settings.clients.push(CustomClient { id: "custom:中文客户端".into(), name: "中文客户端".into() });
+        assert_eq!(outbound_user_agent(&settings, "custom:中文客户端").as_deref(), Some("中文客户端"));
+        assert_eq!(outbound_user_agent(&settings, "unregistered"), None);
     }
 
     #[test]

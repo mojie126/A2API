@@ -11,6 +11,8 @@ pub const MAX_ATTEMPT_NOTICE_CHARS: usize = 200;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AttemptDetail {
     pub provider: String,
+    #[serde(rename = "userAgent", default)]
+    pub user_agent: String,
     #[serde(default)]
     pub account: String,
     #[serde(rename = "accountId", default)]
@@ -124,8 +126,10 @@ impl RequestTelemetry {
             .and_then(|entry| entry.get("reason")).and_then(Value::as_str).unwrap_or("");
         let reason = truncate_chars(reason, MAX_ATTEMPT_NOTICE_CHARS);
         let sticky_hit = guard.route.as_ref().and_then(|route| route.get("stickyHit")).and_then(Value::as_bool).unwrap_or(false);
+        let user_agent = guard.outbound_user_agent.clone();
         guard.attempts_detail.push(AttemptDetail {
-            provider: provider.to_string(), account: truncate_chars(account, MAX_ATTEMPT_ACCOUNT_CHARS),
+            provider: provider.to_string(), user_agent,
+            account: truncate_chars(account, MAX_ATTEMPT_ACCOUNT_CHARS),
             account_id, candidate_id, member_id, model: String::new(), reasoning: String::new(), reason, sticky_hit,
             started_at: Some(crate::server::logging::now_ms()), response_at: None, finished_at: None,
             status: None, error: None, retries: Vec::new(), notice: None, body_bytes: None,

@@ -174,6 +174,34 @@ fn take_switch(switches_left: &mut usize, total: usize) -> bool {
     true
 }
 
+/// 按账号自定义 User-Agent、显式供应商归属客户端、插件默认值的顺序
+/// 计算本次请求最终的出站身份
+fn final_outbound_client(target: &RouteTarget) -> Option<String> {
+    let settings = crate::server::config::client_identification::current();
+    let settings = settings.settings.as_ref().ok()?;
+    let account_user_agent = target.account.as_ref()
+        .and_then(|account| account.get("userAgent"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    if account_user_agent {
+        return None;
+    }
+    crate::server::core::client::catalog::configured_attribution_client(&target.provider, settings)
+}
+
+fn final_outbound_user_agent(target: &RouteTarget, client: Option<&str>) -> Option<String> {
+    let account = target.account.as_ref()
+        .and_then(|account| account.get("userAgent"))
+        .and_then(Value::as_str)
+        .and_then(crate::server::core::client::catalog::normalize_outbound_user_agent);
+    if account.is_some() {
+        return account;
+    }
+    let settings = crate::server::config::client_identification::current();
+    let settings = settings.settings.as_ref().ok()?;
+    client.and_then(|client| crate::server::core::client::catalog::outbound_user_agent(settings, client))
+}
+
 /// 失败之后往队列的下一个账号**顺延**：动作 3 与「构造期本地失败」共用的一条路。
 ///
 /// 做四件事，顺序与原来逐字一致：把这一轮的账号记进 `tried_ids` → 问队列还有没有
@@ -711,6 +739,17 @@ async fn attempt_queue(
         };
         crate::server::core::plugin_host::account_egress::select(
             &target.provider, target.account_id.as_deref().unwrap_or(""), target.proxy.as_ref(), direct,
+        );
+        let final_client = final_outbound_client(&target);
+        let final_user_agent = final_outbound_user_agent(&target, final_client.as_deref());
+        crate::server::core::plugin_host::account_egress::set_user_agent(
+            &target.provider,
+            target.account_id.as_deref().unwrap_or(""),
+            final_user_agent.as_deref(),
+        );
+        ctx.telemetry.note_outbound_identity(
+            final_client.as_deref().unwrap_or(""),
+            final_user_agent.as_deref(),
         );
         // 决策快照挂进 telemetry（最后一次为准：请求日志的「路由回放」显示
         // 的是最终承载那次选路的完整排序 —— 与 attempts 明细的换号链互补，
@@ -1279,20 +1318,13 @@ async fn attempt_queue(
                 }
                 if let Some(ids) = &conversation_ids { ids.apply(&mut plan.headers); }
             }
-            // ── 账号级自定义 User-Agent ─────────────────────────────
+            // ── 最终上游身份 ───────────────────────────────────────
             // 适配器各自写自家默认 UA（`claude-cli/…` / `codex_cli_rs/…` /
             // `opencode/…`），覆盖必须发生在**它们全部构造完之后**，否则会被
-            // 后写的默认值盖回去。大小写不敏感地摘掉同名头再追加：HTTP 头名
-            // 不区分大小写，留两个会让上游取哪个变成实现细节。
-            // 值在落库时已校验过（无控制字符、能转成合法头值），这里不再兜底。
-            if let Some(user_agent) = session
-                .get("userAgent")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                plan.headers.retain(|(name, _)| !name.eq_ignore_ascii_case("user-agent"));
-                plan.headers.push(("User-Agent".to_string(), user_agent.to_string()));
+            // 后写的默认值盖回去。账号自定义值优先，其次显式供应商归属客户端，
+            // 两者都为 None 时保留插件默认身份。
+            if let Some(user_agent) = final_user_agent.as_deref() {
+                crate::server::core::user_agent::apply(&mut plan.headers, user_agent);
             }
             native_tools = if plan.policy.repair_native_tools {
                 super::native_tools::declared_tools(&plan.body)

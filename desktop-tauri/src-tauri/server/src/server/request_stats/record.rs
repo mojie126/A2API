@@ -288,6 +288,10 @@ pub struct AttemptDetail {
     /// 这一轮实际发送的 provider id
     #[serde(default)]
     pub provider: String,
+    /// 这一轮实际发送的 User-Agent
+    /// 空串 = 这一轮沿用提供商插件默认身份
+    #[serde(rename = "userAgent", default, skip_serializing_if = "String::is_empty")]
+    pub user_agent: String,
     /// 这一轮承载的账号展示名（空串 = 该轮没有账号记录）
     #[serde(default)]
     pub account: String,
@@ -569,6 +573,7 @@ impl NewRequestEntry {
                 .into_iter()
                 .map(|item| AttemptDetail {
                     provider: item.provider.trim().to_string(),
+                    user_agent: item.user_agent.trim().to_string(),
                     // 账号名 trim 的理由与 provider 相同（空白不该造出一个
                     // 「看起来不同的名字」）；空串语义 = 该轮没有账号记录
                     account: item.account.trim().to_string(),
@@ -655,7 +660,13 @@ impl NewRequestEntry {
 pub struct RunningProgress {
     /// 到此刻为止承载这一轮的 provider id（空串 = 还没走到选路）
     pub provider: String,
-    /// 在途期间的**归属客户端**（空串 = 供应商未定或识别配置异常，写入侧不覆盖）：
+    /// 到此刻为止用于生成上游请求身份的客户端标识
+    /// 空串 = 尚未确定最终身份或沿用插件默认身份
+    pub outbound_client: String,
+    /// 到此刻为止上游实际收到的 User-Agent
+    /// 账号自定义值优先，其次显式供应商归属客户端，空串 = 插件默认身份
+    pub outbound_user_agent: String,
+    /// 在途期间的最终归属客户端（空串 = 供应商未定或识别配置异常，写入侧不覆盖）
     /// 供应商确定后按归属规则改写，在途行与终态行显示同一个客户端；收尾仍以
     /// 记账写入为准（判据见 `api::pipeline::running_progress`）
     pub client: String,

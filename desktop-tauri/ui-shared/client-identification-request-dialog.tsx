@@ -97,8 +97,9 @@ export function RequestIdentificationDialog({ api, view: initialView, entry, evi
           {evidence.matchedHeader ? <p className='break-all text-muted-foreground'>{t('命中依据：{header} · {pattern}', { header: evidence.matchedHeader, pattern: evidence.matchedPattern })}</p> : null}
         </div>
         <div className='rounded-lg bg-surface-inset p-3 text-[12.5px] leading-[1.7]'>
-          <p className='text-muted-foreground'>{t('最终归属（记账时的客户端）')}</p>
+          <p className='text-muted-foreground'>{t('最终归属与上游身份')}</p>
           <p>{requestClientLabel(entry, t)} · {sourceLabel}</p>
+          {entry.outboundUserAgent ? <p className='break-all text-muted-foreground'>{t('上游实际 User-Agent：{value}', { value: entry.outboundUserAgent })}</p> : null}
           {providerRule ? <p className='break-all text-muted-foreground'>{t('命中规则：{provider} → {client}', { provider: providerName(providerRule.provider), client: clientName(providerRule.clientId) })}</p> : null}
         </div>
         {provider ? <>

@@ -1027,6 +1027,9 @@ impl ProviderAdapter for RpcAdapter {
             let mut params = self.base();
             params.insert("account".into(), Value::String(account_id.to_string()));
             params.insert("proxy".into(), proxy.map(wire_proxy).transpose()?.unwrap_or(Value::Null));
+            if let Some(user_agent) = super::account_egress::user_agent_for(&self.id, account_id) {
+                params.insert("user_agent".into(), Value::String(user_agent));
+            }
             params.insert("body".into(), body.clone());
             params.insert("headers".into(), headers_json(client_headers));
             // ── 恒发 `stream: true` ────────────────────────────────

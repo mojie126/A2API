@@ -488,6 +488,8 @@ export type SharedWindow = {
     save(key: string, patch: Record<string, string>): void
   }
   wbIcons?: { icon?: (name: string, size?: number) => string }
+  /** 设置页的分类切换（app.js 挂载）；账号设置里的相关入口用它跳到客户端识别 */
+  wbSettingsPanel?: { showCategory?: (category: string) => void }
   wbColSettings?: {
     register(spec: ColSettingsSpec): ColSettingsHandle
     apply<C extends { key: string }>(id: string, columns: C[]): Array<C & { align: Align }>

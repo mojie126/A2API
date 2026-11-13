@@ -22,10 +22,12 @@ export type RequestEntry = {
   /** 模型测试发起的请求（后端 `is_test`；此前落盘的老行没有这个键） */
   isTest?: boolean
   phase?: string; phaseElapsedMs?: number | null; phaseStartedAt?: number | null
-  /** 来源客户端（后端 `client`：入口按下游 User-Agent 分类的结果；
-   *  空串 / 缺键 = 没有记录 —— 旧行、模型测试、请求未带 UA 的行） */
+  /** 最终归属客户端（后端 `client`；真实入站识别值另见 `identifiedClient`） */
   client?: string
   clientLabel?: string
+  identifiedClient?: string
+  outboundClient?: string
+  outboundUserAgent?: string
   clientEvidence?: import('../../../../ui-shared/client-identification').ClientEvidence
   apiKeyId?: string; apiKeyName?: string; apiKeySource?: string
 }
@@ -383,12 +385,16 @@ export function RequestCell({ entry, column, namesHidden }: { entry: RequestEntr
       if (isRunning(entry) && !entry.provider?.trim()) {
         return <span key={key} className={className} title={t('归属在选路后确定：命中供应商规则用规则客户端，未命中用默认归属客户端，都没设置保留识别结果')}>—</span>
       }
-      // 归属被改写时悬停要交代来龙去脉：识别出的是谁、改写成了谁，UA 只作依据
-      const rewritten = Boolean(evidence && entry.client
-        && evidence.clientId.trim().toLowerCase() !== entry.client.trim().toLowerCase())
-      const tip = rewritten && evidence
+      // 归属被改写时悬停要交代来龙去脉：识别出的是谁、改写成了谁
+      // 再列出上游实际收到的 User-Agent，避免把入站识别值误当成出站身份
+      const identified = entry.identifiedClient?.trim() || evidence?.clientId.trim() || ''
+      const rewritten = Boolean(entry.client && identified
+        && identified.toLowerCase() !== entry.client.trim().toLowerCase())
+      const tip = [rewritten && evidence
         ? `${t('请求头识别为 {identified}，已改写归属为 {client}', { identified: evidence.clientName || evidence.clientId, client: label })}\n${evidence.userAgent}`
-        : evidence?.userAgent || t('来源客户端：{client}', { client: label })
+        : evidence?.userAgent || t('来源客户端：{client}', { client: label }),
+        entry.outboundUserAgent ? t('上游实际 User-Agent：{value}', { value: entry.outboundUserAgent }) : '',
+      ].filter(Boolean).join('\n')
       return <span key={key} className={className} title={tip}>{label}</span>
     }
 

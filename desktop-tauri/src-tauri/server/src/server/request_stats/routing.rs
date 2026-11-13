@@ -151,6 +151,8 @@ mod tests {
         );
         stats.update_running(id, &RunningProgress {
             provider: "trae".to_string(),
+            outbound_client: String::new(),
+            outbound_user_agent: String::new(),
             client: String::new(),
             account_id: account_id.to_string(),
             account_name: "mojie126".to_string(),
@@ -239,6 +241,8 @@ mod tests {
             "req-1",
             &RunningProgress {
                 provider: "trae".to_string(),
+                outbound_client: String::new(),
+                outbound_user_agent: String::new(),
                 client: String::new(),
                 account_id: "acct-trae".to_string(),
                 account_name: "mojie126".to_string(),

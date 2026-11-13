@@ -387,7 +387,10 @@ pub fn request_source(
         snapshot.settings.as_ref().unwrap_or(&defaults),
     );
     crate::server::request_stats::RequestSource {
-        client,
+        client: client.clone(),
+        identified_client: client,
+        outbound_client: String::new(),
+        outbound_user_agent: String::new(),
         api_key: identity.map(|axum::extract::Extension(identity)| identity).unwrap_or_default(),
         evidence: Some(evidence),
         behavior_client,
@@ -485,25 +488,33 @@ pub fn live_row_sink(
     stats: Arc<RequestStats>,
     id: String,
     started_at: i64,
-    identified_client: &str,
+    attributed_client: &str,
 ) -> impl Fn(&TelemetrySnapshot) + Send + Sync {
-    let identified = identified_client.to_string();
+    let identified = attributed_client.to_string();
     let live = super::live_progress::sink(stats, id);
     move |snapshot| live(running_progress(snapshot, started_at, &identified))
 }
 
-pub(super) fn running_progress(snapshot: &TelemetrySnapshot, started_at: i64, identified_client: &str) -> RunningProgress {
+pub(super) fn running_progress(
+    snapshot: &TelemetrySnapshot,
+    started_at: i64,
+    identified_client: &str,
+) -> RunningProgress {
     let provider = snapshot.provider.clone().unwrap_or_default();
-    // 供应商定下后在途行就按归属规则改写 client：与收尾记账同一判据，转发期间
-    // 列表显示的不再是请求头识别出的真实客户端；供应商未定（空串）不覆盖。
-    let client = if provider.is_empty() { String::new() } else {
+    // 供应商定下后在途行按归属规则改写：与收尾记账共用同一判据
+    // 真实识别身份另存 identified_client，账号自定义出站身份由 telemetry 给出
+    let attributed = if provider.is_empty() { String::new() } else {
         crate::server::config::client_identification::current().settings.as_ref().ok()
             .map(|settings| crate::server::core::client::attribution_client(identified_client, &provider, settings))
             .unwrap_or_default()
     };
+    let outbound_client = if !snapshot.outbound_client.is_empty() { snapshot.outbound_client.clone() }
+        else { attributed.clone() };
     RunningProgress {
         provider,
-        client,
+        outbound_client,
+        outbound_user_agent: snapshot.outbound_user_agent.clone(),
+        client: attributed,
         account_id: snapshot.account_id.clone(),
         account_name: snapshot.account_name.clone(),
         upstream_model: snapshot.upstream_model.clone(),

@@ -16,9 +16,15 @@ export function ClientIdentificationDetail({ entry, api, t }: { entry: RequestId
   if (entry.isTest && !evidence) return <span>{requestClientLabel(entry, t)}</span>
   return <div className='space-y-2 text-xs'>
     <div className='flex flex-wrap items-center gap-2'><Badge variant='outline'>{requestClientLabel(entry, t)}</Badge><span className='text-muted-foreground'>{clientMethodLabel(evidence?.method, t)}</span></div>
-    {entry.client && evidence && entry.client.trim().toLowerCase() !== evidence.clientId.trim().toLowerCase()
-      ? <p className='text-muted-foreground'>{t('请求头识别为 {identified}，已改写归属为 {client}', { identified: evidence.clientName || evidence.clientId, client: requestClientLabel(entry, t) })}</p>
-      : null}
+    {(() => {
+      const identified = entry.identifiedClient?.trim() || evidence?.clientId.trim() || ''
+      if (!entry.client || !identified || identified.toLowerCase() === entry.client.trim().toLowerCase()) return null
+      return <p className='text-muted-foreground'>{t('请求头识别为 {identified}，已改写归属为 {client}', {
+        identified: evidence?.clientName || evidence?.clientId || identified,
+        client: requestClientLabel(entry, t),
+      })}</p>
+    })()}
+    {entry.outboundUserAgent ? <p className='break-all'>{t('上游实际 User-Agent：{value}', { value: entry.outboundUserAgent })}</p> : null}
     {evidence ? <>
       <div className='break-all'><span className='text-muted-foreground'>User-Agent: </span>{evidence.userAgent || '—'}</div>
       {evidence.userAgentTruncated ? <p className='text-muted-foreground'>{t('软件标识超过 1 KB，已截断保存；匹配仅使用保留部分。')}</p> : null}

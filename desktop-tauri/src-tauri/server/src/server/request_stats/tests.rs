@@ -14,6 +14,7 @@ fn temp_stats() -> (tempfile::TempDir, RequestStats) {
 fn source(client: &str, key: &str) -> RequestSource {
     RequestSource {
         client: client.into(),
+        identified_client: client.into(),
         api_key: ApiKeyIdentity::from_filter(key).expect("合法的密钥筛选标识"),
         ..Default::default()
     }
@@ -368,6 +369,23 @@ fn missing_database_returns_the_same_empty_query_shape() {
         page,
         json!({"entries": [], "total": 0, "matched": 0, "running": 0})
     );
+}
+
+#[test]
+fn request_source_keeps_identified_and_outbound_identity() {
+    let (_dir, stats) = temp_stats();
+    let now = crate::server::logging::now_ms();
+    let mut item = entry("egress", now);
+    item.source.identified_client = "codex".into();
+    item.source.outbound_client = "claude-code".into();
+    item.source.outbound_user_agent = "claude-cli/2.1.296 (external, cli)".into();
+    stats.record(item);
+
+    let page = stats.query_requests(&RequestQuery::default());
+    let row = &page["entries"][0];
+    assert_eq!(row["identifiedClient"], "codex");
+    assert_eq!(row["outboundClient"], "claude-code");
+    assert_eq!(row["outboundUserAgent"], "claude-cli/2.1.296 (external, cli)");
 }
 
 
