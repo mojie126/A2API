@@ -120,11 +120,12 @@ body.has-titlebar .shell {
   text-align: left;
 }
 .zcode-verify-state { font-size: 10.5px; font-weight: 400; color: var(--sidebar-muted); flex: none; }
-/* ✕ 绝对定位到卡片右上角：跟着标题行走会把它挤到框外 */
+/* ✕ 绝对定位钉在卡片右上角，垂直跟随标题行居中：跟着标题行走会把它挤到框外 */
 .zcode-verify-close {
   position: absolute;
-  top: 4px;
+  top: 50%;
   right: 4px;
+  transform: translateY(-50%);
   color: var(--sidebar-muted);
 }
 .zcode-verify-body {
