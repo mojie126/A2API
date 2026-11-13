@@ -24,8 +24,10 @@ import {
 } from '../../../ui-shared/model-capability'
 
 export {
-  BOOLEAN_KEYS, CAPABILITY_KEYS, MAX_TOKEN_VALUE, TOKEN_KEYS, capSourceOf,
+  BOOLEAN_KEYS, CAPABILITY_KEYS, MAX_REASONING_LEVELS, MAX_REASONING_LEVEL_CHARS,
+  MAX_TOKEN_VALUE, REASONING_LEVELS_KEY, TOKEN_KEYS, capSourceOf,
   isTokenKey, normalizeCapabilities, normalizeCapability, normalizeOverrides,
+  normalizeReasoningLevels,
   type Capabilities, type CapabilityKey, type CapabilitySource,
 } from '../../../ui-shared/model-capability'
 

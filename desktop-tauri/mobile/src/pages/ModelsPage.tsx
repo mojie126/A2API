@@ -351,7 +351,9 @@ export function ModelsPage() {
                         ) : reasoningInfo.levels.length ? (
                           <p className='mt-1 text-[10.5px] text-subtle'>
                             {reasoningInfo.source === 'modelsdev' ? t('社区参考档位：{levels}', { levels: reasoningInfo.levels.join(' / ') })
-                              : t('上游可用档位：{levels}', { levels: reasoningInfo.levels.join(' / ') })}
+                              : reasoningInfo.source === 'user'
+                                ? t('手动设置档位：{levels}', { levels: reasoningInfo.levels.join(' / ') })
+                                : t('上游可用档位：{levels}', { levels: reasoningInfo.levels.join(' / ') })}
                             {reasoningInfo.defaultLevel ? ` · ${t('默认档位：{level}', { level: reasoningInfo.defaultLevel })}` : ''}
                           </p>
                         ) : reasoningInfo.bindingSupported === false ? (

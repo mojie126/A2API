@@ -341,9 +341,18 @@ pub fn set_capabilities(
         for (key, value) in patch {
             if value.is_null() {
                 values.remove(key);
-            } else if let Some(value) = crate::server::core::capability::normalize_value(key, value)
+            } else if let Some(value) =
+                crate::server::core::capability::normalize_value(key, value)
             {
-                values.insert(key.clone(), value);
+                // 空档位表 = 用户把这一项清空了（界面上把档位删到一行不剩）：
+                // 与 null 同义，都是「这一项回到上游 / models.dev 的结论」。
+                // 落一条空表会让「被覆盖过吗」在存储、管理页与出口三处各多一个
+                // 没有意义的第三态（见 `capability::normalize_levels`）
+                if value.as_array().is_some_and(|items| items.is_empty()) {
+                    values.remove(key);
+                } else {
+                    values.insert(key.clone(), value);
+                }
             }
         }
         if let Some(update) = binding {

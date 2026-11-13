@@ -87,6 +87,12 @@
 //! 几个键做任何决策（路由 / 启停 / 转发都与它无关），所以它不影响
 //! `disabled` / `mappings` / `custom` 的任何行为。
 //!
+//! 同一张覆盖表里还躺着**思考档位表**（`capability::REASONING_LEVELS_KEY`）：
+//! 「这个模型认识哪几档」由用户手写，优先于上游声明与 models.dev，生效在
+//! `/v1/models` 的档位字段与管理页的档位展示、映射弹窗的候选上（应用点是
+//! `model_meta::apply_user_reasoning_levels`）。它与能力位同生共死（删掉这条
+//! 覆盖，档位也就回到上游 / models.dev 的结论），因此同存一处。
+//!
 //! 所有比对忽略大小写（与 `catalog::providers_for_model` 同口径）。
 //!
 //! ── 思考等级绑定（`mappings[].reasoning`）─────────────────────
@@ -249,8 +255,10 @@ impl CustomModel {
 /// 「能力位覆盖」）。
 ///
 /// `values` 是**稀疏表**：只存被覆盖的键（键名与归一规则在
-/// `core::capability`），没被覆盖的键沿用清单原值。空表不存在 —— 写侧
-/// （[`set_capabilities`]）会把清空的条目整条移除，读取侧也丢弃空条目。
+/// `core::capability`），没被覆盖的键沿用清单原值；其中一项是思考档位表
+/// （`capability::REASONING_LEVELS_KEY`），它是数组、由清单成型处另行应用。
+/// 空表不存在 —— 写侧（[`set_capabilities`]）会把清空的条目整条移除，读取侧
+/// 也丢弃空条目。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapabilityOverride {
     pub provider: String,
@@ -764,6 +772,10 @@ pub fn alias_name_valid(alias: &str) -> bool {
 /// 把该家的能力覆盖写进整份清单（内置家清单出口的统一调用点，见
 /// `providers::catalog::manifest_for`）。
 ///
+/// 六个能力位逐键改写；思考档位表换的是整份声明，交给
+/// `model_meta::apply_user_reasoning_levels` 处理（固定档、默认档与来源标记
+/// 都要跟着动）。
+///
 /// 收在「整份清单一次」而不是「一条条目一次」，是性能上的硬约束：
 /// `current()` 每次调用都要重新解析整份 modelRules，逐条调用会让一次
 /// `/v1/models` 把同一份配置解析几百遍。
@@ -798,6 +810,11 @@ pub fn apply_capability_overrides(provider: &str, items: &mut [Value]) {
                 item,
                 &crate::server::core::capability::overridden_keys(&entry.values),
             );
+            // 思考档位表与六个能力位同一层覆盖：它换的是整份档位声明，不能由
+            // `apply_overrides` 逐键改写（固定档与默认档要一起处理，见那个函数）
+            if let Some(levels) = crate::server::core::capability::levels_from(&entry.values) {
+                crate::server::core::model_meta::apply_user_reasoning_levels(item, &levels);
+            }
         }
     }
 }
@@ -927,5 +944,41 @@ mod tests {
         let item = &saved["capabilities"][0];
         assert_eq!(item["modelsDevId"], "anthropic/claude-sonnet-4");
         assert_eq!(item["matchByNames"], true);
+    }
+
+    /// 思考档位表随覆盖条目一起读写：读侧归一（去空白、忽略大小写去重），写侧原样落盘
+    #[test]
+    fn reasoning_levels_override_roundtrips_through_config() {
+        let raw = json!({
+            KEY_MODEL_RULES: {
+                "capabilities": [{
+                    "provider": "demo",
+                    "id": "kimi-k3",
+                    "supportsReasoning": true,
+                    "reasoningLevels": ["low", " HIGH ", "low"]
+                }]
+            }
+        });
+        let rules = ModelRules::from_raw(raw.as_object().expect("测试对象"));
+        assert_eq!(rules.capabilities.len(), 1);
+        assert_eq!(
+            crate::server::core::capability::levels_from(&rules.capabilities[0].values).unwrap(),
+            vec!["low".to_string(), "HIGH".to_string()]
+        );
+        let saved = rules.to_value();
+        assert_eq!(saved["capabilities"][0]["reasoningLevels"], json!(["low", "HIGH"]));
+    }
+
+    /// 空档位表 = 没有覆盖：读侧丢掉这一项，写侧不留一条空数组
+    #[test]
+    fn empty_reasoning_levels_are_not_persisted() {
+        let raw = json!({
+            KEY_MODEL_RULES: {
+                "capabilities": [{ "provider": "demo", "id": "kimi-k3", "reasoningLevels": [] }]
+            }
+        });
+        let rules = ModelRules::from_raw(raw.as_object().expect("测试对象"));
+        assert!(rules.capabilities.is_empty());
+        assert_eq!(rules.to_value()["capabilities"], json!([]));
     }
 }

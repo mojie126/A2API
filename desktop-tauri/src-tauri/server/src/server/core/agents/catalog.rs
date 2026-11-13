@@ -39,6 +39,9 @@ fn scoped_models(store: &AccountStore, scope: Option<&KeyScope>) -> Vec<Model> {
                     model_meta::apply(provider, &mut model, Some(&id));
                     let overrides = capability::normalize_object(model.get("capabilities"));
                     capability::apply_overrides(&mut model, &overrides);
+                    if let Some(levels) = capability::levels_from(&overrides) {
+                        model_meta::apply_user_reasoning_levels(&mut model, &levels);
+                    }
                     model
                 }).collect()
             });

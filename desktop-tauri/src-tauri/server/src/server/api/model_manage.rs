@@ -355,6 +355,9 @@ pub async fn remove_custom(State(state): State<ServerState>, body: Bytes) -> Res
 ///   · 键**缺失**   → 不改这一项；
 ///   · 键给 `null`  → 清除这一项的覆盖（回到清单原值）；
 ///   · 键给值       → 覆盖（token 键要 1~1 亿正整数，能力开关要布尔）。
+/// 除六个能力位外还收**思考档位表**（`reasoningLevels`，字符串数组，最多 32 档、
+/// 单档 32 字符）：它换的是「这个模型认识哪几档」的整份声明，与能力位同一条存储
+/// 与同一条优先级（用户 > 上游 > models.dev），空数组与 `null` 同义（清除覆盖）。
 /// 管理页弹窗保存时六个键一次全给（「全量提交」最不容易出歧义）；
 /// 只给一个键的单字段路径也支持，留给以后的行内编辑。
 ///
@@ -390,13 +393,16 @@ pub async fn set_capabilities(State(state): State<ServerState>, body: Bytes) -> 
     // 值校验在这里就拦掉（与 add_mapping 的 reasoning 同一取向：不留一条
     // 读回来会被归一丢弃的脏数据）；`null` 是合法的「清除」信号，不算非法值。
     for (key, value) in &patch {
-        if !capability::KEYS.contains(&key.as_str()) {
+        if !capability::is_known_key(key) {
             return errors::management_error(400, format!("未知的能力字段: {key}"));
         }
         if !value.is_null() && capability::normalize_value(key, value).is_none() {
             return errors::management_error(
                 400,
-                format!("能力字段 {key} 取值非法（token 键要 1~1 亿的正整数，能力开关要布尔）"),
+                format!(
+                    "能力字段 {key} 取值非法（token 键要 1~1 亿的正整数，能力开关要布尔，\
+                     思考档位要字符串数组）"
+                ),
             );
         }
     }
@@ -439,9 +445,14 @@ pub async fn set_capabilities(State(state): State<ServerState>, body: Bytes) -> 
     // 这一句，分不清清除了哪一项、改成了什么
     let summary = capability::KEYS
         .iter()
-        .filter_map(|key| patch.get(*key).map(|value| (key, value)))
+        .copied()
+        .chain(std::iter::once(capability::REASONING_LEVELS_KEY))
+        .filter_map(|key| patch.get(key).map(|value| (key, value)))
         .map(|(key, value)| match value {
             Value::Null => format!("{key}=恢复"),
+            other if other.as_array().is_some_and(|items| items.is_empty()) => {
+                format!("{key}=恢复")
+            }
             other => format!("{key}={other}"),
         })
         .collect::<Vec<_>>()

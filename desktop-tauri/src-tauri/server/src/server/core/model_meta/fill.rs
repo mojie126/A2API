@@ -25,6 +25,14 @@
 //! 归一后的档位列表来源优先级：**这家自己声明 > models.dev 的 effort 列表**。
 //! 都拿不到就**不出这个键** —— 前端据此回落通用档位表（「未声明」与「一档都
 //! 没有」对用户是两件事，见 `ui-islands` 的 `model-capability.ts`）。
+//!
+//! ── 用户手写的档位表排在最前面 ──────────────────────────────
+//! 上面那条优先级只在**没人手写**时成立。用户在模型管理页手动填了档位表
+//!（覆盖层的 `reasoningLevels`）时，整张表以用户的为准、来源记成 `user` ——
+//! 这是 [`apply_user_reasoning_levels`]，由调用方在本模块跑完之后应用
+//! （`model_rules::apply_capability_overrides` 与自定义家的清单成型处）。
+//! 与六个能力位同一条理由：上游与 models.dev 都可能错，用户要能纠正，
+//! 纠正后的值必须在 `/v1/models` 与管理页上是同一个。
 
 use serde_json::{json, Map, Value};
 
@@ -437,6 +445,56 @@ pub fn apply_reasoning_record(item: &mut Value, record: &Record) {
     object.insert("reasoningSource".to_string(), json!("modelsdev"));
 }
 
+/// 用用户手写的档位表覆盖条目上的档位声明（**在本模块补齐之后调用**）。
+///
+/// 换的是整份声明，所以连带三处一起处理：
+///   · `reasoningLevels` 换成用户那一份（顺序与拼写照用户的，不归一大小写）；
+///   · `reasoningFixedLevel` 摘掉 —— 固定档的含义是「上游只认这一档，绑别的也
+///     没用」，用户手写档位正是在纠正这条声明，留着它会让前端继续忽略用户表
+///    （`modelReasoning` 里固定档优先于档位表，见 `ui-shared/models-reasoning.ts`）；
+///   · `reasoningDefaultLevel` 只在仍属于新表时保留：下游拿到一个不在表里的默认
+///     档，只会把它当成上游支持的档位来用；
+///   · `reasoningSource` 记成 `user`，管理页据此把「手动设置」与上游 / models.dev
+///     分开显示（前端按同一批字面量渲染，见 `ui-islands` 的 `model-capability.ts`）。
+///
+/// `reasoningBindingSupported` **不动**：它回答的是「这条通道收不收档位字段」，
+/// 改它等于让网关往不认识档位的上游发字段（`model_rules::reasoning` 模块头第 1、
+/// 2 条讲的就是这件事）。于是「手动填了档位、但这条通道注入不了档位」是一种
+/// 如实存在的组合：对下游的声明按用户说的算，注入仍按上游能力。
+///
+/// `supportsReasoning` 在**没有任何声明**时补一个支持：下游拿到「有一组档位却
+/// 不支持思考」只会把整张表当成无效声明（与 `list_item` 里「支持图片编辑 ⇒
+/// 支持图片输入」的取舍同源）。上游或用户明确说过不支持时不动它 —— 那是有话在
+/// 先，要改就去能力弹窗改那一项。
+///
+/// 空表不处理（调用方不该用空表调用；清除覆盖靠删掉覆盖项，那一项一删本函数
+/// 就不再被调到，条目回到上游与 models.dev 的结论）。
+pub fn apply_user_reasoning_levels(item: &mut Value, levels: &[String]) {
+    if levels.is_empty() {
+        return;
+    }
+    let Some(object) = item.as_object_mut() else {
+        return;
+    };
+    let reasoning_declared = object
+        .get("supportsReasoning")
+        .is_some_and(|value| !value.is_null());
+    let default = object
+        .get("reasoningDefaultLevel")
+        .and_then(level_text)
+        .filter(|level| levels.iter().any(|item| item.eq_ignore_ascii_case(level)));
+    if !reasoning_declared {
+        object.insert("supportsReasoning".to_string(), json!(true));
+    }
+    object.insert("reasoningLevels".to_string(), json!(levels));
+    object.remove("reasoningFixedLevel");
+    object.remove("reasoningDefaultLevel");
+    if let Some(default) = default {
+        object.insert("reasoningDefaultLevel".to_string(), json!(default));
+    }
+    object.insert("reasoningSource".to_string(), json!("user"));
+}
+
 fn level_text(value: &Value) -> Option<String> {
     value
         .as_str()
@@ -504,5 +562,55 @@ mod tests {
         apply_reasoning_record(&mut declared, &record);
         assert_eq!(declared["reasoningLevels"], json!(["none"]));
         assert!(declared.get("reasoningSource").is_none());
+    }
+
+    /// 用户手写的档位表换掉整份声明：固定档随之作废，默认档只在仍属于新表时保留
+    #[test]
+    fn user_levels_replace_declaration_and_drop_fixed_level() {
+        let mut item = json!({
+            "id": "model",
+            "reasoningLevels": ["low", "high"],
+            "reasoningDefaultLevel": "low",
+            "reasoningFixedLevel": "low",
+            "reasoningBindingSupported": true,
+            "reasoningSource": "upstream",
+        });
+        apply_user_reasoning_levels(&mut item, &["minimal".to_string(), "max".to_string()]);
+        assert_eq!(item["reasoningLevels"], json!(["minimal", "max"]));
+        assert!(item.get("reasoningFixedLevel").is_none());
+        // 默认档不在新表里 → 摘掉（留在出口上等于对下游声明一个上游不认的档）
+        assert!(item.get("reasoningDefaultLevel").is_none());
+        assert_eq!(item["reasoningSource"], json!("user"));
+        // 这条通道收不收档位字段是上游的事实，不跟着用户表变
+        assert_eq!(item["reasoningBindingSupported"], json!(true));
+        // 没声明过「支持思考」时补一个支持：否则下游看到的是自相矛盾的声明
+        assert_eq!(item["supportsReasoning"], json!(true));
+    }
+
+    /// 默认档仍在用户表里时保留，比较忽略大小写（用户的拼写原样落盘）
+    #[test]
+    fn user_levels_keep_the_default_level_inside_the_list() {
+        let mut item = json!({
+            "id": "model",
+            "reasoningLevels": ["low"],
+            "reasoningDefaultLevel": "high",
+        });
+        apply_user_reasoning_levels(&mut item, &["low".to_string(), "hiGH".to_string()]);
+        assert_eq!(item["reasoningLevels"], json!(["low", "hiGH"]));
+        assert_eq!(item["reasoningDefaultLevel"], json!("high"));
+        assert_eq!(item["reasoningSource"], json!("user"));
+    }
+
+    /// 明确说过不支持思考时，档位表不会把这一位翻成支持（有话在先，要改去能力弹窗）
+    #[test]
+    fn user_levels_keep_an_explicit_reasoning_off() {
+        let mut item = json!({
+            "id": "model",
+            "supportsReasoning": false,
+            "reasoningLevels": ["low"],
+        });
+        apply_user_reasoning_levels(&mut item, &["low".to_string(), "high".to_string()]);
+        assert_eq!(item["reasoningLevels"], json!(["low", "high"]));
+        assert_eq!(item["supportsReasoning"], json!(false));
     }
 }

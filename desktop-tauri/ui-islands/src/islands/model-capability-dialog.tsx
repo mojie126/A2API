@@ -36,9 +36,11 @@ import {
 import {
   BOOLEAN_KEYS, CAPABILITY_KEYS, CAPABILITY_LABELS, TOKEN_KEYS,
   capabilitiesOf, capabilityState, capSourceOf, exactTokens, normalizeCapability, normalizeOverrides,
-  patchFromDraft, reasoningLevelsOf, type CapabilityDraft, type CapabilityKey, type CapabilitySource,
+  normalizeReasoningLevels, patchFromDraft, reasoningLevelsOf,
+  type CapabilityDraft, type CapabilityKey, type CapabilitySource,
 } from './model-capability'
 import * as customSource from './models-custom-source'
+import { ModelReasoningDialog } from './model-reasoning-dialog'
 import {
   accept, errorMessage, modelRowOf, PartialCapabilitySaveError, providerLabelOf, readModelsDevBinding,
   searchModelsDev, toast,
@@ -141,11 +143,17 @@ export function CapabilityDialog({ context, onClose }: { context: CapabilityCont
   const row = modelRowOf(context.provider, context.id)
   // 模型自己能配的思考档位（`null` = 上游没声明 → 那一块整个不显示）
   const levelsInfo = reasoningLevelsOf(row)
+  /** 档位表是不是用户手写的（后端写 `reasoningSource = "user"`，见 `core::model_meta`） */
+  const levelsOverridden = row?.reasoningSource === 'user'
+  /** 当前生效的档位表（手动设置的那份或上游 / models.dev 的结论） */
+  const currentLevels = levelsInfo?.levels || []
   const capabilities = capabilitiesOf(row)
   const setKeys = setKeysOf(capabilities, normalizeOverrides(row?.capOverrides), custom)
   const [draft, setDraft] = React.useState<CapabilityDraft>(() => draftFrom(capabilities, setKeys))
   const [status, setStatus] = React.useState('')
   const [saving, setSaving] = React.useState(false)
+  /** 「思考档位」弹窗开着吗（它自己写库、自己刷新，不参与这里的全量提交） */
+  const [levelsOpen, setLevelsOpen] = React.useState(false)
   const initialBinding = bindingOf(row?.modelsDevBinding)
   const [modelsDevId, setModelsDevId] = React.useState(initialBinding.modelsDevId || '')
   const [sourceName, setSourceName] = React.useState(initialBinding.sourceName || row?.name || '')
@@ -345,9 +353,22 @@ export function CapabilityDialog({ context, onClose }: { context: CapabilityCont
           {BOOLEAN_KEYS.map(key => (
             <div key={key} className='flex flex-col gap-1.5'>
               <Label>{CAPABILITY_LABELS[key]}</Label>
-              <SegmentedControl options={BOOLEAN_OPTIONS(inheritLabel)} value={draft[key]}
-                aria-label={CAPABILITY_LABELS[key]} className='self-start'
-                onValueChange={next => setValue(key, String(next))} />
+              <div className='flex flex-wrap items-center gap-2'>
+                <SegmentedControl options={BOOLEAN_OPTIONS(inheritLabel)} value={draft[key]}
+                  aria-label={CAPABILITY_LABELS[key]} className='self-start'
+                  onValueChange={next => setValue(key, String(next))} />
+                {/* 「支持思考」右边是档位表的入口：这一行的三态只回答「下游当它支持
+                    思考吗」，支持哪几档由那张表回答（见 model-reasoning-dialog 的模块头） */}
+                {key === 'supportsReasoning' ? (
+                  <Button variant='outline' size='sm' disabled={saving}
+                    title={t('手动设置这个模型认识的思考档位')}
+                    onClick={() => setLevelsOpen(true)}>
+                    {levelsOverridden
+                      ? t('思考档位：手动 {n} 档', { n: currentLevels.length })
+                      : t('设置思考档位')}
+                  </Button>
+                ) : null}
+              </div>
               <p className='text-xs leading-[1.6] text-subtle'>
                 {statusText(key, capabilities[key] ?? null, isSet(key), custom, capSourceOf(row, key))}
               </p>
@@ -357,7 +378,9 @@ export function CapabilityDialog({ context, onClose }: { context: CapabilityCont
           {levelsInfo ? (
             <div className='rounded-md border border-border bg-surface-inset px-3 py-2.5 text-xs leading-[1.7] text-subtle'>
               <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
-                <span>{levelsInfo.fixedLevel ? t('固定思考档位') : t('可配思考档位')}</span>
+                <span>{levelsOverridden
+                  ? t('手动思考档位')
+                  : levelsInfo.fixedLevel ? t('固定思考档位') : t('可配思考档位')}</span>
                 <span className='font-mono text-[12px] text-primary-fg'>
                   {levelsInfo.levels.join(' / ')}
                 </span>
@@ -366,11 +389,13 @@ export function CapabilityDialog({ context, onClose }: { context: CapabilityCont
                 ) : null}
               </div>
               <div className='mt-1'>
-                {levelsInfo.fixedLevel
-                  ? t('上游固定为 {level}，绑定其他等级也无法调高。', { level: levelsInfo.fixedLevel })
-                  : levelsInfo.source === 'modelsdev'
-                    ? t('社区参考档位，不代表当前上游通道支持；实际以该通道目录为准。')
-                    : t('这是模型自己能配的档位（来自上游目录），只读；要改某一档请到映射弹窗里选。')}
+                {levelsOverridden
+                  ? t('手动设置的档位优先于上游声明与 models.dev，也作为映射弹窗里可选的等级。')
+                  : levelsInfo.fixedLevel
+                    ? t('上游固定为 {level}，绑定其他等级也无法调高。', { level: levelsInfo.fixedLevel })
+                    : levelsInfo.source === 'modelsdev'
+                      ? t('社区参考档位，不代表当前上游通道支持；实际以该通道目录为准。')
+                      : t('这是模型自己声明的档位（来自上游目录）。')}
               </div>
             </div>
           ) : null}
@@ -390,6 +415,13 @@ export function CapabilityDialog({ context, onClose }: { context: CapabilityCont
           <Button variant='outline' disabled={saving} onClick={onClose}>{t('取消')}</Button>
           <Button variant='default' disabled={saving} onClick={() => void save()}>{t('保存')}</Button>
         </DialogFooter>
+        {/* 思考档位弹窗挂在本弹窗里：它自己的 Portal 落在 body，视觉上浮在这层之上。
+            它自己写库、自己刷新，与外层那六项的全量提交互不干涉
+            （见 model-reasoning-dialog 的模块头） */}
+        {levelsOpen ? (
+          <ModelReasoningDialog provider={context.provider} id={rowId}
+            onClose={() => setLevelsOpen(false)} />
+        ) : null}
       </DialogContent>
     </Dialog>
   )

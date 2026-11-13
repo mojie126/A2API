@@ -222,6 +222,9 @@ pub fn resolve(provider: &Value, requested: &str) -> Option<(String, Option<Stri
 /// 能力位**平铺**在条目顶层（与各内置家清单同形，`list_item` 直接读它们）；
 /// 存储里那层 `capabilities` 对象由 `capability::apply_overrides` 展开 ——
 /// 归一也走它，手改数据里的坏值到不了出口。
+/// 其中的思考档位表（`capability::REASONING_LEVELS_KEY`）不逐键改写，而是在
+/// 元数据补齐之后由 `model_meta::apply_user_reasoning_levels` 换掉整份声明 ——
+/// 与内置家清单出口同一处、同一口径。
 ///
 /// 登记里**没写**的键由 models.dev 补（`core::model_meta::apply`）——那条路径的
 /// 优先级与内置家同一条：用户登记的值（上面的 `capabilities`）> models.dev >
@@ -295,6 +298,9 @@ pub fn public_models(provider: &Value) -> Vec<Value> {
             }
         }
         model_meta::apply(text(provider, "id"), &mut item, Some(&target));
+        if let Some(levels) = capability::levels_from(&capabilities) {
+            model_meta::apply_user_reasoning_levels(&mut item, &levels);
+        }
         result.push(item);
     }
     result
@@ -342,5 +348,31 @@ mod tests {
         let models = public_models(&provider);
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["supportsImages"], false);
+    }
+
+    /// 用户手写的思考档位表优先于条目上声明的档位，并记成 `user` 来源
+    /// （出口键名由 `list_item` 决定，这里钉的是清单条目上的生效值）
+    #[test]
+    fn user_reasoning_levels_override_declared_levels() {
+        let provider = json!({
+            "id": "custom-reasoning",
+            "enabled": true,
+            "models": [{
+                "id": "demo-reasoning-model",
+                "enabled": true,
+                "reasoningLevels": ["low"],
+                "reasoningFixedLevel": "low",
+                "reasoningSource": "upstream",
+                "capabilities": { "reasoningLevels": ["low", "high"] }
+            }]
+        });
+        let models = public_models(&provider);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["reasoningLevels"], json!(["low", "high"]));
+        assert_eq!(models[0]["reasoningSource"], json!("user"));
+        // 没声明过「支持思考」时补一个支持，免得下游拿到自相矛盾的声明
+        assert_eq!(models[0]["supportsReasoning"], json!(true));
+        // 固定档与用户手写的多档声明不能并存（固定档的意思是「绑别的也没用」）
+        assert!(models[0].get("reasoningFixedLevel").is_none());
     }
 }

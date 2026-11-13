@@ -14,6 +14,9 @@
 //! **用户覆盖 > 上游声明 > models.dev > 未声明**。
 //! models.dev 只补「上游没声明」的键；上游声明过的键一律不动，用户覆盖层仍然
 //! 排最后（它在调用方之后执行）。理由见 `fill` 的模块头。
+//! 用户覆盖层里除了六个能力位还有一项「思考档位表」（`capability` 的
+//! `REASONING_LEVELS_KEY`）：它同样排在上游与 models.dev 之前，由 `fill` 的
+//! `apply_user_reasoning_levels` 应用。
 //!
 //! ── 模型身份解析 ────────────────────────────────────────────
 //! 模型 ID 不保证可读，`sn-*`、`default-1.2` 这类名字不能靠 ID 形态猜语义。
@@ -52,8 +55,8 @@ mod refresh;
 mod snapshot;
 
 pub use fill::{
-    apply, apply_reasoning_record, mark_user, metadata_details, metadata_lookup,
-    MetadataDetails, MetadataLookup,
+    apply, apply_reasoning_record, apply_user_reasoning_levels, mark_user, metadata_details,
+    metadata_lookup, MetadataDetails, MetadataLookup,
 };
 pub use refresh::refresh;
 pub use snapshot::{install, search, status};

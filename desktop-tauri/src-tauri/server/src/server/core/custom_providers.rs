@@ -1211,9 +1211,10 @@ fn validate_mapping_entries(raw: &[Value]) -> Result<Vec<Value>, String> {
 }
 
 /// 能力位覆盖（`capabilities`）的可选校验：必须是对象，键名与值都要合法
-/// （判定在 `core::capability`，与内置家那层覆盖同一套）。非法时报错而不是
-/// 静默丢弃 —— 与 `reasoning` 同一取向：写入前拦下，不留一条读回来会被
-/// 归一丢掉的脏数据。
+/// （判定在 `core::capability`，与内置家那层覆盖同一套）。除六个能力位外还认
+/// 思考档位表（`reasoningLevels`，字符串数组，空数组 = 清除这一项 —— 归一后
+/// 不落键）。非法时报错而不是静默丢弃 —— 与 `reasoning` 同一取向：写入前拦下，
+/// 不留一条读回来会被归一丢掉的脏数据。
 ///
 /// 返回**归一后的稀疏表**；缺省 / null / 归一后为空都返回 `None`
 /// （调用方不落键，见 `model_entries_of`）。
@@ -1227,12 +1228,13 @@ fn validate_capabilities(
         return Err(format!("models 第 {position} 项的 {field} 必须是对象"));
     };
     for (key, item) in object {
-        if !capability::KEYS.contains(&key.as_str()) {
+        if !capability::is_known_key(key) {
             return Err(format!("models 第 {position} 项的 {field} 能力字段不存在: {key}"));
         }
         if capability::normalize_value(key, item).is_none() {
             return Err(format!(
-                "models 第 {position} 项的 {field} 能力字段 {key} 取值非法（token 键要 1~1 亿的正整数，能力开关要布尔）"
+                "models 第 {position} 项的 {field} 能力字段 {key} 取值非法（token 键要 1~1 亿的正整数，\
+                 能力开关要布尔，思考档位要字符串数组）"
             ));
         }
     }

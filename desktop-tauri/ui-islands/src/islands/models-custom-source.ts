@@ -29,7 +29,7 @@
  */
 
 import { activeModelBindings, disableOtherModelBindings, normalizeModelBindingStates } from '../../../ui-shared/models-bindings'
-import { CAPABILITY_KEYS, normalizeCapabilities } from './model-capability'
+import { CAPABILITY_KEYS, REASONING_LEVELS_KEY, normalizeCapabilities, normalizeReasoningLevels } from './model-capability'
 import { t } from '../i18n'
 
 /* ─── 对外数据类型（表格同形数据，models-page.tsx 也读这几个类型）────── */
@@ -213,24 +213,52 @@ export function record(id: string): CustomProviderRecord | null {
  * 的就是第一次提交后的值。
  */
 type DraftModel = {
-  id: string; enabled: boolean; reasoning: string; capabilities?: Record<string, number | boolean>
-  metadataCapabilities?: Record<string, number | boolean>
+  id: string; enabled: boolean; reasoning: string; capabilities?: SparseCapabilities
+  metadataCapabilities?: SparseCapabilities
   modelsDevId?: string; modelsDevMatch?: string; modelsDevCandidates?: number
 }
 type DraftMapping = { alias: string; target: string; enabled: boolean; reasoning: string }
 
 /**
+ * 覆盖层里能落进自定义家记录的那些键：六个能力位（数值 / 布尔）加**思考档位表**
+ * （字符串数组，见 `core::capability` 的 `REASONING_LEVELS_KEY`）。
+ */
+type SparseCapabilities = Record<string, number | boolean | string[]>
+
+/**
  * 记录条目的能力位 → 可提交的稀疏对象（空表给 `undefined`：整表提交里不带
  * 这个键，与后端「空表不落键」的口径一致）。
+ *
+ * 除六个能力位外还带回**思考档位表**：它与能力位存在同一个 `capabilities`
+ * 对象里，漏带的话下一次整表提交（切开关、改等级、移除模型）会把它顺手抹掉。
  */
-function sparseCapabilities(value: unknown): Record<string, number | boolean> | undefined {
+function sparseCapabilities(value: unknown): SparseCapabilities | undefined {
   const normalized = normalizeCapabilities(value)
-  const result: Record<string, number | boolean> = {}
+  const result: SparseCapabilities = {}
   for (const key of CAPABILITY_KEYS) {
     const item = normalized[key]
     if (typeof item === 'number' || typeof item === 'boolean') result[key] = item
   }
+  const levels = normalizeReasoningLevels(
+    value && typeof value === 'object' ? (value as Record<string, unknown>)[REASONING_LEVELS_KEY] : undefined,
+  )
+  if (levels.length) result[REASONING_LEVELS_KEY] = levels
   return Object.keys(result).length ? result : undefined
+}
+
+/**
+ * 手动设置的思考档位（没有设置过 → 空对象）：
+ *
+ * 自定义家的清单是前端从提供商记录现造的，后端那份「生效档位」（`/v1/models`
+ * 与内置家管理视图里由 `model_meta` 归一出来的那份）在这里拿不到 —— 所以只把
+ * **用户写下过的那份**摊到行上，让能力弹窗的档位块与档位弹窗显示当前值。
+ */
+function levelsOf(capabilities: SparseCapabilities | undefined): {
+  reasoningLevels?: string[]
+  reasoningSource?: string
+} {
+  const levels = normalizeReasoningLevels(capabilities?.[REASONING_LEVELS_KEY])
+  return levels.length ? { reasoningLevels: levels, reasoningSource: 'user' } : {}
 }
 
 function draftOf(provider: CustomProviderRecord | null): { models: DraftModel[]; mappings: DraftMapping[] } {
@@ -303,6 +331,7 @@ export function buildView(id: string): { models: ManageModel[]; mappings: Manage
         aliases: [],
         capabilities: model.capabilities || {},
         capOverrides: [],
+        ...levelsOf(model.capabilities),
       })
       mappings.push({
         alias: model.id,
@@ -332,12 +361,17 @@ export function buildView(id: string): { models: ManageModel[]; mappings: Manage
         ...(model.capabilities || {}),
       },
       capOverrides: [],
-      capSources: Object.keys(metadataCapabilities).length || Object.keys(model.capabilities || {}).length
+      // 来源标记只给六个能力位（`capSourceOf` 也按同一批键查）：档位表的来源是
+      // `reasoningSource`，混进这张表只会多出一个没人读的键
+      capSources: Object.keys(metadataCapabilities).some(key => key !== REASONING_LEVELS_KEY)
+        || Object.keys(model.capabilities || {}).some(key => key !== REASONING_LEVELS_KEY)
         ? Object.fromEntries([
-          ...Object.keys(metadataCapabilities).map(key => [key, 'modelsdev']),
-          ...Object.keys(model.capabilities || {}).map(key => [key, 'user']),
+          ...Object.keys(metadataCapabilities).filter(key => key !== REASONING_LEVELS_KEY).map(key => [key, 'modelsdev']),
+          ...Object.keys(model.capabilities || {}).filter(key => key !== REASONING_LEVELS_KEY).map(key => [key, 'user']),
         ] as Array<[string, string]>)
         : undefined,
+      // 用户手写过的档位表（没有就是空对象）：弹窗据此显示与编辑当前值
+      ...levelsOf(model.capabilities),
       modelsDevId: target?.modelsDevId,
       modelsDevMatch: target?.modelsDevMatch,
       modelsDevCandidates: target?.modelsDevCandidates,
@@ -506,18 +540,21 @@ export async function addModels(id: string, modelIds: readonly unknown[]): Promi
  * 存储），于是写入照那条既有路径：读当前记录 → 改这一条的字段 → 整表提交。
  * `patch` 的三态与后端一致：键缺失 = 不改、`null` = 清除这一项、有值 = 覆盖；
  * 清到一项不剩时整份 capabilities 键一并摘掉（与后端「空表不落键」同一口径）。
+ * 思考档位表（`reasoningLevels`，字符串数组）走同一张补丁：空数组与 `null`
+ * 同义，都是「这一项回到上游 / models.dev 的结论」。
  */
 export async function setCapabilities(
   id: string,
   modelId: string,
-  patch: Record<string, number | boolean | null>,
+  patch: Record<string, number | boolean | string[] | null>,
 ): Promise<void> {
   await submit(id, draft => {
     const model = draft.models.find(item => same(item.id, modelId))
     if (!model) throw new Error(t('该提供商的清单里没有模型「{name}」', { name: modelId }))
-    const next: Record<string, number | boolean> = { ...(model.capabilities || {}) }
+    const next: SparseCapabilities = { ...(model.capabilities || {}) }
     for (const [key, value] of Object.entries(patch)) {
-      if (value === null || value === undefined) delete next[key]
+      // 空档位表与 null 同义（清除这一项），见上面那段说明
+      if (value === null || value === undefined || (Array.isArray(value) && !value.length)) delete next[key]
       else next[key] = value
     }
     model.capabilities = Object.keys(next).length ? next : undefined

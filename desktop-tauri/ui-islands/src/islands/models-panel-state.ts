@@ -55,6 +55,15 @@ export type CustomModelContext = { provider: string; locked: boolean }
  */
 export type CapabilityContext = { provider: string; id: string }
 
+/**
+ * 能力覆盖补丁：六个能力位（数值 / 布尔，`null` = 清除这一项）加**思考档位表**
+ * （`reasoningLevels`，字符串数组；空数组与 `null` 同义 = 清除）。
+ *
+ * 档位表混在同一张补丁里，是因为后端把它存进同一张覆盖表（见 `core::capability`
+ * 的模块头）：分两次写会多出「能力改了、档位没改」的中间态。
+ */
+export type CapabilityPatch = Record<string, number | boolean | string[] | null>
+
 type Filters = { provider: string; state: string; search: string; sort: string; visibility: string }
 
 /** 表格现造的绑定（默认绑定 alias == target 由模型行合成，不在 mappings 里另占一格） */
@@ -83,9 +92,9 @@ export type SharedWindow = {
     removeModelMapping(alias: string, target: string, provider: string): Promise<ManageView | null | undefined>
     addCustomModel(provider: string, id: string): Promise<ManageView | null | undefined>
     removeCustomModel(provider: string, id: string): Promise<ManageView | null | undefined>
-    /** 能力位覆盖（只服务内置家；自定义家走 wbModelsCustom.setCapabilities） */
+    /** 能力位与思考档位覆盖（只服务内置家；自定义家走 wbModelsCustom.setCapabilities） */
     setModelCapabilities(
-      provider: string, id: string, patch: Record<string, number | boolean | null>, binding?: unknown,
+      provider: string, id: string, patch: CapabilityPatch, binding?: unknown,
     ): Promise<ManageView | null | undefined>
     getModelMetadataBinding(provider: string, id: string): Promise<{ binding?: ModelsDevBinding | null } | null | undefined>
     setModelMetadataBinding(
@@ -843,12 +852,13 @@ export class PartialCapabilitySaveError extends Error {
  *     清单出口统一应用，见后端 `model_rules` 的「能力位覆盖」）。
  *
  * `capabilities` 是**全量六键**（弹窗一次提交全部）：`null` = 恢复继承 / 清除、
- * 有值 = 覆盖 —— 与后端那条接口的三态协议同源。
+ * 有值 = 覆盖 —— 与后端那条接口的三态协议同源。思考档位表（`reasoningLevels`）
+ * 走同一张补丁、同一条三态协议（空数组与 `null` 同义），见 `CapabilityPatch`。
  */
 export async function writeCapabilities(
   provider: string,
   id: string,
-  capabilities: Record<string, number | boolean | null>,
+  capabilities: CapabilityPatch,
   binding?: unknown,
 ): Promise<unknown> {
   if (customSource.isCustom(provider)) {
