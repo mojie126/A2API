@@ -922,8 +922,17 @@ impl ProviderAdapter for RpcAdapter {
             let mut params = self.base();
             params.insert("account".into(), Value::String(account_id.to_string()));
             params.insert("force".into(), Value::Bool(force));
+            let mut params = Value::Object(params);
+            if let Err(error) = super::account_egress::apply(&mut params) {
+                return ModelRefreshOutcome::failed(error.message);
+            }
+            let timeout = Duration::from_secs(
+                crate::server::config::scheduled_settings()
+                    .model_refresh_timeout_seconds
+                    .max(1) as u64,
+            );
             match self
-                .network(proto::methods::gateway::MODELS_REFRESH, Value::Object(params))
+                .call(proto::methods::gateway::MODELS_REFRESH, params, timeout)
                 .await
             {
                 Ok(value) => match serde_json::from_value::<proto::RefreshOutcome>(value.clone()) {

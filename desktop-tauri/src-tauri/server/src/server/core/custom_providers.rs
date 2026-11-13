@@ -198,9 +198,13 @@ pub const BALANCE_SCHEMES: &[&str] = &[
     BALANCE_SCHEME_ZHIPU_ZAI,
 ];
 
-/// 拉取上游模型清单的总超时（毫秒）。清单接口是一次性的管理动作，
-/// 不参与对话转发的长连接口径（egress 的 read_timeout 是给 SSE 的）。
-const FETCH_MODELS_TIMEOUT_MS: u64 = 15_000;
+/// 拉取上游模型清单的总超时（秒）：维护设置里可调，自动与手动共用。
+fn model_refresh_timeout() -> Duration {
+    let seconds = crate::server::config::scheduled_settings()
+        .model_refresh_timeout_seconds
+        .max(1) as u64;
+    Duration::from_secs(seconds)
+}
 
 /// 读全量条目（容错：非数组 / 坏条目一律丢弃）。
 ///
@@ -1019,7 +1023,7 @@ pub async fn fetch_upstream_models_with_account(
     let client = egress::client_for(credential.proxy.as_ref());
     let mut builder = client
         .get(&url)
-        .timeout(Duration::from_millis(FETCH_MODELS_TIMEOUT_MS));
+        .timeout(model_refresh_timeout());
     // 凭证为空（无需鉴权的账号）时**一个鉴权头都不发**：空 Bearer 对严格的上游
     // 等同凭证错误，与「这家不要凭证」的语义正好相反（见函数头的说明）
     let api_key = credential.api_key.trim();

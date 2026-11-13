@@ -241,8 +241,14 @@ pub(super) fn task_object(map: &Map<String, Value>, key: &str) -> Map<String, Va
 /// 与 `days_field` 同一口径（**越界回落而非夹紧**、接受整值浮点、只在
 /// `min..=max` 内才采纳），只是范围由调用方给：两类任务的合理区间差着量级
 /// （后端维护按分钟、前端刷新按秒），共用一份范围常量会逼其中一类放宽边界。
-pub(super) fn interval_field(task: &Map<String, Value>, default: i64, min: i64, max: i64) -> i64 {
-    let parsed = task.get("interval").and_then(|value| match value {
+pub(super) fn int_field(
+    task: &Map<String, Value>,
+    key: &str,
+    default: i64,
+    min: i64,
+    max: i64,
+) -> i64 {
+    let parsed = task.get(key).and_then(|value| match value {
         Value::Number(number) => number.as_i64().or_else(|| {
             number
                 .as_f64()
@@ -252,6 +258,10 @@ pub(super) fn interval_field(task: &Map<String, Value>, default: i64, min: i64, 
         _ => None,
     });
     parsed.filter(|value| (min..=max).contains(value)).unwrap_or(default)
+}
+
+pub(super) fn interval_field(task: &Map<String, Value>, default: i64, min: i64, max: i64) -> i64 {
+    int_field(task, "interval", default, min, max)
 }
 
 /// 从一条任务的子对象里取开关。
@@ -270,6 +280,7 @@ pub(super) fn task_enabled(task: &Map<String, Value>, default: bool) -> bool {
 /// 解析按**未知键忽略**处理，读不到就是不存在，首次保存设置时会被自然清掉。
 pub(super) fn scheduled_from(map: &Map<String, Value>) -> ScheduledSettings {
     let defaults = ScheduledSettings::default();
+    let model_refresh = task_object(map, KEY_MODEL_REFRESH);
     let task = |key: &str, interval: i64, min: i64, max: i64| {
         let object = task_object(map, key);
         IntervalTask {
@@ -289,6 +300,13 @@ pub(super) fn scheduled_from(map: &Map<String, Value>) -> ScheduledSettings {
             defaults.model_refresh.interval,
             INTERVAL_MIN_MINUTES,
             INTERVAL_MAX_MINUTES,
+        ),
+        model_refresh_timeout_seconds: int_field(
+            &model_refresh,
+            "timeoutSeconds",
+            defaults.model_refresh_timeout_seconds,
+            MODEL_REFRESH_TIMEOUT_MIN_SECONDS,
+            MODEL_REFRESH_TIMEOUT_MAX_SECONDS,
         ),
         logs_auto_refresh: task(
             KEY_LOGS_AUTO_REFRESH,
@@ -776,6 +794,24 @@ mod tests {
             auto_continue_from(&junk),
             resolve_auto_continue(None, env_auto_continue()),
             "文件里的字符串 true 不可用，落点必须与「文件没这项」逐字相同"
+        );
+    }
+
+    #[test]
+    fn model_refresh_timeout_uses_configured_value_or_default() {
+        let configured = map_of(&[(
+            KEY_SCHEDULED_TASKS,
+            json!({ KEY_MODEL_REFRESH: { "timeoutSeconds": 45 } }),
+        )]);
+        assert_eq!(scheduled_from(&configured).model_refresh_timeout_seconds, 45);
+
+        let out_of_range = map_of(&[(
+            KEY_SCHEDULED_TASKS,
+            json!({ KEY_MODEL_REFRESH: { "timeoutSeconds": 0 } }),
+        )]);
+        assert_eq!(
+            scheduled_from(&out_of_range).model_refresh_timeout_seconds,
+            DEFAULT_MODEL_REFRESH_TIMEOUT_SECONDS,
         );
     }
 }

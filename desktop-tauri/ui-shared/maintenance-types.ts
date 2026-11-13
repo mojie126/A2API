@@ -9,6 +9,11 @@ export type MaintenanceTask = {
   interval: number
   min: number
   max: number
+  /** 模型目录更新的请求超时（秒）；仅该任务有。 */
+  timeoutSeconds?: number
+  timeoutMin?: number
+  timeoutMax?: number
+  defaultTimeoutSeconds?: number
   running: boolean
   lastRunAt: number | null
   lastResult: string | null
@@ -79,7 +84,7 @@ export type MaintenanceApi = {
   retry(id: string, itemId?: string): Promise<MaintenanceDetail>
   /** 清空全部已结束的执行记录（运行中的记录不动），返回删除的条数 */
   clear(): Promise<{ cleared: number }>
-  save(taskId: MaintenanceTaskId, patch: { enabled: boolean; interval: number }): Promise<MaintenanceTask>
+  save(taskId: MaintenanceTaskId, patch: { enabled: boolean; interval: number; timeoutSeconds?: number }): Promise<MaintenanceTask>
   /** 保存维护记录的保留策略（走 `/api/retention` 的部分更新，键名与后端校验键一致） */
   saveStorage(patch: { maintenanceRecordRetentionDays: number; maintenanceRecordMaxCount: number }): Promise<unknown>
 }

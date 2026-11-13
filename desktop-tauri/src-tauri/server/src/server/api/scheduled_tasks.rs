@@ -116,6 +116,17 @@ fn configure(id: &str, body: &Bytes) -> Response {
                 None => return bad_request(format!("「{id}」的间隔必须是整数")),
             }
         }
+        if let Some(value) = object.get("timeoutSeconds") {
+            match value.as_i64().or_else(|| {
+                value
+                    .as_f64()
+                    .filter(|raw| raw.is_finite() && raw.fract() == 0.0)
+                    .map(|raw| raw as i64)
+            }) {
+                Some(timeout) => patch.timeout_seconds = Some(timeout),
+                None => return bad_request(format!("「{id}」的请求超时必须是整数")),
+            }
+        }
     }
     match scheduled_tasks::configure(id, patch) {
         Ok(task) => ok_json(task),

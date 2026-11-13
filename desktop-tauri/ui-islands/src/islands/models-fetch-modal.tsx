@@ -117,8 +117,6 @@ type SharedWindow = {
     customRequest?: (method: string, path: string, body?: unknown) => Promise<{ models?: unknown[] } | null | undefined>
   }
   wbModelsPanel?: {
-    /** 模型管理页左栏**实有清单**的家（本弹窗的刷新范围读它） */
-    builtinProviders?: () => string[]
     /** 某家清单当前的拉取时刻（毫秒，0 = 未知 / 从未成功过） */
     providerRefreshedAt?: (providerId: string) => number
   }
@@ -206,19 +204,15 @@ function sourceAccounts(providerId: string): Account[] {
 }
 
 /**
- * 本次刷新的范围：**模型管理页左栏实有清单的家 ∪ 有启用账号的家**。
+ * 本次刷新的范围：**有可用账号的家**。
  *
- * 与「模型来源」下拉同一哲学（见 sourceAccounts）：用户在界面上都看不到的家（没有启用账号、清单
- * 也为空）不该参加刷新 —— 刷它只会得到一行「缺少登录态」，而用户既没有账号可选、列表里也根本
- * 没有这家，无从理解。名单随请求带给后端（见 api/models.rs 的 providers）：名单外的家不打网络、
- * 也不进结果。
- *
- * 「有启用账号的家」并进来，是为「刚加完账号、清单还是空的」这一档：它暂时不在左栏，但用户马上
- * 就该看到它 —— 刷一次清单就有了。左栏数据缺席（页面数据未加载）时不降级成全量：宁缺毋滥，自动
- * 刷新任务会兜底。
+ * 与「模型来源」下拉同一哲学（见 sourceAccounts）：没有可用账号的家不参加刷新 ——
+ * 刷它只会得到一行「缺少登录态」，而用户既没有账号可选、列表里也可能没有这家。
+ * 与自动维护共用「供应商启用且有至少一个账号」的口径。名单随请求带给后端
+ * （见 api/models.rs 的 providers）：名单外的家不打网络、也不进结果。
  */
 function scopeProviders(): string[] {
-  const ids = new Set(shared().wbModelsPanel?.builtinProviders?.() || [])
+  const ids = new Set<string>()
   for (const account of accounts()) {
     if (account?.available === false || account?.enabled === false) continue
     ids.add(account?.provider || 'workbuddy')

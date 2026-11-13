@@ -4,7 +4,7 @@ import { t } from '../ui-kit/src/i18n'
 import { maintenanceLabel } from './maintenance-format'
 import type { MaintenanceApi, MaintenanceTask, MaintenanceTaskId } from './maintenance-types'
 
-type Draft = { enabled: boolean; interval: string }
+type Draft = { enabled: boolean; interval: string; timeout: string }
 
 /** 维护记录保留策略的合法范围（与后端 `/api/retention` 的校验同一套数字） */
 const RETENTION_MIN_DAYS = 1
@@ -33,7 +33,11 @@ export function MaintenanceSettings({ tasks, api, retentionDays, maxRecords, onC
   onClose(): void
   onSaved(): void
 }) {
-  const [drafts, setDrafts] = React.useState<Record<string, Draft>>(() => Object.fromEntries(tasks.map(task => [task.id, { enabled: task.enabled, interval: String(task.interval) }])))
+  const [drafts, setDrafts] = React.useState<Record<string, Draft>>(() => Object.fromEntries(tasks.map(task => [task.id, {
+    enabled: task.enabled,
+    interval: String(task.interval),
+    timeout: task.timeoutSeconds == null ? '' : String(task.timeoutSeconds),
+  }])))
   const [retention, setRetention] = React.useState<RetentionDraft>(() => ({ days: String(retentionDays), count: String(maxRecords) }))
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -48,6 +52,15 @@ export function MaintenanceSettings({ tasks, api, retentionDays, maxRecords, onC
       if (!/^\d+$/.test(value) || Number(value) < task.min || Number(value) > task.max) {
         setError(t('{name}间隔必须是 {min}–{max} 分钟的整数', { name: maintenanceLabel(task.id), min: task.min, max: task.max }))
         return
+      }
+      if (task.id === 'modelRefresh') {
+        const timeout = drafts[task.id]?.timeout.trim() ?? ''
+        const min = task.timeoutMin ?? 5
+        const max = task.timeoutMax ?? 600
+        if (!/^\d+$/.test(timeout) || Number(timeout) < min || Number(timeout) > max) {
+          setError(t('{name}请求超时必须是 {min}–{max} 秒的整数', { name: maintenanceLabel(task.id), min, max }))
+          return
+        }
       }
     }
     const days = retention.days.trim()
@@ -66,9 +79,15 @@ export function MaintenanceSettings({ tasks, api, retentionDays, maxRecords, onC
     try {
       for (const task of tasks) {
         const draft = drafts[task.id]
-        if (!unsaved.current.has(task.id) && task.enabled === draft.enabled && task.interval === Number(draft.interval)) continue
+        const timeoutChanged = task.id === 'modelRefresh' && task.timeoutSeconds !== Number(draft.timeout)
+        if (!unsaved.current.has(task.id) && task.enabled === draft.enabled
+          && task.interval === Number(draft.interval) && !timeoutChanged) continue
         unsaved.current.add(task.id)
-        const result = await api.save(task.id, { enabled: draft.enabled, interval: Number(draft.interval) })
+        const result = await api.save(task.id, {
+          enabled: draft.enabled,
+          interval: Number(draft.interval),
+          ...(task.id === 'modelRefresh' ? { timeoutSeconds: Number(draft.timeout) } : {}),
+        })
         if (result.saved === false) throw new Error(t('维护设置未能保存到数据库，请检查磁盘空间和权限'))
         unsaved.current.delete(task.id)
       }
@@ -108,12 +127,21 @@ export function MaintenanceSettings({ tasks, api, retentionDays, maxRecords, onC
                 </div>
                 <Switch checked={drafts[task.id].enabled} disabled={busy} aria-label={maintenanceLabel(task.id)} onCheckedChange={enabled => patch(task.id, { enabled })} />
               </div>
-              <Field className='w-[220px]'>
-                <FieldLabel>{t('执行间隔（分钟）')}</FieldLabel>
-                <Input type='number' inputMode='numeric' min={task.min} max={task.max} step={1} disabled={busy || !drafts[task.id].enabled}
-                  value={drafts[task.id].interval} onChange={event => patch(task.id, { interval: event.target.value })} />
-                <FieldDescription>{t('可填 {min}–{max}', { min: task.min, max: task.max })}</FieldDescription>
-              </Field>
+              <div className='flex flex-wrap gap-3'>
+                <Field className='w-[220px]'>
+                  <FieldLabel>{t('执行间隔（分钟）')}</FieldLabel>
+                  <Input type='number' inputMode='numeric' min={task.min} max={task.max} step={1} disabled={busy || !drafts[task.id].enabled}
+                    value={drafts[task.id].interval} onChange={event => patch(task.id, { interval: event.target.value })} />
+                  <FieldDescription>{t('可填 {min}–{max}', { min: task.min, max: task.max })}</FieldDescription>
+                </Field>
+                {task.id === 'modelRefresh' ? <Field className='w-[220px]'>
+                  <FieldLabel>{t('请求超时（秒）')}</FieldLabel>
+                  <Input type='number' inputMode='numeric' min={task.timeoutMin} max={task.timeoutMax} step={1}
+                    disabled={busy || !drafts[task.id].enabled}
+                    value={drafts[task.id].timeout} onChange={event => patch(task.id, { timeout: event.target.value })} />
+                  <FieldDescription>{t('可填 {min}–{max} 秒', { min: task.timeoutMin ?? 5, max: task.timeoutMax ?? 600 })}</FieldDescription>
+                </Field> : null}
+              </div>
             </div>)}
             <div className='maintenance-setting maintenance-divided'>
               <div className='maintenance-setting-heading'>

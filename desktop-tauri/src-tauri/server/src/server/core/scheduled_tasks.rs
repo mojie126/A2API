@@ -63,6 +63,13 @@ pub enum Runner {
     Frontend,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TimeoutDef {
+    pub min: i64,
+    pub max: i64,
+    pub default: i64,
+}
+
 pub struct TaskDef {
     pub id: &'static str,
     pub label: &'static str,
@@ -72,6 +79,8 @@ pub struct TaskDef {
     pub min: i64,
     pub max: i64,
     pub default_interval: i64,
+    /// 该任务支持的请求超时设置（秒）；`None` = 不暴露超时项。
+    pub timeout: Option<TimeoutDef>,
 }
 
 pub const TASK_CREDENTIAL_MAINTENANCE: &str = config::KEY_CREDENTIAL_MAINTENANCE;
@@ -91,6 +100,7 @@ pub const TASKS: [TaskDef; 6] = [
         min: config::INTERVAL_MIN_MINUTES,
         max: config::INTERVAL_MAX_MINUTES,
         default_interval: config::DEFAULT_CREDENTIAL_MAINTENANCE_MINUTES,
+        timeout: None,
     },
     TaskDef {
         id: TASK_MODEL_REFRESH,
@@ -101,6 +111,11 @@ pub const TASKS: [TaskDef; 6] = [
         min: config::INTERVAL_MIN_MINUTES,
         max: config::INTERVAL_MAX_MINUTES,
         default_interval: config::DEFAULT_MODEL_REFRESH_MINUTES,
+        timeout: Some(TimeoutDef {
+            min: config::MODEL_REFRESH_TIMEOUT_MIN_SECONDS,
+            max: config::MODEL_REFRESH_TIMEOUT_MAX_SECONDS,
+            default: config::DEFAULT_MODEL_REFRESH_TIMEOUT_SECONDS,
+        }),
     },
     TaskDef {
         id: TASK_UPDATE_CHECK,
@@ -111,6 +126,7 @@ pub const TASKS: [TaskDef; 6] = [
         min: config::INTERVAL_MIN_MINUTES,
         max: config::INTERVAL_MAX_MINUTES,
         default_interval: config::DEFAULT_UPDATE_CHECK_MINUTES,
+        timeout: None,
     },
     TaskDef {
         id: TASK_LOGS_AUTO_REFRESH,
@@ -121,6 +137,7 @@ pub const TASKS: [TaskDef; 6] = [
         min: config::INTERVAL_MIN_SECONDS,
         max: config::INTERVAL_MAX_SECONDS,
         default_interval: config::DEFAULT_LOGS_AUTO_REFRESH_SECONDS,
+        timeout: None,
     },
     TaskDef {
         id: TASK_REQUESTS_AUTO_REFRESH,
@@ -131,6 +148,7 @@ pub const TASKS: [TaskDef; 6] = [
         min: config::INTERVAL_MIN_SECONDS,
         max: config::INTERVAL_MAX_SECONDS,
         default_interval: config::DEFAULT_REQUESTS_AUTO_REFRESH_SECONDS,
+        timeout: None,
     },
     TaskDef {
         id: TASK_REPORT_AUTO_REFRESH,
@@ -141,6 +159,7 @@ pub const TASKS: [TaskDef; 6] = [
         min: config::INTERVAL_MIN_SECONDS,
         max: config::INTERVAL_MAX_SECONDS,
         default_interval: config::DEFAULT_REPORT_AUTO_REFRESH_SECONDS,
+        timeout: None,
     },
 ];
 
@@ -165,6 +184,10 @@ fn interval_ms(task: &TaskDef) -> i64 {
     interval * if task.unit == "seconds" { 1000 } else { 60_000 }
 }
 
+fn timeout_seconds_of(settings: config::ScheduledSettings, id: &str) -> Option<i64> {
+    (id == TASK_MODEL_REFRESH).then_some(settings.model_refresh_timeout_seconds)
+}
+
 fn state_key(id: &str) -> String {
     if id == TASK_UPDATE_CHECK {
         crate::server::core::update::global_check_key()
@@ -174,12 +197,13 @@ fn state_key(id: &str) -> String {
 }
 
 fn task_json(task: &TaskDef, state: Result<TaskState, String>) -> Value {
-    let settings = settings_of(config::scheduled_settings(), task.id);
+    let scheduled = config::scheduled_settings();
+    let settings = settings_of(scheduled, task.id);
     let backend = task.runner == Runner::Backend;
     let error = state.as_ref().err().cloned();
     let state = state.unwrap_or_default();
     let timestamp = |at: i64| if at > 0 { json!(at) } else { Value::Null };
-    json!({
+    let mut value = json!({
         "id": task.id,
         "label": task.label,
         "description": task.description,
@@ -199,7 +223,18 @@ fn task_json(task: &TaskDef, state: Result<TaskState, String>) -> Value {
         "retryAt": timestamp(state.retry_at),
         "nextRunAt": if backend && settings.enabled { timestamp(state.due_at().max(logging::now_ms())) } else { Value::Null },
         "canRun": backend,
-    })
+    });
+    if let (Some(timeout), Some(object)) =
+        (timeout_seconds_of(scheduled, task.id), value.as_object_mut())
+    {
+        object.insert("timeoutSeconds".to_string(), json!(timeout));
+        if let Some(limit) = task.timeout {
+            object.insert("timeoutMin".to_string(), json!(limit.min));
+            object.insert("timeoutMax".to_string(), json!(limit.max));
+            object.insert("defaultTimeoutSeconds".to_string(), json!(limit.default));
+        }
+    }
+    value
 }
 
 pub fn list() -> Value {
@@ -238,7 +273,7 @@ pub fn task_by_id(id: &str) -> Value {
 
 pub fn configure(id: &str, patch: IntervalTaskPatch) -> Result<Value, String> {
     let task = find(id).ok_or_else(|| format!("未知的定时任务: {id}"))?;
-    if patch.enabled.is_none() && patch.interval.is_none() {
+    if patch.enabled.is_none() && patch.interval.is_none() && patch.timeout_seconds.is_none() {
         return Err("没有需要更新的字段".to_string());
     }
     if let Some(interval) = patch.interval {
@@ -247,9 +282,26 @@ pub fn configure(id: &str, patch: IntervalTaskPatch) -> Result<Value, String> {
             return Err(format!("「{}」的间隔必须是 {}–{} {}", task.label, task.min, task.max, unit));
         }
     }
+    if let Some(timeout) = patch.timeout_seconds {
+        let Some(limit) = task.timeout else {
+            return Err(format!("「{}」不支持请求超时设置", task.label));
+        };
+        if !(limit.min..=limit.max).contains(&timeout) {
+            return Err(format!(
+                "「{}」的请求超时必须是 {}–{} 秒",
+                task.label, limit.min, limit.max
+            ));
+        }
+    }
     let before = settings_of(config::scheduled_settings(), id);
     let plugins_before = (id == TASK_UPDATE_CHECK).then(crate::server::core::plugin_host::settings::current);
-    let saved = config::set_scheduled_task(id, patch, task.min, task.max);
+    let saved = config::set_scheduled_task(
+        id,
+        patch,
+        task.min,
+        task.max,
+        task.timeout.map(|limit| (limit.min, limit.max)),
+    );
     let after = settings_of(config::scheduled_settings(), id);
     if let Some(before) = plugins_before {
         crate::server::core::plugin_host::settings::notify_changed(before);
@@ -270,7 +322,10 @@ pub fn configure(id: &str, patch: IntervalTaskPatch) -> Result<Value, String> {
         }
     }
     if before != after {
-        logging::log("[Tasks]", &format!("定时任务「{}」已{}，间隔 {} {}", task.label,
+        let timeout = timeout_seconds_of(config::scheduled_settings(), id)
+            .map(|seconds| format!("，请求超时 {seconds} 秒"))
+            .unwrap_or_default();
+        logging::log("[Tasks]", &format!("定时任务「{}」已{}，间隔 {} {}{timeout}", task.label,
             if after.enabled { "开启" } else { "关闭" }, after.interval,
             if task.unit == "seconds" { "秒" } else { "分钟" }));
     }

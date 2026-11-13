@@ -13,7 +13,7 @@ type Host = {
     getMaintenanceRecord(id: string): Promise<MaintenanceDetail>
     runMaintenance(id: MaintenanceTaskId): Promise<MaintenanceDetail>
     retryMaintenance(id: string, itemId?: string): Promise<MaintenanceDetail>
-    saveScheduledTask(id: string, patch: { enabled: boolean; interval: number }): Promise<MaintenanceTask>
+    saveScheduledTask(id: string, patch: { enabled: boolean; interval: number; timeoutSeconds?: number }): Promise<MaintenanceTask>
   }
   wbApp?: {
     readonly currentPage?: string

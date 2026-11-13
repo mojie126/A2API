@@ -1620,6 +1620,7 @@ pub fn set_scheduled_task(
     patch: IntervalTaskPatch,
     min: i64,
     max: i64,
+    timeout: Option<(i64, i64)>,
 ) -> bool {
     let key = key.to_string();
     update(move |config| {
@@ -1656,6 +1657,14 @@ pub fn set_scheduled_task(
             task.insert(
                 "interval".to_string(),
                 Value::from(interval.clamp(min, max)),
+            );
+        }
+        if let (Some(timeout), Some((timeout_min, timeout_max))) =
+            (patch.timeout_seconds, timeout)
+        {
+            task.insert(
+                "timeoutSeconds".to_string(),
+                Value::from(timeout.clamp(timeout_min, timeout_max)),
             );
         }
         // 关键一步：重解析内存快照。**不能**只改 raw ——

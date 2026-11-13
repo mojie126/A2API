@@ -528,6 +528,11 @@ pub const DEFAULT_CREDENTIAL_MAINTENANCE_MINUTES: i64 = 10;
 /// 上游（见 `providers::workbuddy` 的 `refresh_models`），间隔太密等于给上游
 /// 添无谓的负载。一小时的粒度对「模型清单变了没」这个问题足够。
 pub const DEFAULT_MODEL_REFRESH_MINUTES: i64 = 60;
+/// 模型目录刷新默认请求超时（秒）。
+pub const DEFAULT_MODEL_REFRESH_TIMEOUT_SECONDS: i64 = 15;
+/// 模型目录刷新请求超时的取值范围（秒）。
+pub const MODEL_REFRESH_TIMEOUT_MIN_SECONDS: i64 = 5;
+pub const MODEL_REFRESH_TIMEOUT_MAX_SECONDS: i64 = 600;
 /// 两个前端自动刷新的默认间隔（秒）：每秒一次。
 ///
 /// 比改造前的硬编码 10 秒密得多，这是有意的：两条任务都只在**对应页面可见时**
@@ -576,6 +581,8 @@ pub struct IntervalTask {
 pub struct ScheduledSettings {
     pub credential_maintenance: IntervalTask,
     pub model_refresh: IntervalTask,
+    /// 模型目录刷新请求超时（秒），自动与手动路径共用。
+    pub model_refresh_timeout_seconds: i64,
     pub logs_auto_refresh: IntervalTask,
     pub requests_auto_refresh: IntervalTask,
     pub report_auto_refresh: IntervalTask,
@@ -593,6 +600,7 @@ impl Default for ScheduledSettings {
                 enabled: true,
                 interval: DEFAULT_MODEL_REFRESH_MINUTES,
             },
+            model_refresh_timeout_seconds: DEFAULT_MODEL_REFRESH_TIMEOUT_SECONDS,
             logs_auto_refresh: IntervalTask {
                 enabled: true,
                 interval: DEFAULT_LOGS_AUTO_REFRESH_SECONDS,
@@ -618,6 +626,8 @@ impl Default for ScheduledSettings {
 pub struct IntervalTaskPatch {
     pub enabled: Option<bool>,
     pub interval: Option<i64>,
+    /// 模型目录刷新请求超时（秒）；仅模型目录更新任务使用。
+    pub timeout_seconds: Option<i64>,
 }
 
 // ─── 请求重试设置的键名与边界（config.json 里的字段名**就是契约**）─────

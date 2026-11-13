@@ -1146,10 +1146,10 @@ export function refreshModels(): void {
  * visibleColumns 导出给 table-columns.js：列宽那一层要按当前可见列算（覆盖值落到哪个 <col>、
  * 末列不给把手），两边读同一份配置才不会各算一个样。
  * selectProvider 导出给账号页的自定义提供商弹窗（「模型清单 →」跳过来并选中该家）。
- * providerRefreshedAt 导出给「获取模型」弹窗的「更新日期」列；builtinProviders 给它组装刷新范围。
+ * providerRefreshedAt 导出给「获取模型」弹窗的「更新日期」列。
  */
 window.wbModelsPanel = {
-  render, load, refreshAll, refreshModels, visibleColumns, selectProvider, builtinProviders,
+  render, load, refreshAll, refreshModels, visibleColumns, selectProvider,
   providerRefreshedAt,
 }
 
@@ -1163,7 +1163,6 @@ declare global {
       refreshModels(): void
       visibleColumns(): ColumnView[]
       selectProvider(id: string): void
-      builtinProviders(): string[]
       providerRefreshedAt(providerId: string): number
     }
   }

@@ -121,9 +121,23 @@ pub fn launch(store: AccountStore, request: Request) -> Result<Detail, String> {
         run: recorder.run.clone(),
         results: Vec::new(),
     };
+    let startup = logging::now_ms();
+    logging::log(
+        "[Maintenance]",
+        &format!("{}任务已受理（run={}）", task_label(&request.task_id), started.run.id),
+    );
+    let task_name = task_label(&request.task_id);
     crate::spawn_task(async move {
         if let Err(error) = complete(&store, request, guard, recorder).await {
             logging::log_with_level("[Maintenance]", &types::safe_message(&error), "error");
+        } else {
+            logging::log(
+                "[Maintenance]",
+                &format!(
+                    "{task_name}任务执行完成（started_at={startup}，elapsed={} ms）",
+                    logging::now_ms().saturating_sub(startup)
+                ),
+            );
         }
     });
     Ok(started)
@@ -136,12 +150,18 @@ pub async fn execute(store: &AccountStore, request: Request) -> Result<Detail, S
 
 async fn complete(
     store: &AccountStore,
-    request: Request,
+    mut request: Request,
     guard: task_state::RunGuard,
     recorder: storage::Recorder,
 ) -> Result<Detail, String> {
     let manual = request.source == "manual";
     let snapshots = types::accounts(store);
+    let requested_providers = request.providers.clone();
+    let model_active_providers = if request.task_id == MODEL {
+        Some(in_use_provider_ids(store))
+    } else {
+        None
+    };
     let mut raw = if request.task_id == CREDENTIAL {
         if request.forced_account_ids.is_empty() {
             credential_maintenance::refresh_selected_accounts(store, request.account_ids.as_deref())
@@ -155,23 +175,23 @@ async fn complete(
             .await
         }
     } else if manual {
+        let in_use = model_active_providers.as_deref().unwrap_or_default();
+        let providers = request
+            .providers
+            .as_ref()
+            .map(|requested| requested.iter().filter(|id| in_use.contains(id)).cloned().collect::<Vec<_>>())
+            .unwrap_or_else(|| in_use.to_vec());
+        request.providers = Some(providers.clone());
         providers::adapter::refresh_implemented_forced(
             store,
             &request.accounts,
-            request.providers.as_deref(),
+            Some(&providers),
         )
         .await
     } else {
         // 自动路径只刷新真正在用的提供商：没有启用账号的家刷了只会在记录里
         // 产生「缺少登录态」的噪音，也白白占用一次上游请求
-        let mut in_use: Vec<String> = providers::executable_provider_ids()
-            .into_iter()
-            .filter(|provider| !store.accounts_for_provider(provider).is_empty())
-            .collect();
-        in_use.extend(custom_providers::list().into_iter().filter_map(|provider| {
-            let id = provider.get("id").and_then(Value::as_str)?;
-            (!store.accounts_for_provider(id).is_empty()).then(|| id.to_string())
-        }));
+        let in_use = model_active_providers.as_deref().unwrap_or_default();
         providers::adapter::refresh_implemented(store, Some(&in_use)).await
     };
     let metadata = if request.task_id == MODEL && request.metadata {
@@ -194,7 +214,7 @@ async fn complete(
         .enumerate()
         .map(|(index, row)| types::item(row, index, &snapshots))
         .collect::<Vec<_>>();
-    complete_missing_targets(&request, &snapshots, &mut items);
+    complete_missing_targets(&request, requested_providers.as_deref(), &snapshots, &mut items);
     let (refreshed, _, failed) = types::summary(&items);
     let metadata_failed = metadata
         .as_ref()
@@ -217,11 +237,7 @@ async fn complete(
         0,
         interval(&request.task_id),
     );
-    let task_name = if request.task_id == CREDENTIAL {
-        "凭证维护"
-    } else {
-        "模型目录更新"
-    };
+    let task_name = task_label(&request.task_id);
     logging::log_with_level(
         "[Maintenance]",
         &format!("{task_name}：{note}"),
@@ -236,6 +252,29 @@ async fn complete(
         return Err(format!("维护结果已保存，但排期更新失败：{error}"));
     }
     Ok(detail)
+}
+
+fn task_label(task_id: &str) -> &'static str {
+    if task_id == CREDENTIAL {
+        "凭证维护"
+    } else {
+        "模型目录更新"
+    }
+}
+
+/// 模型目录刷新统一范围：供应商可用且至少有一个启用账号。
+fn in_use_provider_ids(store: &AccountStore) -> Vec<String> {
+    let mut ids: Vec<String> = providers::executable_provider_ids()
+        .into_iter()
+        .filter(|provider| !store.accounts_for_provider(provider).is_empty())
+        .collect();
+    ids.extend(custom_providers::list().into_iter().filter_map(|provider| {
+        let id = provider.get("id").and_then(Value::as_str)?;
+        (provider.get("enabled").and_then(Value::as_bool) != Some(false)
+            && !store.accounts_for_provider(id).is_empty())
+        .then(|| id.to_string())
+    }));
+    ids
 }
 
 async fn refresh_custom_catalogs(store: &AccountStore, request: &Request) -> Vec<Value> {
@@ -296,13 +335,8 @@ fn merge_custom_catalog(id: &str, upstream: &[String], item: &mut Value) {
     let mut added = 0usize;
     let mut enriched = 0usize;
     for name in upstream.iter().map(|name| name.trim()).filter(|name| !name.is_empty()) {
-        if let Some(known) = merged.iter_mut().find(|model| {
-            model.get("id").and_then(Value::as_str)
-                .is_some_and(|known| known.eq_ignore_ascii_case(name))
-                || model.get("name").and_then(Value::as_str)
-                    .is_some_and(|known| known.eq_ignore_ascii_case(name))
-        }) {
-            if enrich_custom_model(id, known) { enriched += 1; }
+        if let Some(index) = matching_custom_model_index(&merged, &mappings, name) {
+            if enrich_custom_model(id, &mut merged[index]) { enriched += 1; }
             continue;
         }
         merged.push(json!({ "id": name, "enabled": true, "reasoning": "" }));
@@ -320,6 +354,51 @@ fn merge_custom_catalog(id: &str, upstream: &[String], item: &mut Value) {
             item["message"] = json!(error.message);
         }
     }
+}
+
+/// 上游模型 ID → 已登记模型的匹配下标。
+///
+/// 先认启用的手动映射：映射名（alias）与目标上游模型（target）都是用户维护的
+/// 准确名称，命中时按它指向的已登记模型处理；再认模型自己的 id / name。这样
+/// 供应商目录里的 ID 命名变化时不会多出一份重复登记。
+fn matching_custom_model_index(
+    models: &[Value],
+    mappings: &[Value],
+    upstream_id: &str,
+) -> Option<usize> {
+    let upstream_id = upstream_id.trim();
+    if upstream_id.is_empty() {
+        return None;
+    }
+    let model_index = |id: &str| {
+        models.iter().position(|model| {
+            model.get("id").and_then(Value::as_str)
+                .is_some_and(|known| known.eq_ignore_ascii_case(id))
+        })
+    };
+    for mapping in mappings {
+        let enabled = mapping.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+        let alias = mapping.get("alias").and_then(Value::as_str).unwrap_or("");
+        if enabled && alias.eq_ignore_ascii_case(upstream_id) {
+            let target = mapping.get("target").and_then(Value::as_str).unwrap_or("");
+            if let Some(index) = model_index(target) {
+                return Some(index);
+            }
+        }
+    }
+    if let Some(index) = models.iter().position(|model| {
+        model.get("id").and_then(Value::as_str)
+            .is_some_and(|known| known.eq_ignore_ascii_case(upstream_id))
+            || model.get("name").and_then(Value::as_str)
+                .is_some_and(|known| known.eq_ignore_ascii_case(upstream_id))
+    }) {
+        return Some(index);
+    }
+    mappings.iter().find_map(|mapping| {
+        let enabled = mapping.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+        let target = mapping.get("target").and_then(Value::as_str).unwrap_or("");
+        (enabled && target.eq_ignore_ascii_case(upstream_id)).then(|| model_index(target)).flatten()
+    })
 }
 
 /// 给一条已登记模型补 models.dev 元数据，返回是否真正改动了能力或档位
@@ -362,6 +441,7 @@ fn enrich_custom_model(provider: &str, model: &mut Value) -> bool {
 
 fn complete_missing_targets(
     request: &Request,
+    requested_providers: Option<&[String]>,
     snapshots: &HashMap<String, types::AccountSnapshot>,
     items: &mut Vec<Item>,
 ) {
@@ -378,12 +458,22 @@ fn complete_missing_targets(
             items.push(types::item(&raw, items.len(), snapshots));
         }
     }
-    if let Some(providers) = &request.providers {
+    if let Some(providers) = requested_providers {
         for provider in providers {
             if items.iter().any(|item| &item.provider == provider) {
                 continue;
             }
-            let raw = json!({ "provider": provider, "status": "skipped", "message": "提供商当前不可用，未执行目录更新" });
+            let active = request.providers.as_ref()
+                .is_some_and(|allowed| allowed.iter().any(|id| id == provider));
+            let raw = if active {
+                json!({ "provider": provider, "status": "skipped", "message": "提供商当前不可用，未执行目录更新" })
+            } else {
+                json!({
+                    "provider": provider,
+                    "status": "skipped",
+                    "message": "供应商未启用或没有可用账号，未执行目录更新"
+                })
+            };
             items.push(types::item(&raw, items.len(), snapshots));
         }
     }
@@ -499,5 +589,33 @@ mod tests {
         model["metadataCapabilities"] = Value::Object(metadata);
         assert_eq!(model["capabilities"]["supportsImages"], json!(false));
         assert_eq!(model["metadataCapabilities"]["maxInputTokens"], json!(128000));
+    }
+
+    #[test]
+    fn custom_catalog_matching_accepts_manual_mapping_names() {
+        let models = vec![
+            json!({ "id": "cn:glm-5.3", "name": "GLM-5.3" }),
+            json!({ "id": "cn:deepseek-v4.1-flash" }),
+        ];
+        let mappings = vec![
+            json!({ "alias": "glm-latest", "target": "cn:glm-5.3", "enabled": true }),
+            json!({ "alias": "disabled-alias", "target": "cn:deepseek-v4.1-flash", "enabled": false }),
+        ];
+        assert_eq!(
+            matching_custom_model_index(&models, &mappings, "GLM-5.3"),
+            Some(0)
+        );
+        assert_eq!(
+            matching_custom_model_index(&models, &mappings, "glm-latest"),
+            Some(0)
+        );
+        assert_eq!(
+            matching_custom_model_index(&models, &mappings, "cn:deepseek-v4.1-flash"),
+            Some(1)
+        );
+        assert_eq!(
+            matching_custom_model_index(&models, &mappings, "disabled-alias"),
+            None
+        );
     }
 }
