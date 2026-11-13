@@ -233,6 +233,18 @@ fn create_main_window(app: &AppHandle, visible: bool) -> tauri::Result<tauri::We
         .maximized(true)
         .visible(visible)
         .initialization_script(bridge::bridge_js())
+        // 面板里的 target=_blank 外链（登录指引、服务声明等）：WebView2 的
+        // 新窗口请求在没有 handler 时会被 wry 静默吞掉（SetHandled(true)），
+        // 用户点链接毫无反应。这里统一转交系统默认浏览器，只放行 http(s)
+        //（复用 login::open_in_browser，与 open_release_page 命令同一套校验）；
+        // 其余一律拒绝 —— 与无 handler 时的默认行为一致。
+        .on_new_window(move |url, _| {
+            let text = url.as_str();
+            if text.starts_with("https://") || text.starts_with("http://") {
+                let _ = crate::login::open_in_browser(text);
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
         .build()
 }
 

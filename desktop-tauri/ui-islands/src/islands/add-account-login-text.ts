@@ -75,3 +75,22 @@ export function mergeLoginInstructions(...values: Array<string | null | undefine
     return true
   }).join('\n')
 }
+
+/**
+ * 把指引文本拆成「纯文本 / 链接」两段：https 地址渲染成可点击的链接，
+ * 其余原样保留。只认 https（指引不该发 http 明文），全角标点等收尾字符
+ * 不算链接的一部分。
+ */
+export function instructionParts(text: string): Array<string | { href: string }> {
+  const parts: Array<string | { href: string }> = []
+  const pattern = /https:\/\/[^\s<>（）「」『』“”‘’"']+/g
+  let last = 0
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0
+    if (index > last) parts.push(text.slice(last, index))
+    parts.push({ href: match[0] })
+    last = index + match[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
+}

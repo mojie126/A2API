@@ -1,7 +1,7 @@
 /** 桌面与移动端共用的动态登录元数据解析；只消费网关投影，不执行 provider。 */
 import { t } from '../i18n'
 import { pluginLoginText } from './add-account-login-text'
-export { mergeLoginInstructions, pluginBrowserInstructions } from './add-account-login-text'
+export { instructionParts, mergeLoginInstructions, pluginBrowserInstructions } from './add-account-login-text'
 
 export type Prompt = {
   key: string

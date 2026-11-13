@@ -22,7 +22,7 @@ import { SearchableSelect } from '../../../ui-shared/searchable-select'
 import { usePluginPrompts } from './add-account-plugin-prompts'
 
 import {
-  loginText, mergeLoginInstructions, methodLabel, parseCallbackInput, parseMethods, pluginBrowserInstructions, promptEnabled, promptValue, readInputs,
+  instructionParts, loginText, mergeLoginInstructions, methodLabel, parseCallbackInput, parseMethods, pluginBrowserInstructions, promptEnabled, promptValue, readInputs,
   type Method, type MethodsState,
 } from './add-account-dynamic-fields'
 
@@ -534,7 +534,10 @@ export function DynamicProviderBlock({
     {instructions || progress.userCode ? <Alert>
       <AlertTitle>{t('登录指引 / 设备码授权')}</AlertTitle>
       <AlertDescription className='whitespace-pre-wrap break-words'>
-        {instructions}
+        {instructionParts(instructions).map((part, index) => typeof part === 'string'
+          ? <React.Fragment key={index}>{part}</React.Fragment>
+          : <a key={index} className='text-primary underline underline-offset-2'
+            href={part.href} target='_blank' rel='noreferrer'>{part.href}</a>)}
         {progress.userCode ? <div className='mt-2'>{t('设备授权码：{code}', { code: progress.userCode })}</div> : null}
       </AlertDescription>
     </Alert> : null}
