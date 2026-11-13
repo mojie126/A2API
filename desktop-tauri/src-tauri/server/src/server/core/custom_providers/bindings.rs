@@ -299,3 +299,48 @@ pub fn public_models(provider: &Value) -> Vec<Value> {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 自定义家的别名必须继承目标的补全能力，否则辅助识图等模型选择入口
+    /// 会看不到已经由 models.dev 标记为支持图片的模型
+    #[test]
+    fn alias_inherits_metadata_capabilities() {
+        let provider = json!({
+            "id": "custom-vision",
+            "enabled": true,
+            "models": [{
+                "id": "vision-upstream",
+                "enabled": false,
+                "capabilities": { "supportsToolCall": true },
+                "metadataCapabilities": { "supportsImages": true }
+            }],
+            "mappings": [{ "alias": "vision-alias", "target": "vision-upstream", "enabled": true }]
+        });
+        let models = public_models(&provider);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "vision-alias");
+        assert_eq!(models[0]["supportsImages"], true);
+        assert_eq!(models[0]["supportsToolCall"], true);
+    }
+
+    /// 用户登记的能力优先于自动补全值，别名也沿用同一优先级
+    #[test]
+    fn user_capability_overrides_metadata_capabilities() {
+        let provider = json!({
+            "id": "custom-vision",
+            "enabled": true,
+            "models": [{
+                "id": "vision-upstream",
+                "enabled": true,
+                "capabilities": { "supportsImages": false },
+                "metadataCapabilities": { "supportsImages": true }
+            }]
+        });
+        let models = public_models(&provider);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["supportsImages"], false);
+    }
+}

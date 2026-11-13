@@ -81,14 +81,9 @@ fn expand_legacy(settings: &mut VisionSettings, choices: &[Value]) {
 fn view(state: &ServerState) -> Result<Value, GatewayError> {
     let snapshot = vision_compat::current();
     let settings = snapshot.settings.as_ref().map_err(|error| GatewayError::new(error.clone()))?;
-    let mut choices = model_choices(&state.store());
-    for choice in &mut choices {
-        let provider = choice["provider"].as_str().unwrap_or("");
-        let model = choice["model"].as_str().unwrap_or("");
-        let images = routing_groups::catalog_model(provider, model)
-            .and_then(|item| capability::images_for_channel(provider, &item));
-        choice["capabilities"]["supportsImages"] = json!(images);
-    }
+    // 候选本身已经带着模型目录补全与用户覆盖后的生效能力，不再二次查询
+    // 原始登记，否则会覆盖补全值并遗漏自定义家的别名
+    let choices = model_choices(&state.store());
     let legacy = settings.is_legacy();
     let mut settings = settings.clone();
     expand_legacy(&mut settings, &choices);
