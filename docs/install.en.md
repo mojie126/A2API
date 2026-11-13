@@ -354,7 +354,7 @@ When a new version is available, a "Restart & update" bar floats at the bottom: 
 | Reports, account status, balances, request logs, runtime logs | Add accounts (QR / paste token / import client login) |
 | Enable/disable accounts, refresh credentials, delete accounts | Edit an account's credentials, proxy or rate-limit rules |
 | One-tap check-in, view check-in history | Claim onboarding rewards and plans one by one |
-| Enable/disable models, filter by provider | Edit model mappings, reasoning levels, capability flags |
+| Enable/disable models, filter by provider | Edit model mappings, reasoning levels, reasoning level lists, capability flags |
 | Copy gateway keys, enable/disable keys | Create keys, set provider/model allowlists |
 | Add, edit and delete manual HTTP / SOCKS5 proxies; sync Clash Verge endpoints; enable/disable and test connectivity | — (proxy subscriptions and the built-in kernel have been discontinued) |
 | Enable/disable scheduled tasks, change intervals | Change port, routing, retry, timeouts, data retention |

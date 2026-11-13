@@ -354,7 +354,7 @@ Quando há uma nova versão, uma barra "Reiniciar e atualizar" surge na parte de
 | Relatórios, status das contas, saldos, logs de requisições, logs de execução | Adicionar contas (QR / colar token / importar login do cliente) |
 | Ativar/desativar contas, atualizar credenciais, excluir contas | Editar credenciais, proxy ou regras de limite de uma conta |
 | Check-in com um toque, ver histórico de check-in | Resgatar recompensas de integração e planos individualmente |
-| Ativar/desativar modelos, filtrar por provedor | Editar mapeamentos de modelo, níveis de raciocínio, flags de capacidade |
+| Ativar/desativar modelos, filtrar por provedor | Editar mapeamentos de modelo, níveis de raciocínio, listas de níveis de raciocínio, flags de capacidade |
 | Copiar gateway keys, ativar/desativar keys | Criar keys, definir listas de provedores/modelos permitidos |
 | Adicionar, editar e excluir proxies HTTP / SOCKS5 manuais; sincronizar endpoints do Clash Verge; ativar/desativar e testar conectividade | — (assinaturas de proxy e o kernel integrado foram descontinuados) |
 | Ativar/desativar tarefas agendadas, alterar intervalos | Alterar porta, roteamento, retry, timeouts, retenção de dados |

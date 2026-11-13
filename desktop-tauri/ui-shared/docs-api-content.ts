@@ -59,6 +59,7 @@ export function apiReferenceSections(origin: string): ApiSection[] {
         { name: 'supports_image_generation', type: 'boolean', description: t('表示目录条目属于生图模型。调用还需要当前插件已接入生成能力，且存在获准使用的可用账号。') },
         { name: 'supports_image_editing', type: 'boolean', description: t('表示当前目录与插件声明支持参考图编辑。编辑前检查此字段，不要仅凭模型名称包含 image 判断。') },
         { name: 'supports_tool_call / supports_reasoning', type: 'boolean', description: t('分别表示工具调用与思考能力。是否生效仍取决于实际承载模型、提供商和相关设置。') },
+        { name: 'reasoning_efforts / reasoning_default_effort', type: 'string[] / string', description: t('该模型声明可用的思考档位与默认档，来自上游目录或 models.dev；在模型管理里手动设置过则以手动值为准，reasoning_source 标明来源。列出档位不保证上游按此执行。') },
         { name: 'input_modalities / output_modalities', type: 'string[]', description: t('描述输入与输出模态，例如 text、image、video。字段缺失不表示自动支持其他文件、音频或服务端上传接口。') },
         { name: 'max_input_tokens / max_output_tokens', type: 'number', description: t('目录声明的上下文与最大输出预算，可能省略。预算和余额不是同一概念，也不能替代上游的实际限制。') },
       ],

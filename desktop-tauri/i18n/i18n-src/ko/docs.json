@@ -265,5 +265,6 @@
   "非流式返回 type=message、content 块数组、stop_reason 与 usage。content 可能同时包含文本、思考与工具调用，应该按 type 遍历。": "비스트리밍은 type=message, content 블록 배열, stop_reason, usage를 반환합니다. 텍스트, 추론, 도구 호출이 섞일 수 있으므로 type별로 순회하세요.",
   "领取类": "보상 수령",
   "默认 b64_json，返回可直接解码的图片 base64；url 返回上游签名链接或网关临时下载链接。不是图片文件编码。": "기본 b64_json은 디코딩 가능한 이미지 base64, url은 상위 서명 URL 또는 게이트웨이 임시 다운로드 링크입니다. 이미지 파일 인코딩과 다릅니다.",
-  "默认 false，返回完整 JSON；true 返回 text/event-stream。curl 查看流式输出时添加 -N，客户端应按完整 SSE 事件解析而不是按网络分块解析。": "기본 false는 전체 JSON, true는 text/event-stream을 반환합니다. curl에 -N을 추가하세요. 네트워크 청크가 아닌 완전한 SSE 이벤트 단위로 파싱해야 합니다."
+  "默认 false，返回完整 JSON；true 返回 text/event-stream。curl 查看流式输出时添加 -N，客户端应按完整 SSE 事件解析而不是按网络分块解析。": "기본 false는 전체 JSON, true는 text/event-stream을 반환합니다. curl에 -N을 추가하세요. 네트워크 청크가 아닌 완전한 SSE 이벤트 단위로 파싱해야 합니다.",
+  "该模型声明可用的思考档位与默认档，来自上游目录或 models.dev；在模型管理里手动设置过则以手动值为准，reasoning_source 标明来源。列出档位不保证上游按此执行。": "이 모델이 선언한 사용 가능한 추론 레벨과 기본 레벨로, 업스트림 카탈로그 또는 models.dev에서 옵니다. 모델 관리에서 직접 설정한 경우 수동 값이 우선하며 reasoning_source가 출처를 표시합니다. 레벨이 나열되어 있어도 업스트림이 실행한다는 보장은 없습니다."
 }

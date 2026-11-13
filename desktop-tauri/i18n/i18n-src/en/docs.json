@@ -265,5 +265,6 @@
   "非流式返回 type=message、content 块数组、stop_reason 与 usage。content 可能同时包含文本、思考与工具调用，应该按 type 遍历。": "Non-streaming responses contain type=message, content blocks, stop_reason, and usage. Iterate by type because content may combine text, reasoning, and tool calls.",
   "领取类": "Reward claims",
   "默认 b64_json，返回可直接解码的图片 base64；url 返回上游签名链接或网关临时下载链接。不是图片文件编码。": "Defaults to b64_json for decodable image base64. url returns an upstream signed URL or temporary gateway download URL. This is not the image file encoding.",
-  "默认 false，返回完整 JSON；true 返回 text/event-stream。curl 查看流式输出时添加 -N，客户端应按完整 SSE 事件解析而不是按网络分块解析。": "Defaults to false for a complete JSON response; true returns text/event-stream. Add -N to curl for streaming output. Parse complete SSE events rather than assuming network chunks are event boundaries."
+  "默认 false，返回完整 JSON；true 返回 text/event-stream。curl 查看流式输出时添加 -N，客户端应按完整 SSE 事件解析而不是按网络分块解析。": "Defaults to false for a complete JSON response; true returns text/event-stream. Add -N to curl for streaming output. Parse complete SSE events rather than assuming network chunks are event boundaries.",
+  "该模型声明可用的思考档位与默认档，来自上游目录或 models.dev；在模型管理里手动设置过则以手动值为准，reasoning_source 标明来源。列出档位不保证上游按此执行。": "The reasoning levels and default level this model declares, from the upstream catalog or models.dev; if you set them manually in model management the manual values win, and reasoning_source marks the origin. Listing a level does not guarantee the upstream executes it."
 }

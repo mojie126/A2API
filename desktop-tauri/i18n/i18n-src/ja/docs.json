@@ -265,5 +265,6 @@
   "非流式返回 type=message、content 块数组、stop_reason 与 usage。content 可能同时包含文本、思考与工具调用，应该按 type 遍历。": "非ストリーミングは type=message、content ブロック、stop_reason、usage を返します。テキスト・推論・ツール呼び出しが混在するため type ごとに処理してください。",
   "领取类": "報酬の取得",
   "默认 b64_json，返回可直接解码的图片 base64；url 返回上游签名链接或网关临时下载链接。不是图片文件编码。": "既定の b64_json はデコード可能な base64、url は上流署名 URL またはゲートウェイ一時 URL を返します。画像ファイルのエンコード形式ではありません。",
-  "默认 false，返回完整 JSON；true 返回 text/event-stream。curl 查看流式输出时添加 -N，客户端应按完整 SSE 事件解析而不是按网络分块解析。": "既定は false で完全な JSON を返し、true は text/event-stream を返します。curl は -N を指定し、ネットワーク分割単位ではなく完全な SSE イベントを解析してください。"
+  "默认 false，返回完整 JSON；true 返回 text/event-stream。curl 查看流式输出时添加 -N，客户端应按完整 SSE 事件解析而不是按网络分块解析。": "既定は false で完全な JSON を返し、true は text/event-stream を返します。curl は -N を指定し、ネットワーク分割単位ではなく完全な SSE イベントを解析してください。",
+  "该模型声明可用的思考档位与默认档，来自上游目录或 models.dev；在模型管理里手动设置过则以手动值为准，reasoning_source 标明来源。列出档位不保证上游按此执行。": "このモデルが宣言する利用可能な推論レベルと既定レベル（上流カタログまたは models.dev 由来）。モデル管理で手動設定した場合は手動値が優先され、reasoning_source が由来を示します。レベルが列挙されていても上流が実行するとは限りません。"
 }
