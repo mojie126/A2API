@@ -212,9 +212,20 @@
 - 行尾幻影修改根治——生成器（词典编译 build.mjs、vite）固定输出 LF，仓库 `core.autocrlf=true` 检出为 CRLF，每次重建产物在两种行尾间翻转，git status 出现大量 diff 为空的幻影修改（本轮 95 个 i18n 产物条目）；两道修复：`.gitattributes` 锁定 `desktop-tauri/ui/** text=auto eol=lf`（与 `.githooks/**` 同一先例），词典编译器 build.mjs 对内容一致（行尾归一后）的产物跳过写入；`ui/sw.js` 的缓存指纹随 bundle 内容哈希变化属设计行为，不算噪音
 - 注意：AI 会话的执行沙箱对 `.git` 只读，git add / renormalize 无法持久化索引，幻影条目需要在正常环境跑一次 `git status` 或随下次提交自然消除
 
+## GitHub Actions 缓存基线（2026-11-14）
+
+- 2026-11-14 切换前实测 254 条缓存，合计约 9.59 GiB，已接近 GitHub 单仓库 10 GiB 上限
+- 切换前 Docker BuildKit 层 213 条约 4.75 GiB，BuildKit 索引 31 条约 386 KiB；旧的 `cache-to: type=gha,mode=max` 会把最终镜像和中间构建层拆成大量 blob 缓存
+- Rust 缓存 8 条约 4.78 GiB，主要来自 Windows 桌面端与 Windows 服务端；缓存键同时包含工作流用途、目标平台、Rust 工具链指纹和依赖指纹，因此每次工具链更替会留下可被最近最少使用策略淘汰的旧缓存
+- Node 缓存 2 条约 54.5 MiB，分别对应 Linux 与 Windows npm 依赖
+- 日常构建依赖 GitHub 最近最少使用淘汰，不在每次构建后手工清理；接近容量上限时可优先删除最后访问时间早于当前工具链切换的旧 Rust 缓存
+- Docker BuildKit 缓存已改为 GHCR 仓库缓存标签 `ghcr.io/<owner>/a2api:buildcache`，不再向 GitHub Actions 缓存写入镜像层分片
+- `fork-build.yml` 的镜像任务使用 `actions: write` 自动分页删除遗留的 `buildkit-blob-*` 与 `index-buildkit-*` 缓存，清理后 GitHub Actions 缓存只保留 Rust 与 Node 依赖缓存
+- 插件仓库同期仅 2 条 Rust 缓存，合计约 343 MiB，无需例行清理；本轮首次验证新的指令集参数前建议清理这两条旧缓存，避免复用旧构建产物，之后仅在缓存损坏或需要排除缓存命中异常时再清理对应平台
+
 ## 插件仓库对应
 
-提供商插件仓库（`Agent2Providers`，origin `https://github.com/mojie126/A2P`）的官方基线、本地改动全史、供应商上游排查与开发构建流程基线，见其 `docs/插件仓库基线与本地改动记录_2026-11-10.md`
+提供商插件仓库（`Agent2Providers`，origin `https://github.com/mojie126/A2P`）的官方基线、本地改动全史、供应商上游排查与开发构建流程基线，见其 `docs/插件仓库基线与本地改动记录_2026-11-10.md`；插件 Linux x86_64 构建现沿用本仓库 `desktop-tauri/src-tauri/.cargo/config.toml` 的相同指令集与 C/C++ 编译参数
 
 ## 验证记录
 

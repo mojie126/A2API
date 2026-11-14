@@ -207,8 +207,25 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
+
+      - name: 清理旧 Docker BuildKit 分片缓存
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | select((.key | startswith("buildkit-blob-")) or (.key | startswith("index-buildkit-"))) | .id')"
+          count=0
+          while IFS= read -r id; do
+            if [[ -n "$id" ]]; then
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/caches/$id" >/dev/null
+              count=$((count + 1))
+            fi
+          done <<< "$ids"
+          echo "已清理旧 Docker BuildKit 分片缓存 $count 条"
 
       - name: 安装 Buildx
         uses: docker/setup-buildx-action@v4
@@ -241,8 +258,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 镜像层缓存写入 GHCR 单一标签，避免 GitHub Actions 缓存被拆成大量 blob
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/a2api:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/a2api:buildcache,mode=max
 
   release:
     name: 创建草稿 Release
