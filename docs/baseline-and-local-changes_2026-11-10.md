@@ -216,8 +216,7 @@
 
 - 2026-11-14 切换前实测 254 条缓存，合计约 9.59 GiB，已接近 GitHub 单仓库 10 GiB 上限
 - 切换前 Docker BuildKit 层 213 条约 4.75 GiB，BuildKit 索引 31 条约 386 KiB；旧的 `cache-to: type=gha,mode=max` 会把最终镜像和中间构建层拆成大量 blob 缓存
-- Rust 缓存 8 条约 4.78 GiB，主要来自 Windows 桌面端与 Windows 服务端；缓存键同时包含工作流用途、目标平台、Rust 工具链指纹和依赖指纹，因此每次工具链更替会留下可被最近最少使用策略淘汰的旧缓存
-- Node 缓存 2 条约 54.5 MiB，分别对应 Linux 与 Windows npm 依赖
+- 清理后实测 4 条缓存，合计约 1.11 GiB；其中 Rust 2 条约 1.05 GiB，分别对应当前工具链的 Windows 桌面端与 Windows 服务端，Node 2 条约 54.5 MiB
 - 日常构建依赖 GitHub 最近最少使用淘汰，不在每次构建后手工清理；接近容量上限时可优先删除最后访问时间早于当前工具链切换的旧 Rust 缓存
 - Docker BuildKit 缓存已改为 GHCR 仓库缓存标签 `ghcr.io/<owner>/a2api:buildcache`，不再向 GitHub Actions 缓存写入镜像层分片
 - `fork-build.yml` 的镜像任务使用 `actions: write` 自动分页删除遗留的 `buildkit-blob-*` 与 `index-buildkit-*` 缓存，清理后 GitHub Actions 缓存只保留 Rust 与 Node 依赖缓存
@@ -256,6 +255,7 @@
 - 2026-11-13 wb2api 实网复核：NAS Docker 中 `a2api` 与 `wb2api` 位于同一 `bridge` 网络，`a2api` 访问 `192.168.1.11:7863/v1/models`（不带鉴权）约 2.6–4.3 秒返回 401，携带 `freecc` 时出现 15 秒以上甚至 30 秒超时；`wb2api` 访问 `172.17.0.1:7863/v1/models` 携带同一令牌连续 3 次成功，历史维护记录中 wb2api 也曾刷新成功并登记 6 个模型，因此问题表现为慢请求与超时预算，而非端口或路径不可达
 
 - 2026-11-13 模型思考档位覆盖批次：服务端 `cargo test -p agent2api-server` 451 通过、11 项插件环境相关测试忽略、0 失败（新增档位归一与容量上限、空表不落库、配置读写往返、覆盖与固定档处理、自定义家清单出口 5 个用例）；`cargo check -p agent2api-server --all-targets` 零告警；页面岛与手机端 TypeScript 检查、Vite 构建、词典缺失键检查（缺失 0）通过；`scripts/build-desktop.ps1` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`；以临时配置目录启动真实网关做接口实测：写入 `["low","hiGH","low"]` 后存储归一为 `["low","hiGH"]`，`/v1/models` 返回 `reasoning_efforts`、`reasoning_source=user` 与 `supports_reasoning=true`，非法值（`["ok",5]`）返回 400，清空档位后档位字段消失、来源回到 `undeclared`
+- 2026-11-14 缓存策略与构建验收：`performance-build` 运行 `43573895284` 全绿，Windows 桌面端、Windows 服务端、GHCR linux/amd64 镜像与草稿 `v3.5.0-beta.1-r52` 全部成功；旧 BuildKit 分片与旧工具链 Rust 缓存清理后仅保留 4 条缓存，Actions 缓存总量由约 9.59 GiB 降至约 1.11 GiB
 
 ## 可 PR 上游清单（2026-11-10 盘点）
 
