@@ -17,7 +17,7 @@ env:
 
 jobs:
   prepare:
-    name: 准备发布标题
+    name: 构建前校验
     runs-on: ubuntu-latest
     outputs:
       title: ${{ steps.title.outputs.value }}
@@ -25,6 +25,56 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            desktop-tauri/ui-kit/package-lock.json
+            desktop-tauri/ui-islands/package-lock.json
+            desktop-tauri/mobile/package-lock.json
+            desktop-tauri/i18n/package-lock.json
+
+      - name: 安装前端依赖
+        run: |
+          npm --prefix desktop-tauri/ui-kit ci
+          npm --prefix desktop-tauri/ui-islands ci
+          npm --prefix desktop-tauri/mobile ci
+          npm --prefix desktop-tauri/i18n ci
+
+      - name: 重建前端产物
+        run: |
+          npm --prefix desktop-tauri/ui-islands run build
+          npm --prefix desktop-tauri/mobile run build
+          npm --prefix desktop-tauri/i18n run build
+
+      # 判据与上游 frontend-artifacts.yml 相同：入库产物必须能被源码逐字节
+      # 复现，拦住「改了源码没重建」与「手改产物」两种形态 —— 界面源码改
+      # 动后只提交源码、不带重建产物，会把旧样式打进全部平台的安装包
+      - name: 校验前端产物同源
+        run: |
+          changed="$(git status --porcelain -- desktop-tauri/ui)"
+          if [ -z "$changed" ]; then
+            echo "入库的前端构建产物可由源码复现（逐字节相同）"
+            exit 0
+          fi
+          echo "::error::入库的前端产物与源码不同源（改了源码没重建，或手改了产物）"
+          echo
+          echo "--- 差异文件（M=被改动 / ??=构建新产出未入库 / D=已入库但不再产出）---"
+          echo "$changed"
+          echo
+          echo "--- 内容差异摘要 ---"
+          git --no-pager diff --stat -- desktop-tauri/ui
+          echo
+          echo "本地修复方式："
+          echo "  powershell scripts/build-desktop.ps1 -FrontendOnly"
+          echo "  npm --prefix desktop-tauri/ui-islands run build"
+          echo "  npm --prefix desktop-tauri/mobile run build"
+          echo "  npm --prefix desktop-tauri/i18n run build"
+          echo "（不要手动编辑 ui/islands/ui.js、ui/islands/ui.css、ui/m/** —— 它们是产物，重建即可）"
+          exit 1
 
       - name: 校验应用版本
         id: release
