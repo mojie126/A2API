@@ -190,7 +190,8 @@ export function RoutingPage() {
   const reserved = [...(workspace?.models || []), ...(workspace?.configuredModels || []), ...Object.keys(editor.drafts),
     ...(groups.data?.catalog || []).map(choice => choice.model), ...groupModels]
   // 特殊请求路由的编辑器已在上面创建，这里不再重复声明。
-  const rail = <RoutingRail editor={pageEditor} groups={groups} workspace={workspace} onModel={openScope} onGroup={id => { if (!busyRef.current) groups.select(id) }}
+  // 特殊面板在渲染链里优先于路由组与模型配置，切到它们时必须先清掉 specialKey，否则选中态变了但面板不切换。
+  const rail = <RoutingRail editor={pageEditor} groups={groups} workspace={workspace} onModel={openScope} onGroup={id => { if (!busyRef.current) { setSpecialKey(null); groups.select(id) } }}
     special={specialKey} onSpecial={key => { if (!busyRef.current) setSpecialKey(key) }}
     onAdd={() => setModal({ kind: 'create' })} />
   const accountSettings = (id: string) => {
@@ -265,8 +266,8 @@ export function RoutingPage() {
     {modal?.kind === 'create' && workspace && groups.data ? <RoutingCreateDialog workspace={workspace} choices={groups.data.catalog}
       accounts={replay.workspace?.accounts || workspace.accounts} lastUsed={modelLastUsed} reserved={reserved} groupModels={groupModels}
       disabled={pageEditor.busy || editor.loading || groups.busy || groups.loading} modelError={editor.error} onClose={() => setModal(null)}
-      onCreateModel={async model => { const created = await editor.create(model); if (created) groups.select(''); return created }}
-      onCreateGroup={groups.create} /> : null}
+      onCreateModel={async model => { const created = await editor.create(model); if (created) { setSpecialKey(null); groups.select('') } return created }}
+      onCreateGroup={group => { const created = groups.create(group); if (created) setSpecialKey(null); return created }} /> : null}
     {modal?.kind === 'sticky' ? <RoutingStickyDialog model={mode === 'config' ? scopeModel : replay.model} onClose={close} /> : null}
     {modal?.kind === 'protection' ? <RoutingSettingsDialog protectionOnly workspace={modal.workspace} onClose={close} /> : null}
     {modal?.kind === 'sort' ? <GroupSettingsDialog key={modal.id} provider={modal.id} onClose={close}
