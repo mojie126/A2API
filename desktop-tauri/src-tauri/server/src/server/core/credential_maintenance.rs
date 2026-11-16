@@ -96,6 +96,13 @@ pub const STATUS_FAILED: &str = "failed";
 /// `expiresAt` 或 `updatedAt` **任一**推进都算成功：有些家刷新后只换 token
 /// 不延长有效期（反过来也有），单看一个字段会误判。账号读不到时放行 ——
 /// 那是「记录不存在」的问题，由刷新本身报错，不该在这里编一个。
+///
+/// ── 为什么没有有效期的账号不做「未变化」判定 ──────────────────
+/// 有些家（例如百度搭子）的账号记录本身就是长期 Cookie，刷新只是用它换一张
+/// 约一小时的 Bearer 令牌并缓存在进程内，账号记录**本来就不会变化**。这类
+/// 账号的 `expiresAt` 为空，拿「记录没变」当失败会让每轮维护都误报
+/// 「适配器报成功但凭据未更新」。因此只有账号声明过有效期时才要求刷新推进
+/// 指纹；没有有效期的凭证无从判断，如实放行。
 pub async fn refresh_checked(
     store: &AccountStore,
     adapter: &dyn ProviderAdapter,
@@ -104,19 +111,31 @@ pub async fn refresh_checked(
     let before = store.credential_stamp(id);
     let token = adapter.refresh_access_token(store, id).await?;
     let after = store.credential_stamp(id);
-    if let (Some((expires_before, updated_before)), Some((expires_after, updated_after))) =
-        (before, after)
-    {
-        if expires_after <= expires_before && updated_after <= updated_before {
-            return Err(GatewayError::with_status(
-                502,
-                format!(
-                    "账号 {id} 的凭证刷新未产生变化（适配器报成功但凭据未更新），请重新登录该账号"
-                ),
-            ));
-        }
+    if !refresh_advanced(before, after) {
+        return Err(GatewayError::with_status(
+            502,
+            format!(
+                "账号 {id} 的凭证刷新未产生变化（适配器报成功但凭据未更新），请重新登录该账号"
+            ),
+        ));
     }
     Ok(token)
+}
+
+/// 刷新是否真的推进了账号凭证（`before` / `after` 是 `(expiresAt, updatedAt)`）
+///
+/// 账号读不到时放行，由刷新本身报错；账号没有有效期（`expiresAt == 0`）时
+/// 记录不变化属于正常形态，同样放行。
+fn refresh_advanced(before: Option<(f64, f64)>, after: Option<(f64, f64)>) -> bool {
+    let (Some((expires_before, updated_before)), Some((expires_after, updated_after))) =
+        (before, after)
+    else {
+        return true;
+    };
+    if expires_before <= 0.0 && expires_after <= 0.0 {
+        return true;
+    }
+    expires_after > expires_before || updated_after > updated_before
 }
 
 pub async fn refresh_expiring_accounts(store: &AccountStore) -> Vec<Value> {
@@ -330,5 +349,36 @@ pub fn note_manual_run() {
         interval,
     ) {
         logging::verbose("[Accounts]", &format!("凭证维护排期顺延失败：{error}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::refresh_advanced;
+
+    /// 没有有效期的账号（Cookie 换进程内令牌）：记录不变属于正常形态
+    #[test]
+    fn opaque_credentials_without_expiry_may_keep_the_record_unchanged() {
+        assert!(refresh_advanced(Some((0.0, 100.0)), Some((0.0, 100.0))));
+    }
+
+    /// 有有效期的账号刷新后两个指纹都没推进 = 静默失效
+    #[test]
+    fn expiring_credentials_must_advance_the_record() {
+        assert!(!refresh_advanced(Some((1000.0, 100.0)), Some((1000.0, 100.0))));
+    }
+
+    /// 有效期或更新时间任一推进都算刷新成功
+    #[test]
+    fn either_stamp_advancing_means_the_refresh_worked() {
+        assert!(refresh_advanced(Some((1000.0, 100.0)), Some((2000.0, 100.0))));
+        assert!(refresh_advanced(Some((1000.0, 100.0)), Some((1000.0, 200.0))));
+    }
+
+    /// 账号读不到时放行：记录不存在由刷新本身报错
+    #[test]
+    fn a_missing_record_is_not_judged_here() {
+        assert!(refresh_advanced(None, None));
+        assert!(refresh_advanced(Some((0.0, 100.0)), None));
     }
 }

@@ -203,6 +203,12 @@
 - 协议由四个公开入口写入 `RequestSource.protocol`：`/v1/chat/completions` 为 `chat`，`/v1/responses` 为 `responses`，`/v1/messages` 为 `anthropic`，图片生成与编辑为 `images`；旧行或内部请求没有记录时保持空串且不占位
 - `requests` 表新增 `protocol` 列（schema v31），进行中行与收尾行都写入，请求日志接口随 `RequestSource` 的扁平序列化透出 `protocol` 字段
 
+### 2026-11-16 补记（凭证维护误报修复）
+
+- 修复百度搭子（dumate）账号自动维护误报「凭证刷新未产生变化（适配器报成功但凭据未更新）」：搭子账号的凭据是长期网页 Cookie，刷新只是用它换一张约一小时的 Bearer 令牌并缓存在插件进程内，账号记录本身不会变化；网关的事后校验把「记录未变」一律当成静默失效
+- `refresh_checked` 改为仅当账号原本声明过有效期（`expiresAt > 0`）时才要求刷新推进 `expiresAt` 或 `updatedAt`；没有有效期的 opaque 凭据无从判断，如实放行，账号记录不存在时仍由刷新本身报错
+- 判定抽成 `refresh_advanced` 并补 4 个用例，覆盖无有效期、有效期未推进、任一指纹推进与账号缺失四种形态
+
 ## 部署与运行基线（2026-11-08 实测）
 
 ### NAS Docker 部署
@@ -279,6 +285,7 @@
 - 2026-11-16 特殊请求路由切换与构建工具链适配：页面岛 TypeScript 检查与 Vite 构建通过；`scripts/build-desktop.ps1` Windows Release 构建成功（tauri-build 2.7.4），产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
 - 2026-11-16 路由组内并发：服务端全量测试 469 个用例，458 通过、11 个既有插件环境条件用例忽略、0 失败（新增默认总数、上限锁定、平均分配余数、账号上限约束、总数小于账号数与开关关闭 6 个用例）；`cargo check -p agent2api-server` 无新增告警；页面岛 TypeScript 检查、Vite 构建与词典重建通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
 - 2026-11-16 请求日志协议展示：服务端全量测试 470 个用例，459 通过、11 个既有插件环境条件用例忽略、0 失败（新增协议在终态与进行中行往返读写 1 个用例，schema 升级用例覆盖 v31）；`cargo check -p agent2api-server` 无新增告警；页面岛 TypeScript 检查、Vite 构建与词典重建通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
+- 2026-11-16 凭证维护误报修复：服务端全量测试 474 个用例，463 通过、11 个既有插件环境条件用例忽略、0 失败（新增 `refresh_advanced` 的 4 个判定用例）；判定改为只有账号原本有有效期时才要求刷新推进凭证指纹
 
 ## 可 PR 上游清单（2026-11-10 盘点）
 
@@ -344,6 +351,7 @@
 - tauri-build 升级到 2.7.4 适配 cargo 1.100 的 build script 输出目录两级布局，修复 windows-gnu 构建报 os error 3
 - 路由组内并发设置：模型独立路由与自定义路由组可按平均分配限制组内总并发，账号全部设置上限时总数固定为上限之和，默认关闭；选路、顺延与队列预演共用同一份账号级分配结果（`core/routing_concurrency.rs`）
 - 请求日志模型列显示下游协议（Chat Completions / Responses / Anthropic / Images），进行中与终态行共用 `requests.protocol` 新列（schema v31）
+- 凭证维护刷新校验只对声明过有效期的账号要求凭证指纹推进，长期 Cookie 换进程内令牌的账号不再误报「凭据未更新」
 
 不宜 PR 上游（fork 特有）：
 
