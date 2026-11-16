@@ -124,7 +124,7 @@
       } else if (type === 'tool_use') {
         out.calls.push({ name: String(part.name || 'tool'), args: prettyJson(JSON.stringify(part.input ?? {})) });
       } else if (type === 'tool_result') {
-        const result = collectContent(part.content, { text: '', images: [], calls: [], results: [], thinking: '' });
+        const result = collectContent(part.content, { text: '', images: [], calls: [], results: [], thinking: [] });
         out.results.push({ label: part.tool_use_id ? wbI18n.t('工具结果 · {id}', { id: part.tool_use_id }) : wbI18n.t('工具结果'), text: result.text });
       } else if (type === 'thinking' && typeof part.thinking === 'string') {
         out.thinking.push(part.thinking);
@@ -133,7 +133,7 @@
     return out;
   }
 
-  const newParts = () => ({ text: '', images: [], calls: [], results: [], thinking: '' });
+  const newParts = () => ({ text: '', images: [], calls: [], results: [], thinking: [] });
 
   // ─── 请求侧：messages 数组 → 气泡 ─────────────
 

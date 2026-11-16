@@ -197,6 +197,13 @@
 - 选路、429 顺延、按余量挤占与队列预演共用同一份有效并发上限（候选账号上的 `routingConcurrencyCap`），队列原因句展示在途数与实际上限
 - 实现落在 `core/routing_concurrency.rs` 与 `RoutingProfile`、`RoutingGroup` 的 `concurrencyEnabled`、`concurrency`、`concurrencyStrategy` 字段
 
+### 2026-11-17 补记（请求详情预览崩溃）
+
+- 现象：开启调试模式后，点击已完成请求的详情弹窗一闪而过；在途与响应中的请求正常
+- 根因：`ui/conversation-preview.js` 的 `collectContent` 把 `thinking` 初始化为字符串 `''`，遇到 Anthropic `thinking` 内容块时调用 `out.thinking.push` 抛 `TypeError: out.thinking.push is not a function`；预览在 React 渲染期同步执行，异常让详情弹窗的整棵根卸载。已完成请求才有完整响应正文与 thinking 块，在途与响应中的正文不完整；未开调试模式时详情没有原文，不进入预览解析，所以也不复现
+- 修复：`newParts()` 与 `tool_result` 递归入口的 `thinking` 统一初始化为数组，`parseJsonResponse` 原有的数组分支继续生效
+- 验证：通过远程网关 CDP 复现旧版异常与弹窗存活时间线；注入修复版后弹窗持续存在、预览渲染出 4 个气泡；`node --check` 通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功
+
 ### 2026-11-16 补记（请求日志协议展示）
 
 - 请求日志的模型列在模型名下方新增协议行，取值为 `Chat Completions`、`Responses`、`Anthropic`、`Images`，映射改写时为上游名与下游名两行后再接协议行
