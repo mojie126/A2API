@@ -158,6 +158,10 @@ export function useRoutingEditor(onSaved: () => void) {
       const workspace = await bridge().getRoutingWorkspace(target)
       if (!workspace.revision) throw new Error(t('路由配置版本不可用，请更新网关后重试'))
       const profile = editableProfile(workspace)
+      // 组内并发默认关闭，新独立配置不从全局继承该项
+      profile.concurrencyEnabled = undefined
+      profile.concurrency = undefined
+      profile.concurrencyStrategy = undefined
       // 新独立配置沿用当前生效的参与方式；没有显式配置时默认全部自动参与。
       if (!profile.providerScope) profile.providerScope = 'all'
       if (profile.providerScope === 'selected') profile.disabledProviders = profile.disabledProviders.filter(id => profile.providers.includes(id))

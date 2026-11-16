@@ -85,7 +85,10 @@ fn preview_json(state: &ServerState, payload: Preview) -> Value {
         settings = group.settings(base);
         let projection = routing_groups::project(group, &accounts, &payload.needs, None);
         member_blocked = projection.blocked;
-        projection.accounts
+        let mut candidates = projection.accounts;
+        crate::server::core::routing_concurrency::apply(&mut candidates, group.concurrency_enabled.unwrap_or(false),
+            group.concurrency, group.concurrency_strategy.as_deref());
+        candidates
     } else {
         let providers = if payload.model.is_empty() { routing_scope::available_providers(&accounts) }
             else { crate::server::core::providers::catalog::forwarding_providers(&payload.model) };
@@ -103,7 +106,13 @@ fn preview_json(state: &ServerState, payload: Preview) -> Value {
             }
             profile
         } else { routing_scope::materialize_profile_with(&accounts, &providers, &payload.model, &snapshot) };
-        routing_scope::project_accounts(&accounts, &profile).into_iter().filter(|account| providers.iter().any(|id| id == routing::provider_of(account))).collect()
+        let mut candidates: Vec<Value> = routing_scope::project_accounts(&accounts, &profile).into_iter()
+            .filter(|account| providers.iter().any(|id| id == routing::provider_of(account))).collect();
+        let independent = snapshot.model_profile(&payload.model).is_some();
+        crate::server::core::routing_concurrency::apply(&mut candidates,
+            independent && profile.concurrency_enabled.unwrap_or(false),
+            profile.concurrency, profile.concurrency_strategy.as_deref());
+        candidates
     };
     for (index, account) in candidates.iter_mut().enumerate() { account["routingPriority"] = index.into(); }
     let now = crate::server::logging::now_ms();

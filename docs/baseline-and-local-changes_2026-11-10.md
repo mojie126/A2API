@@ -188,6 +188,15 @@
 - 修复停留在特殊请求路由（压缩上下文、辅助识图、标题生成）任一页面时点击自定义路由组无法跳转与展示——路由配置视图的渲染链以 `specialKey` 优先于路由组与模型配置，左栏点击路由组只更新选中态而没有清空 `specialKey`，页面继续停在特殊面板；现在切换路由组、创建路由组与创建独立模型路由时一并清空 `specialKey`，与既有的「特殊路由切回模型路由」处理保持一致
 - tauri-build 由 2.6.3 升级到 2.7.4，`Cargo.lock` 同步带入 tauri-utils 2.10.2 等传递依赖升级——cargo 1.100.0 起 build script 输出目录改为 `build/<包名>/<哈希>/` 两级布局，旧版按 `OUT_DIR` 上溯三级推断 `target_dir`，推出 `target/release/build` 后访问不存在的 `build/build`，报「系统找不到指定的路径 (os error 3)」并中止构建；2.7.4 改为向上查找名为 `build` 的祖先目录再取父级，兼容新旧布局
 
+### 2026-11-16 补记（路由组内并发）
+
+- 模型独立路由与自定义路由组新增「组内并发设置」，默认关闭；关闭时不限制组内总并发，账号自身的并发上限照常生效
+- 启用后可设置组内并发总数，默认等于参与账号数；参与账号全部设置并发上限时总数固定为上限之和且不可修改
+- 并发策略当前只提供「平均分配」：按候选账号均分，除不尽按候选顺序补余，单个账号分到的数量不超过自身并发上限，会话粘滞继续生效
+- 全局默认不提供该项，保存全局配置时（两条保存路径）剥离并发字段，避免继承全局的模型路由意外启用；新建模型独立配置也不从全局继承
+- 选路、429 顺延、按余量挤占与队列预演共用同一份有效并发上限（候选账号上的 `routingConcurrencyCap`），队列原因句展示在途数与实际上限
+- 实现落在 `core/routing_concurrency.rs` 与 `RoutingProfile`、`RoutingGroup` 的 `concurrencyEnabled`、`concurrency`、`concurrencyStrategy` 字段
+
 ## 部署与运行基线（2026-11-08 实测）
 
 ### NAS Docker 部署
@@ -262,6 +271,7 @@
 - 2026-11-13 模型思考档位覆盖批次：服务端 `cargo test -p agent2api-server` 451 通过、11 项插件环境相关测试忽略、0 失败（新增档位归一与容量上限、空表不落库、配置读写往返、覆盖与固定档处理、自定义家清单出口 5 个用例）；`cargo check -p agent2api-server --all-targets` 零告警；页面岛与手机端 TypeScript 检查、Vite 构建、词典缺失键检查（缺失 0）通过；`scripts/build-desktop.ps1` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`；以临时配置目录启动真实网关做接口实测：写入 `["low","hiGH","low"]` 后存储归一为 `["low","hiGH"]`，`/v1/models` 返回 `reasoning_efforts`、`reasoning_source=user` 与 `supports_reasoning=true`，非法值（`["ok",5]`）返回 400，清空档位后档位字段消失、来源回到 `undeclared`
 - 2026-11-14 缓存策略与构建验收：`performance-build` 运行 `43573895284` 全绿，Windows 桌面端、Windows 服务端、GHCR linux/amd64 镜像与草稿 `v3.5.0-beta.1-r52` 全部成功；旧 BuildKit 分片与旧工具链 Rust 缓存清理后仅保留 4 条缓存，Actions 缓存总量由约 9.59 GiB 降至约 1.11 GiB
 - 2026-11-16 特殊请求路由切换与构建工具链适配：页面岛 TypeScript 检查与 Vite 构建通过；`scripts/build-desktop.ps1` Windows Release 构建成功（tauri-build 2.7.4），产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
+- 2026-11-16 路由组内并发：服务端全量测试 469 个用例，458 通过、11 个既有插件环境条件用例忽略、0 失败（新增默认总数、上限锁定、平均分配余数、账号上限约束、总数小于账号数与开关关闭 6 个用例）；`cargo check -p agent2api-server` 无新增告警；页面岛 TypeScript 检查、Vite 构建与词典重建通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
 
 ## 可 PR 上游清单（2026-11-10 盘点）
 
@@ -325,6 +335,7 @@
 - 模型思考档位覆盖：模型管理可按（提供商 × 模型）手动维护思考档位（内置家 `modelRules.capabilities`、自定义家 `models[].capabilities` 的 `reasoningLevels`），手动值优先于上游声明与 models.dev，清单出口摘掉上游固定档、校正默认档并标记来源，未声明支持思考时补一个支持（`3c838956`）
 - 特殊请求路由页面切到自定义路由组或新建路由配置后不跳转的修复（切换与创建时清空特殊路由选中态，渲染链不再停留在特殊面板）
 - tauri-build 升级到 2.7.4 适配 cargo 1.100 的 build script 输出目录两级布局，修复 windows-gnu 构建报 os error 3
+- 路由组内并发设置：模型独立路由与自定义路由组可按平均分配限制组内总并发，账号全部设置上限时总数固定为上限之和，默认关闭；选路、顺延与队列预演共用同一份账号级分配结果（`core/routing_concurrency.rs`）
 
 不宜 PR 上游（fork 特有）：
 

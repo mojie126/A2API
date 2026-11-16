@@ -12,6 +12,10 @@ pub const KEY_ROUTING_PROFILES: &str = "routingProfiles";
 pub const MAX_ROUTING_MODELS: usize = 500;
 pub const MAX_ROUTING_PROVIDERS: usize = 256;
 pub const MAX_ROUTING_ACCOUNTS: usize = 10_000;
+/// 组内并发总数上限，避免输入框填入超出容量口径的数值
+pub const MAX_ROUTING_CONCURRENCY: u64 = 100_000;
+/// 并发策略：按候选账号平均分配组内并发
+pub const CONCURRENCY_STRATEGY_AVERAGE: &str = "average";
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +37,15 @@ pub struct RoutingProfile {
     pub strategy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sticky: Option<String>,
+    /// 组内并发开关（`None` = 关闭，不限制组内总并发）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_enabled: Option<bool>,
+    /// 组内并发总数（`None` = 自动：账号均设上限时取上限之和，否则取账号数）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<u64>,
+    /// 组内并发分配策略（`None` = 平均分配）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_strategy: Option<String>,
 }
 
 impl RoutingProfile {
@@ -138,6 +151,12 @@ pub fn validate_shape(profile: &RoutingProfile) -> Result<(), String> {
     if profile.sticky.as_deref().is_some_and(|value| !["auto", "session", "turn", "off"].contains(&value)) {
         return Err("会话粘滞必须为 auto、session、turn 或 off".to_string());
     }
+    if profile.concurrency.is_some_and(|value| value == 0 || value > MAX_ROUTING_CONCURRENCY) {
+        return Err(format!("组内并发必须为 1~{MAX_ROUTING_CONCURRENCY} 的整数"));
+    }
+    if profile.concurrency_strategy.as_deref().is_some_and(|value| value != CONCURRENCY_STRATEGY_AVERAGE) {
+        return Err("并发策略当前只支持平均分配".to_string());
+    }
     fn unique(values: &[String], max: usize, label: &str) -> Result<(), String> {
         if values.len() > max {
             return Err(format!("{label}最多允许 {max} 项"));
@@ -187,6 +206,12 @@ pub fn save_routing_profile(model: &str, profile: Option<RoutingProfile>) -> Res
     let model = normalize_model(model)?;
     let profile = profile.map(|mut profile| {
         profile.provider_scope = Some(profile.scope());
+        // 组内并发只属于模型独立路由与自定义路由组，全局默认不保存该项
+        if model.is_empty() {
+            profile.concurrency_enabled = None;
+            profile.concurrency = None;
+            profile.concurrency_strategy = None;
+        }
         profile
     });
     if let Some(profile) = &profile { validate_shape(profile)?; }

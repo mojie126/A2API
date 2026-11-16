@@ -205,7 +205,13 @@ pub(crate) fn queue_for_accounts(state: &ServerState, model: Option<String>, acc
     let routable: Vec<Value> = scoped.iter()
         .filter(|account| !crate::server::core::providers::readiness::gated(routing::provider_of(account)))
         .cloned().collect();
-    let scoped = if routable.is_empty() { scoped } else { routable };
+    let mut scoped = if routable.is_empty() { scoped } else { routable };
+    let profiles = config::routing_profiles();
+    let profile = profiles.model_profile(model.as_deref().unwrap_or(""));
+    crate::server::core::routing_concurrency::apply(&mut scoped,
+        profile.and_then(|profile| profile.concurrency_enabled).unwrap_or(false),
+        profile.and_then(|profile| profile.concurrency),
+        profile.and_then(|profile| profile.concurrency_strategy.as_deref()));
     let now = crate::server::logging::now_ms();
     let counts: HashMap<String, usize> = state
         .upstream()

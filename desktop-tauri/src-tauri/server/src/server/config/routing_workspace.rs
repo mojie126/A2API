@@ -73,6 +73,10 @@ pub fn save_workspace(
         if let Some(profile) = &mut global {
             if let Some(strategy) = profile.strategy.take() { next.routing.strategy = super::RouteStrategy::from_id(&strategy); next.raw.insert(super::KEY_ROUTING_STRATEGY.into(), strategy.into()); }
             if let Some(sticky) = profile.sticky.take() { next.routing.sticky = super::StickyMode::from_id(&sticky); next.raw.insert(super::KEY_ROUTING_STICKY.into(), sticky.into()); }
+            // 组内并发只属于模型独立路由与自定义路由组，全局默认不保存该项
+            profile.concurrency_enabled = None;
+            profile.concurrency = None;
+            profile.concurrency_strategy = None;
             profile.account_order.clear();
         }
         profiles.global = global;

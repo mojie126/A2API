@@ -9,6 +9,7 @@ import { groupDirty, type RouteGroupEditor } from './routing-group-state'
 import { RoutingSelect } from './routing-select'
 import { RoutingActions } from './routing-canvas-controls'
 import { RoutingCanvasLayout, RoutingDraftFooter, RoutingRefreshError } from './routing-canvas-layout'
+import { RoutingConcurrencyFields } from './routing-concurrency'
 import { useRoutingCanvasActivity } from './routing-canvas-activity'
 import { RoutingMemberCard } from './routing-member-card'
 import { routingAccountSections, routingCollapsedSections, useRoutingExpansion } from './routing-account-sections'
@@ -45,6 +46,10 @@ export function RoutingGroupPanel({ editor, accounts, lastUsed, reserved, baseUr
   const drag = useRoutingDrag(!locked && !query, `${group?.id || ''}:${search}`, drop)
   if (!group || !editor.draft) return <Empty>{t('选择路由入口')}</Empty>
   const active = group.members.filter(member => member.included)
+  // 组内并发按成员模型的参与账号逐项计算，同一账号出现在多个成员时按多项计
+  const concurrencyAccounts = active.flatMap(member => member.accounts
+    .map(id => accounts.find(account => account.id === id))
+    .filter((account): account is AccountRecord => Boolean(account)))
   const sections = routingAccountSections(group.members, accounts, member => member.provider, member => member.included)
   const orderingPeers = (id: string) => (Object.values(sections).find(members => members.some(member => member.id === id)) || []).filter(member => member.included)
   const dirty = groupDirty(editor.draft)
@@ -146,6 +151,13 @@ export function RoutingGroupPanel({ editor, accounts, lastUsed, reserved, baseUr
               options={[[ 'auto', t('自动') ], ['session', t('会话内')], ['turn', t('每轮')], ['off', t('关闭')]]} onChange={value => update(next => { next.sticky = value })} /></div>
           </div>
           <p className='routing-config-note'>{group.sticky === 'auto' || group.sticky === 'session' ? t('同一会话优先保持模型与账号，不可用时才顺延。') : t('每轮重新选路，不保留跨请求的账号绑定。')}</p>
+          <div className='routing-config-rules routing-concurrency-rules'>
+            <RoutingConcurrencyFields accounts={concurrencyAccounts} enabled={group.concurrencyEnabled}
+              total={group.concurrency} strategy={group.concurrencyStrategy} disabled={locked}
+              onEnabled={value => update(next => { next.concurrencyEnabled = value ? true : undefined })}
+              onTotal={value => update(next => { next.concurrency = value })}
+              onStrategy={value => update(next => { next.concurrencyStrategy = value })} />
+          </div>
           <Button variant='link' size='sm' className='routing-group-example' onClick={() => setDialog('example')}>{t('调用示例')}</Button>
         </div>
         <RoutingDraftFooter dirty={dirty} busy={editor.busy} disabled={locked} error={editor.error} onDiscard={editor.discard} onSave={() => void editor.save()} />

@@ -391,8 +391,7 @@ fn select_target_account_sync(
             continue;
         }
         // 已达并发上限的账号不进「正常兜底」候选 —— 它们是 ② 的原料
-        let limit = routing::max_concurrent_of(account);
-        if limit > 0 && counts.get(id).copied().unwrap_or(0) >= limit as usize {
+        if routing::concurrency_limit_of(account).is_some_and(|limit| counts.get(id).copied().unwrap_or(0) >= limit as usize) {
             continue;
         }
         let reset = routing::rate_limit_reset_at(account, keys, now);
@@ -728,8 +727,10 @@ fn squeeze_by_headroom(
             continue;
         }
         let count = counts.get(id).copied().unwrap_or(0) as i64;
-        let limit = routing::max_concurrent_of(account) as i64;
-        let headroom = if limit > 0 { limit - count } else { i64::MAX };
+        let headroom = match routing::concurrency_limit_of(account) {
+            Some(limit) => limit as i64 - count,
+            None => i64::MAX,
+        };
         let reset = routing::rate_limit_reset_at(account, keys, now);
         let reset = if reset > 0 { reset as f64 } else { f64::INFINITY };
         if headroom > best_headroom || (headroom == best_headroom && reset < best_reset) {

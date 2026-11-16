@@ -58,6 +58,12 @@
 .routing-rule-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .routing-rule-wide { grid-column: 1 / -1; }
 .routing-rule-field > label { font-size: 12px; color: var(--text-2); }
+.routing-rule-heading { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; }
+.routing-rule-heading > label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.routing-rule-switch { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; color: var(--text-3); font-size: 11px; }
+.routing-rule-hint { color: var(--text-3); font-size: 11px; line-height: 1.5; }
+.routing-concurrency-rules { padding-top: 10px; border-top: 1px solid var(--hairline); }
+.routing-rule-field [data-slot='input'] { width: 100%; font-size: 12px; }
 .routing-rule-field [data-slot='select-trigger'] { width: 100%; min-width: 0; font-size: 12px; }
 .routing-inherited-note { display: flex; flex-direction: column; gap: 8px; padding: 0 16px 14px; font-size: 12px; color: var(--text-3); }
 .routing-config-alias { display: flex; align-items: center; gap: 7px; margin: 0 16px 14px; padding: 6px 8px; border: 1px solid var(--hairline); border-radius: var(--r-sm); background: var(--surface-2); }

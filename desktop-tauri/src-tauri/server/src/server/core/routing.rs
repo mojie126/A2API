@@ -216,6 +216,21 @@ pub fn max_concurrent_of(account: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+/// 选路时该账号实际可承接的在途请求数上限（`None` = 不限）
+///
+/// 路由配置的组内并发会先写入 `routingConcurrencyCap`（见
+/// `core::routing_concurrency`），它可能小于账号自身的 `maxConcurrent`
+/// 也可能是 0（本轮分不到槽位），两种情况都以它为准
+pub fn concurrency_limit_of(account: &Value) -> Option<u64> {
+    if let Some(cap) = account.get(crate::server::core::routing_concurrency::CAP_KEY).and_then(Value::as_u64) {
+        return Some(cap);
+    }
+    match max_concurrent_of(account) {
+        0 => None,
+        limit => Some(limit),
+    }
+}
+
 /// 按优先级挑选本次请求使用的账号。
 ///
 /// `accounts` 为 store.listAccounts().accounts 的公开形态；
@@ -267,13 +282,18 @@ pub fn pick_account_by_priority(
     candidates.into_iter().next()
 }
 
-/// 该账号的在途请求数是否已达并发上限（`maxConcurrent == 0` = 不限，恒 false）。
+/// 该账号的在途请求数是否已达并发上限（无上限时恒 false）。
 ///
+/// 上限优先取组内并发分配结果 [`concurrency_limit_of`]，分配为 0 时恒为 true
+/// 账号自身 `maxConcurrent == 0` 表示不限，此时恒 false
 /// 计数缺失按 0（空闲）算：快照里只留非零项（见 `Connections::snapshot`），
 /// 「缺键」与「0 个在途」是同一件事。
 fn at_concurrency_limit(account: &Value, id: &str, counts: &HashMap<String, usize>) -> bool {
-    let limit = max_concurrent_of(account);
-    limit > 0 && counts.get(id).copied().unwrap_or(0) >= limit as usize
+    match concurrency_limit_of(account) {
+        Some(0) => true,
+        Some(limit) => counts.get(id).copied().unwrap_or(0) >= limit as usize,
+        None => false,
+    }
 }
 
 /// 按**指定模型**派生队首：候选先收窄到「清单里有这个模型的家」，再走
@@ -689,13 +709,12 @@ pub fn plan_route(
             continue;
         }
         if at_concurrency_limit(account, &id, counts) {
-            blocked.push(entry(
-                "concurrency",
-                format!(
-                    "并发已满（{}/上限），等一个在途回落再参与",
-                    counts.get(&id).copied().unwrap_or(0)
-                ),
-            ));
+            let running = counts.get(&id).copied().unwrap_or(0);
+            let reason = match concurrency_limit_of(account) {
+                Some(limit) => format!("并发已满（{running}/{limit}），等一个在途回落再参与"),
+                None => format!("并发已满（{running}），等一个在途回落再参与"),
+            };
+            blocked.push(entry("concurrency", reason));
             continue;
         }
         if super::plugin_host::wasm::catalog::route_allowed(account, &keys.for_account(account)) == Some(false) {
@@ -942,6 +961,19 @@ mod tests {
             provider_sizes(&accounts),
             vec![("A".to_string(), 2), ("B".to_string(), 1)]
         );
+    }
+
+    /// 组内并发分配的上限优先于账号自身的 `maxConcurrent`，分配为 0 时空闲也不可用
+    #[test]
+    fn a_route_concurrency_cap_overrides_the_account_limit() {
+        let mut counts = HashMap::new();
+        let account = json!({ "id": "a", "provider": "A", "maxConcurrent": 5, "routingConcurrencyCap": 1 });
+        assert_eq!(concurrency_limit_of(&account), Some(1));
+        assert!(!at_concurrency_limit(&account, "a", &counts));
+        counts.insert("a".to_string(), 1usize);
+        assert!(at_concurrency_limit(&account, "a", &counts));
+        let idle_without_slot = json!({ "id": "b", "provider": "A", "routingConcurrencyCap": 0 });
+        assert!(at_concurrency_limit(&idle_without_slot, "b", &HashMap::new()));
     }
 
     #[test]

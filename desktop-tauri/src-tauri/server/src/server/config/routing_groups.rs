@@ -29,6 +29,15 @@ pub struct RoutingGroup {
     pub description: String,
     pub strategy: String,
     pub sticky: String,
+    /// 组内并发开关（`None` = 关闭，不限制组内总并发）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_enabled: Option<bool>,
+    /// 组内并发总数（`None` = 自动：账号均设上限时取上限之和，否则取账号数）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<u64>,
+    /// 组内并发分配策略（`None` = 平均分配）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency_strategy: Option<String>,
     pub members: Vec<RoutingMember>,
 }
 
@@ -45,7 +54,9 @@ impl RoutingGroup {
             if !providers.contains(&member.provider) { providers.push(member.provider.clone()); }
         }
         RoutingProfile { provider_scope: Some(super::RoutingProviderScope::Selected), providers,
-            strategy: Some(self.strategy.clone()), sticky: Some(self.sticky.clone()), ..Default::default() }
+            strategy: Some(self.strategy.clone()), sticky: Some(self.sticky.clone()),
+            concurrency_enabled: self.concurrency_enabled, concurrency: self.concurrency,
+            concurrency_strategy: self.concurrency_strategy.clone(), ..Default::default() }
     }
 }
 

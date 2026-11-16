@@ -10,6 +10,12 @@ pub(crate) struct RequestRouting {
     pub captured_at: i64,
     pub group: Option<config::RoutingGroup>,
     pub group_projection: GroupProjection,
+    /// 组内并发是否启用（默认关闭）
+    pub concurrency_enabled: bool,
+    /// 组内并发总数（`None` = 按候选账号自动取默认值）
+    pub concurrency: Option<u64>,
+    /// 组内并发分配策略（`None` = 平均分配）
+    pub concurrency_strategy: Option<String>,
     positions: HashMap<String, usize>,
     account_id: Option<String>,
     require_account: bool,
@@ -32,7 +38,14 @@ impl RequestRouting {
                 profile.includes_provider(routing::provider_of(account)) && !routing::account_id(account).is_some_and(|id| profile.excluded_accounts.iter().any(|excluded| excluded == id))))
                 .collect()
         };
-        Self { settings: profiles.settings_for(model, base), profile: profiles.effective(model).cloned(),
+        let effective = profiles.effective(model);
+        let model_profile = profiles.model_profile(model);
+        Self { settings: profiles.settings_for(model, base), profile: effective.cloned(),
+            // 组内并发只属于模型独立配置，全局默认不启用
+            concurrency_enabled: model_profile.is_some()
+                && effective.and_then(|profile| profile.concurrency_enabled).unwrap_or(false),
+            concurrency: effective.and_then(|profile| profile.concurrency),
+            concurrency_strategy: effective.and_then(|profile| profile.concurrency_strategy.clone()),
             scope: profiles.scope(model).to_string(), captured_at: crate::server::logging::now_ms(), group: None,
             account_id: None, require_account: false, strict_vision: false, vision_model: None,
             group_projection: Default::default(), positions: ordered.iter().enumerate().filter_map(|(index, account)|
@@ -74,6 +87,9 @@ impl RequestRouting {
                     });
                 }
                 routing.settings = group.settings(base);
+                routing.concurrency_enabled = group.concurrency_enabled.unwrap_or(false);
+                routing.concurrency = group.concurrency;
+                routing.concurrency_strategy = group.concurrency_strategy.clone();
                 routing.profile = Some(group.profile());
                 routing.scope = group.model.clone();
                 routing.group = Some(group);
@@ -104,23 +120,27 @@ impl RequestRouting {
     pub fn accounts(&self, accounts: Vec<Value>) -> Vec<Value> {
         let accounts: Vec<_> = accounts.into_iter().filter(|account| self.account_id.as_deref()
             .is_none_or(|id| routing::account_id(account) == Some(id))).collect();
-        if self.group.is_some() {
-            return self.group_projection.accounts.iter().filter_map(|candidate| {
+        let mut accounts: Vec<Value> = if self.group.is_some() {
+            self.group_projection.accounts.iter().filter_map(|candidate| {
                 let mut current = accounts.iter().find(|account| routing::account_id(account) == routing::account_id(candidate)
                     && routing::provider_of(account) == routing::provider_of(candidate))?.clone();
                 for key in ["routingCandidateId", "routingMemberId", "routingModel", "routingPriority"] { current[key] = candidate[key].clone(); }
                 Some(current)
-            }).collect();
-        }
-        let mut accounts: Vec<_> = accounts.into_iter().filter(|account| routing::account_id(account)
-            .is_some_and(|id| self.positions.contains_key(id))).collect();
-        accounts.sort_by_key(|account| routing::account_id(account).and_then(|id| self.positions.get(id)).copied().unwrap_or(usize::MAX));
-        for (index, account) in accounts.iter_mut().enumerate() {
-            if let Some(object) = account.as_object_mut() {
-                object.insert("routingPriority".to_string(), index.into());
-                if let Some(model) = &self.vision_model { object.insert("routingModel".into(), model.clone().into()); }
+            }).collect()
+        } else {
+            let mut accounts: Vec<_> = accounts.into_iter().filter(|account| routing::account_id(account)
+                .is_some_and(|id| self.positions.contains_key(id))).collect();
+            accounts.sort_by_key(|account| routing::account_id(account).and_then(|id| self.positions.get(id)).copied().unwrap_or(usize::MAX));
+            for (index, account) in accounts.iter_mut().enumerate() {
+                if let Some(object) = account.as_object_mut() {
+                    object.insert("routingPriority".to_string(), index.into());
+                    if let Some(model) = &self.vision_model { object.insert("routingModel".into(), model.clone().into()); }
+                }
             }
-        }
+            accounts
+        };
+        crate::server::core::routing_concurrency::apply(&mut accounts, self.concurrency_enabled,
+            self.concurrency, self.concurrency_strategy.as_deref());
         accounts
     }
 

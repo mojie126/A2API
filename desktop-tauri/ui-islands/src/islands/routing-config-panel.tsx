@@ -7,6 +7,7 @@ import { RoutingModelFilter, useRoutingModelFilter } from './routing-model-filte
 import { RoutingSelect } from './routing-select'
 import { RoutingActions } from './routing-canvas-controls'
 import { RoutingCanvasLayout, RoutingDraftFooter, RoutingRefreshError } from './routing-canvas-layout'
+import { RoutingConcurrencyFields } from './routing-concurrency'
 import { useRoutingCanvasActivity } from './routing-canvas-activity'
 import { RoutingProviderCard } from './routing-provider-card'
 import { routingAccountSections, routingCollapsedSections, useRoutingExpansion } from './routing-account-sections'
@@ -65,6 +66,12 @@ export function RoutingConfigPanel({ editor, scope, now, accountControl, refresh
   const excluded = allProviders.filter(id => !included(id))
   const participants = workspace.accounts.filter(account => globalAccounts ? account.enabled !== false
     : included(providerOf(account)) && !profile.excludedAccounts.includes(account.id))
+  // 组内并发按参与本路由的账号计算，与后端候选集合同一口径（仅当前模型可用的提供商，含禁用账号）
+  const availableProviders = new Set(workspace.providers.filter(provider => provider.available).map(provider => provider.id))
+  const concurrencyAccounts = workspace.accounts.filter(account => availableProviders.has(providerOf(account))
+    && !profile.excludedAccounts.includes(account.id)
+    && (globalAccounts ? profile.providerScope !== 'selected' || profile.providers.includes(providerOf(account))
+      : included(providerOf(account))) && !profile.disabledProviders.includes(providerOf(account)))
   const accountProviders = new Set(workspace.accounts.map(providerOf))
   const displayedProviders = allProviders.filter(id => accountProviders.has(id) && (!modelFilter.providers || modelFilter.providers.has(id)))
   const displayedParticipating = displayedProviders.filter(included)
@@ -202,6 +209,13 @@ export function RoutingConfigPanel({ editor, scope, now, accountControl, refresh
               })} /></div> : null}
           </div>
           {!globalAccounts ? <p className='routing-config-note'>{profile.providerScope === 'all' ? t('新增提供商自动参与；移出本路由的不会自动加回。') : t('只有加入的提供商参与，新增提供商需要手动加入。')}</p> : null}
+          {!globalAccounts && !inherited ? <div className='routing-config-rules routing-concurrency-rules'>
+            <RoutingConcurrencyFields accounts={concurrencyAccounts} enabled={profile.concurrencyEnabled}
+              total={profile.concurrency} strategy={profile.concurrencyStrategy} disabled={locked}
+              onEnabled={value => mutate(next => { next.concurrencyEnabled = value ? true : undefined })}
+              onTotal={value => mutate(next => { next.concurrency = value })}
+              onStrategy={value => mutate(next => { next.concurrencyStrategy = value })} />
+          </div> : null}
           {!scope ? <RoutingModelFilter value={modelFilter.model} models={workspace.models} lastUsed={workspace.modelLastUsed} disabled={disabled} onChange={modelFilter.setModel} /> : null}
           <div className='routing-protection-summary'><RouteIcon name='shield' size={14} /><span>{t('全局保护设置')}</span>
             <Badge variant='ghost' shape='tag'>{[workspace.settings.routingFailoverBackoff && t('失败退避'), workspace.settings.routingSink && t('限流垫底'), workspace.settings.routingBreakerEnabled && t('熔断保护')].filter(Boolean).join(' · ') || t('关闭')}</Badge>

@@ -102,7 +102,7 @@ pub use routing_profiles::{
     normalize_model as normalize_routing_model, routing_profiles, routing_snapshot, save_routing_profile,
     settings_for_model as routing_settings_for_model,
     validate_shape as validate_routing_profile, RoutingProfile, RoutingProfiles, RoutingProviderScope,
-    KEY_ROUTING_PROFILES,
+    KEY_ROUTING_PROFILES, CONCURRENCY_STRATEGY_AVERAGE, MAX_ROUTING_CONCURRENCY,
 };
 pub use types::*;
 pub use update_policy::{
