@@ -347,7 +347,12 @@ pub fn is_reserved(key: &str) -> bool {
 /// 请求日志新增「积分」列读它。与 token 四列刻意不同：这一列**可空 REAL** ——
 /// `NULL` = 这一家没上报（旧行 / 不提供该读数），0 = 确实零消耗；用 0 兜底会
 /// 把「没读到」画成「花了 0 积分」，比缺一列更难排查。
-pub const SCHEMA_VERSION: i64 = 30;
+///
+/// ── 版本 31：requests 补「下游协议」一列（[`V31_SCHEMA`]）─────────
+/// 请求日志的模型列在模型名下方展示这条请求走的协议
+/// （`chat` / `responses` / `anthropic` / `images`）。空串 = 旧行或没有记录，
+/// 与 `client_model` 同一套「键恒在、空串就是没有」的契约。
+pub const SCHEMA_VERSION: i64 = 31;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -906,6 +911,15 @@ const V23_SCHEMA: &str = "
 ALTER TABLE requests ADD COLUMN credit REAL;
 ";
 
+/// 版本 31：`requests` 补一列（schema v31）—— 下游请求协议。
+///
+/// 取值是入口按端点写下的 `chat` / `responses` / `anthropic` / `images`；
+/// 空串 = 旧行或该请求没有记录协议。前端在模型列的第二行读取它。
+const V31_SCHEMA: &str = "
+-- ── requests 补下游协议列（schema v31）──────────────────────
+ALTER TABLE requests ADD COLUMN protocol TEXT NOT NULL DEFAULT '';
+";
+
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
 /// **库版本高于本程序时返回 `Err` 拒绝打开**（v14 起有意反转的一条既有决定，
@@ -1089,6 +1103,8 @@ fn apply_version(
         29 => conn.execute_batch(include_str!("schema_usage_query.sql")),
         // v30：requests 补入站识别身份与最终出站身份三列
         30 => conn.execute_batch(include_str!("schema_client_egress.sql")),
+        // v31：requests 补下游请求协议一列（模型列第二行展示，见 V31_SCHEMA）
+        31 => conn.execute_batch(V31_SCHEMA),
         _ => Ok(()),
     }
 }

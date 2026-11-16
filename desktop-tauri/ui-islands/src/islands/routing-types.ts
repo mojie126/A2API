@@ -124,6 +124,7 @@ export type ReplayRow = {
   model: string
   clientModel?: string
   upstreamModel?: string
+  protocol?: string
   provider?: string
   providerLabel?: string
   accountId?: string

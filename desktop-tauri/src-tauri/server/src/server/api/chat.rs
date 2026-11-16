@@ -85,7 +85,7 @@ pub async fn chat_completions(
     let started_at = logging::now_ms();
     // 请求来源客户端（UA 识别，见 `core::client`）：在 headers 被 move 进转发层
     // 之前先判好，早失败路径与收尾记账共用同一个值
-    let request_source = pipeline::request_source(&headers, key_identity);
+    let request_source = pipeline::request_source(&headers, key_identity, "chat");
     // ① body 必须是 JSON 对象（数组/标量/null 都算非法）
     let parsed = serde_json::from_slice::<Value>(&body).ok();
     let Some(mut payload) = parsed.filter(Value::is_object) else {

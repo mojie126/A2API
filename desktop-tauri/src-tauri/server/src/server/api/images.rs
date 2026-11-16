@@ -255,7 +255,7 @@ pub async fn generations(
     body: Bytes,
 ) -> Response {
     let started_at = logging::now_ms();
-    let source = pipeline::request_source(&headers, key_identity);
+    let source = pipeline::request_source(&headers, key_identity, "images");
     let payload = match serde_json::from_slice::<Value>(&body) {
         Ok(payload) => payload,
         Err(_) => {
@@ -289,7 +289,7 @@ pub async fn edits(
     request: axum::extract::Request,
 ) -> Response {
     let started_at = logging::now_ms();
-    let source = pipeline::request_source(&headers, key_identity);
+    let source = pipeline::request_source(&headers, key_identity, "images");
     let payload = match super::image_input::parse(request, &state).await {
         Ok(payload) => payload,
         Err(error) => {

@@ -388,4 +388,29 @@ fn request_source_keeps_identified_and_outbound_identity() {
     assert_eq!(row["outboundUserAgent"], "claude-cli/2.1.296 (external, cli)");
 }
 
+#[test]
+fn protocol_round_trips_for_completed_and_running_rows() {
+    let (_dir, stats) = temp_stats();
+    let now = crate::server::logging::now_ms();
+    let mut done = entry("done", now);
+    done.source.protocol = "responses".into();
+    stats.record(done);
+    stats.record_started(
+        "running",
+        now,
+        "public-model",
+        "public-model",
+        "",
+        &RequestSource { protocol: "anthropic".into(), ..source("zcode", "key:a") },
+        false,
+    );
+
+    let page = stats.query_requests(&RequestQuery::default());
+    let rows = page["entries"].as_array().expect("请求记录应为数组");
+    let protocol_of = |id: &str| rows.iter().find(|row| row["id"] == id)
+        .and_then(|row| row["protocol"].as_str()).unwrap_or("");
+    assert_eq!(protocol_of("done"), "responses");
+    assert_eq!(protocol_of("running"), "anthropic");
+}
+
 

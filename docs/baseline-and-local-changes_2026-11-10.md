@@ -197,6 +197,12 @@
 - 选路、429 顺延、按余量挤占与队列预演共用同一份有效并发上限（候选账号上的 `routingConcurrencyCap`），队列原因句展示在途数与实际上限
 - 实现落在 `core/routing_concurrency.rs` 与 `RoutingProfile`、`RoutingGroup` 的 `concurrencyEnabled`、`concurrency`、`concurrencyStrategy` 字段
 
+### 2026-11-16 补记（请求日志协议展示）
+
+- 请求日志的模型列在模型名下方新增协议行，取值为 `Chat Completions`、`Responses`、`Anthropic`、`Images`，映射改写时为上游名与下游名两行后再接协议行
+- 协议由四个公开入口写入 `RequestSource.protocol`：`/v1/chat/completions` 为 `chat`，`/v1/responses` 为 `responses`，`/v1/messages` 为 `anthropic`，图片生成与编辑为 `images`；旧行或内部请求没有记录时保持空串且不占位
+- `requests` 表新增 `protocol` 列（schema v31），进行中行与收尾行都写入，请求日志接口随 `RequestSource` 的扁平序列化透出 `protocol` 字段
+
 ## 部署与运行基线（2026-11-08 实测）
 
 ### NAS Docker 部署
@@ -272,6 +278,7 @@
 - 2026-11-14 缓存策略与构建验收：`performance-build` 运行 `43573895284` 全绿，Windows 桌面端、Windows 服务端、GHCR linux/amd64 镜像与草稿 `v3.5.0-beta.1-r52` 全部成功；旧 BuildKit 分片与旧工具链 Rust 缓存清理后仅保留 4 条缓存，Actions 缓存总量由约 9.59 GiB 降至约 1.11 GiB
 - 2026-11-16 特殊请求路由切换与构建工具链适配：页面岛 TypeScript 检查与 Vite 构建通过；`scripts/build-desktop.ps1` Windows Release 构建成功（tauri-build 2.7.4），产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
 - 2026-11-16 路由组内并发：服务端全量测试 469 个用例，458 通过、11 个既有插件环境条件用例忽略、0 失败（新增默认总数、上限锁定、平均分配余数、账号上限约束、总数小于账号数与开关关闭 6 个用例）；`cargo check -p agent2api-server` 无新增告警；页面岛 TypeScript 检查、Vite 构建与词典重建通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
+- 2026-11-16 请求日志协议展示：服务端全量测试 470 个用例，459 通过、11 个既有插件环境条件用例忽略、0 失败（新增协议在终态与进行中行往返读写 1 个用例，schema 升级用例覆盖 v31）；`cargo check -p agent2api-server` 无新增告警；页面岛 TypeScript 检查、Vite 构建与词典重建通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
 
 ## 可 PR 上游清单（2026-11-10 盘点）
 
@@ -336,6 +343,7 @@
 - 特殊请求路由页面切到自定义路由组或新建路由配置后不跳转的修复（切换与创建时清空特殊路由选中态，渲染链不再停留在特殊面板）
 - tauri-build 升级到 2.7.4 适配 cargo 1.100 的 build script 输出目录两级布局，修复 windows-gnu 构建报 os error 3
 - 路由组内并发设置：模型独立路由与自定义路由组可按平均分配限制组内总并发，账号全部设置上限时总数固定为上限之和，默认关闭；选路、顺延与队列预演共用同一份账号级分配结果（`core/routing_concurrency.rs`）
+- 请求日志模型列显示下游协议（Chat Completions / Responses / Anthropic / Images），进行中与终态行共用 `requests.protocol` 新列（schema v31）
 
 不宜 PR 上游（fork 特有）：
 

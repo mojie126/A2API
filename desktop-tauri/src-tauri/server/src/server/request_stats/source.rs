@@ -48,6 +48,10 @@ pub struct RequestSource {
     pub outbound_user_agent: String,
     #[serde(flatten)]
     pub api_key: ApiKeyIdentity,
+    /// 下游请求使用的协议（`chat` / `responses` / `anthropic` / `images`；
+    /// 空串 = 没有记录协议，或该行来自还没有此字段的旧版本）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub protocol: String,
     #[serde(rename = "clientEvidence", default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<crate::server::core::client::ClientEvidence>,
     /// 请求行为只使用原来的严格识别，显示规则不能改变模型选择。
@@ -83,6 +87,7 @@ impl RequestSource {
         self.evidence = self.evidence.map(|evidence| evidence.normalized());
         self.api_key.id = self.api_key.id.trim().to_string();
         self.api_key.name = self.api_key.name.trim().to_string();
+        self.protocol = self.protocol.trim().to_string();
         self
     }
 }

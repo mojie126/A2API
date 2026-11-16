@@ -214,6 +214,7 @@
   "详情": "Details",
   "详情内容": "Detail content",
   "请求体": "Request body",
+  "请求协议：{protocol}": "Request protocol: {protocol}",
   "请求图片": "Request image",
   "请求在任何账号接手之前就失败了": "The request failed before any account picked it up",
   "请求头": "Request headers",

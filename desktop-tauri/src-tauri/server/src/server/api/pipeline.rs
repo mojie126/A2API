@@ -376,6 +376,7 @@ pub fn user_agent_of(headers: &axum::http::HeaderMap) -> String {
 pub fn request_source(
     headers: &axum::http::HeaderMap,
     identity: Option<axum::extract::Extension<crate::server::request_stats::ApiKeyIdentity>>,
+    protocol: &str,
 ) -> crate::server::request_stats::RequestSource {
     let behavior_client = crate::server::core::client::classify(
         headers.get(header::USER_AGENT).and_then(|value| value.to_str().ok()).unwrap_or(""),
@@ -392,6 +393,7 @@ pub fn request_source(
         outbound_client: String::new(),
         outbound_user_agent: String::new(),
         api_key: identity.map(|axum::extract::Extension(identity)| identity).unwrap_or_default(),
+        protocol: protocol.to_string(),
         evidence: Some(evidence),
         behavior_client,
     }

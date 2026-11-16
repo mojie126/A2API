@@ -7,10 +7,19 @@ import { numberText } from '../accounts-shared'
 import { apiKeyRequestLabel, clientRequestLabel } from './source-filters'
 import { visionDetail } from '../../../../ui-shared/request-vision-detail'
 
+/** 下游协议 → 展示名（未登记的取值原样显示） */
+const PROTOCOL_LABELS: Record<string, string> = {
+  chat: 'Chat Completions',
+  responses: 'Responses',
+  anthropic: 'Anthropic',
+  images: 'Images',
+}
+const protocolLabel = (protocol: string) => PROTOCOL_LABELS[protocol] || protocol
+
 export type RequestEntry = {
   id?: string; ts?: number; status?: number; error?: string | null
   provider?: string; providerLabel?: string; accountId?: string; accountName?: string
-  model?: string; clientModel?: string; upstreamModel?: string
+  model?: string; clientModel?: string; upstreamModel?: string; protocol?: string
   clientReasoning?: string; upstreamReasoning?: string
   durationMs?: number; firstResponseMs?: number | null
   promptTokens?: number; completionTokens?: number; totalTokens?: number; cacheReadTokens?: number
@@ -357,13 +366,24 @@ export function RequestCell({ entry, column, namesHidden }: { entry: RequestEntr
       const client = String(entry.clientModel ?? '').trim()
       const upstream = String(entry.upstreamModel ?? '').trim()
       const shown = String(entry.model ?? '').trim()
+      const protocol = String(entry.protocol ?? '').trim()
       const clientLevel = String(entry.clientReasoning ?? '').trim()
       const upstreamLevel = String(entry.upstreamReasoning ?? '').trim()
       const tag = (name: string, level: string) => (level ? `${name}(${level})` : name)
+      // 协议单独一行展示，空值（旧行或未记录）不额外占位
+      const protocolLine = protocol
+        ? <span className='req-model-line sub' title={t('请求协议：{protocol}', { protocol: protocolLabel(protocol) })}>{protocolLabel(protocol)}</span>
+        : null
       // 转发名与请求名一致（绝大多数请求）→ 单行；不一致（映射 / 备援改写发生过）→ 两行
       if (!client || !upstream || upstream.toLowerCase() === client.toLowerCase()) {
         const text = tag(shown, upstreamLevel || clientLevel)
-        return <span key={key} className={className} title={text}>{text || '—'}</span>
+        if (!protocolLine) return <span key={key} className={className} title={text}>{text || '—'}</span>
+        return (
+          <span key={key} className={`${className} req-model-split`}>
+            <span className='req-model-line' title={text}>{text || '—'}</span>
+            {protocolLine}
+          </span>
+        )
       }
       const upText = tag(upstream, upstreamLevel)
       const downText = tag(client, clientLevel)
@@ -373,6 +393,7 @@ export function RequestCell({ entry, column, namesHidden }: { entry: RequestEntr
             title={t('转发到上游的模型：{model}', { model: upText })}>⬆️ {upText}</span>
           <span className='req-model-line sub'
             title={t('下游请求的模型：{model}', { model: downText })}>⬇️ {downText}</span>
+          {protocolLine}
         </span>
       )
     }

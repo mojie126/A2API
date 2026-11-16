@@ -214,6 +214,7 @@
   "详情": "Detalhes",
   "详情内容": "Conteúdo dos detalhes",
   "请求体": "Corpo da requisição",
+  "请求协议：{protocol}": "Protocolo da requisição: {protocol}",
   "请求图片": "Imagem da requisição",
   "请求在任何账号接手之前就失败了": "A requisição falhou antes de qualquer conta assumi-la",
   "请求头": "Cabeçalhos da requisição",

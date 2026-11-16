@@ -137,7 +137,7 @@ pub async fn responses_endpoint(
     let scope = key_scope.map(|Extension(scope)| scope);
     let started_at = logging::now_ms();
     // 请求来源客户端（UA 识别，见 `core::client`）：早失败路径与收尾记账共用
-    let source = pipeline::request_source(&headers, key_identity);
+    let source = pipeline::request_source(&headers, key_identity, "responses");
     // 协议兼容只看严格客户端识别，不跟随报表规则或来源声明。
     let reasoning_collapse = source.behavior_client == crate::server::core::client::CLIENT_CODEX
         && config::third_party_reasoning_collapse();
@@ -360,7 +360,7 @@ pub async fn messages_endpoint(
     let scope = key_scope.map(|Extension(scope)| scope);
     let started_at = logging::now_ms();
     // 请求来源客户端（UA 识别，见 `core::client`）：早失败路径与收尾记账共用
-    let source = pipeline::request_source(&headers, key_identity);
+    let source = pipeline::request_source(&headers, key_identity, "anthropic");
     let path = "/v1/messages";
     let raw = match parse_object(&state, started_at, path, &body, &source) {
         Ok(value) => value,
