@@ -57,6 +57,37 @@ export type ProxySettings = {
   defaults?: { testUrl?: string }
 }
 
+/** WARP 出口池的一台设备（使用情况由后端进程内累计，重建后归零） */
+export type WarpExit = {
+  id: string
+  index: number
+  label: string
+  egressIp: string
+  port: number
+  endpoint: string
+  createdAt: number
+  /** 被选路分配的请求数 */
+  assigned: number
+  /** 当前在途连接数 */
+  active: number
+  /** 累计建立的连接数 */
+  connections: number
+  uploadBytes: number
+  downloadBytes: number
+  /** 最近一次被分配的毫秒时间戳（0 = 尚未使用） */
+  lastUsedAt: number
+}
+
+export type WarpPayload = {
+  exits?: WarpExit[]
+  /** false = 出口池尚未初始化完成（注册设备与建隧道需要时间） */
+  ready?: boolean
+  targetSize?: number
+  maxSize?: number
+  added?: string
+  removed?: string
+}
+
 /* ─── 桥（只声明本页用到的成员；不 declare global，理由见 accounts-shared）─── */
 
 export type ProxyPoolBridge = {
@@ -67,6 +98,10 @@ export type ProxyPoolBridge = {
   removeProxyPoolItem?: (id: string) => Promise<ProxyPoolPayload | null | undefined>
   testProxyPoolItem?: (id: string) => Promise<ProxyTestResult | null | undefined>
   syncClashToProxyPool?: () => Promise<ProxyPoolPayload | null | undefined>
+  /** WARP 出口池（本页的 WARP 设备分页）：清单 / 添加一台 / 删除一台 */
+  getWarpExits?: () => Promise<WarpPayload | null | undefined>
+  addWarpExit?: () => Promise<WarpPayload | null | undefined>
+  removeWarpExit?: (id: string) => Promise<WarpPayload | null | undefined>
   /** 测**未保存**的表单内容（弹窗里的「测试出口」，payload 是 `{proxy}`） */
   testProxy?: (payload: { proxy: unknown }) => Promise<ProxyTestResult | null | undefined>
   /** 连通性测试目标网址 */

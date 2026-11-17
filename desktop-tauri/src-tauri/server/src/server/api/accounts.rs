@@ -334,6 +334,7 @@ pub async fn accounts_entry(State(state): State<ServerState>, request: axum::ext
 /// `/pool/test`、`/pool/sync-clash`（「网络代理」页的代理池 CRUD + 启停 + 测试
 /// + Clash 同步，见 `api::proxies` 的模块头）。池那几条的 id 走 body，不做
 /// 路径段 —— 判定的写法因此还是一张 (方法, 剩余路径) 的表，与原来的两条完全同形。
+/// WARP 设备清单与增删同样在这张表里（`warp`、`warp/add`、`warp/remove`）。
 pub async fn proxies_entry(State(state): State<ServerState>, request: axum::extract::Request) -> Response {
     let method = request.method().clone();
     let full_path = request.uri().path().to_string();
@@ -359,6 +360,9 @@ pub async fn proxies_entry(State(state): State<ServerState>, request: axum::extr
         ("POST", "pool/remove") => super::proxies::pool_remove(&state, &body).await,
         ("POST", "pool/test") => super::proxies::pool_test(&state, &body).await,
         ("POST", "pool/sync-clash") => super::proxies::pool_sync_clash(&state).await,
+        ("GET", "warp") => super::proxies::warp_list().await,
+        ("POST", "warp/add") => super::proxies::warp_add().await,
+        ("POST", "warp/remove") => super::proxies::warp_remove(&body).await,
         ("GET", "settings") => super::proxies::settings_get().await,
         ("POST", "settings") => super::proxies::settings_save(&body).await,
         // 已注册路径上的其它方法：Node 的 tryHandleProxies 落到它自己的 404 信封

@@ -4,33 +4,109 @@
 //! 监听端口；网关按请求轮询出口。出口注册、隧道与网络栈全部在主进程内完成，
 //! 不启动子进程
 //!
+//! 选路侧默认直连优先：只有直连出口已被占用、账号处于 WARP 临时绑定期或
+//! 请求刚吃到 429 时才使用出口。需要 WARP 时按账号稳定落到同一个出口
+//! （见 `pick_for`），并在短时间内保持这份绑定
+//!
 //! 设备只在本次服务运行期间复用，不落盘：WARP 设备与设备密钥绑定当前环境，
 //! 跨平台或跨设备搬移没有意义，也不应进入 WebDAV 备份与同步。服务重启后
 //! 重新注册；遇到上游 429 时优先轮换到下一个出口，出口不足时重新注册新设备
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use serde_json::{json, Value};
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
 use crate::server::core::proxies::ResolvedProxy;
 use crate::server::logging;
 
 use super::register::{WarpRegistration, WarpRegistrar};
-use super::{netstack, socks, tunnel};
+use super::{netstack, settings, socks, tunnel};
 
-const DEFAULT_POOL_SIZE: usize = 2;
-const MAX_POOL_SIZE: usize = 32;
 const BUILD_RETRY: usize = 2;
+/// 账号与 WARP 出口的临时绑定时间：会话粘滞期间同一账号始终走同一出口
+const BIND_TTL_MS: i64 = 10 * 60 * 1000;
+
+/// 清掉已过期的账号绑定（调用方持绑定表的锁）
+fn prune_bindings(bindings: &mut HashMap<String, i64>, now: i64) {
+    bindings.retain(|_, until| *until > now);
+}
+
+/// 单个出口的使用统计
+///
+/// 计数只在本进程内累计，设备重建后归零：重建换的是另一台设备，
+/// 把它与新设备的读数混在一起没有意义
+#[derive(Default)]
+pub struct ExitStats {
+    /// 被选路分配的请求数（每次 `pick` 记一次）
+    assigned: AtomicU64,
+    /// 当前在途的 SOCKS 连接数
+    active: AtomicU64,
+    /// 累计建立的 SOCKS 连接数
+    connections: AtomicU64,
+    /// 累计上传字节（客户端到上游）
+    upload: AtomicU64,
+    /// 累计下载字节（上游到客户端）
+    download: AtomicU64,
+    /// 最近一次被分配的毫秒时间戳（0 = 尚未使用）
+    last_used_ms: AtomicU64,
+}
+
+impl ExitStats {
+    fn on_assigned(&self) {
+        self.assigned.fetch_add(1, Ordering::Relaxed);
+        self.last_used_ms.store(logging::now_ms() as u64, Ordering::Relaxed);
+    }
+
+    /// 开一条连接：返回的守卫在连接结束时把在途计数减回去
+    pub fn begin_connection(self: &Arc<Self>) -> ActiveGuard {
+        self.connections.fetch_add(1, Ordering::Relaxed);
+        self.active.fetch_add(1, Ordering::Relaxed);
+        ActiveGuard { stats: Arc::clone(self) }
+    }
+
+    pub fn add_upload(&self, bytes: usize) {
+        self.upload.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    pub fn add_download(&self, bytes: usize) {
+        self.download.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+}
+
+/// 在途连接的守卫，Drop 时把在途计数减一
+pub struct ActiveGuard {
+    stats: Arc<ExitStats>,
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.stats.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// 一个可用的 WARP 出口
 #[derive(Clone)]
 pub struct WarpExit {
+    /// WARP 设备标识（注册接口返回的 id，管理页用它定位设备）
+    pub id: String,
     pub port: u16,
     egress_ip: Arc<Mutex<String>>,
     pub proxy: ResolvedProxy,
+    stats: Arc<ExitStats>,
+    created_at: u64,
+    /// 注册信息：删除出口时要按它注销设备
+    ///
+    /// 用 `Arc` 共享：出口在每次选路时都会克隆，注册信息里含私钥与令牌，
+    /// 不该随请求复制
+    registration: Arc<WarpRegistration>,
+    /// 停止信号：删除出口时让本地 SOCKS5 服务退出并释放端口
+    stop: Arc<Notify>,
 }
 
 impl WarpExit {
@@ -41,6 +117,25 @@ impl WarpExit {
             .map(|value| value.clone())
             .unwrap_or_default()
     }
+
+    /// 管理页展示用的一份读数（不含私钥与令牌）
+    fn describe(&self, index: usize) -> Value {
+        json!({
+            "id": self.id,
+            "index": index + 1,
+            "label": format!("WARP 出口 {}", index + 1),
+            "egressIp": self.egress_ip(),
+            "port": self.port,
+            "endpoint": format!("socks5://127.0.0.1:{}", self.port),
+            "createdAt": self.created_at,
+            "assigned": self.stats.assigned.load(Ordering::Relaxed),
+            "active": self.stats.active.load(Ordering::Relaxed),
+            "connections": self.stats.connections.load(Ordering::Relaxed),
+            "uploadBytes": self.stats.upload.load(Ordering::Relaxed),
+            "downloadBytes": self.stats.download.load(Ordering::Relaxed),
+            "lastUsedAt": self.stats.last_used_ms.load(Ordering::Relaxed),
+        })
+    }
 }
 
 /// 出口池：按请求轮询出口
@@ -48,6 +143,8 @@ pub struct WarpPool {
     exits: Mutex<Vec<Option<WarpExit>>>,
     cursor: AtomicUsize,
     registrar: Arc<WarpRegistrar>,
+    /// 账号 → 绑定到期时刻（账号一旦被分配到 WARP 出口，短时间内继续走 WARP）
+    bindings: Mutex<HashMap<String, i64>>,
 }
 
 impl WarpPool {
@@ -74,42 +171,132 @@ impl WarpPool {
         for _ in 0..count {
             let index = self.cursor.fetch_add(1, Ordering::Relaxed) % count;
             if let Some(exit) = slots[index].clone() {
+                exit.stats.on_assigned();
                 return Some(exit);
             }
         }
         None
     }
 
+    /// 按账号稳定选择一个出口：同一账号在池子不变时始终落到同一个出口，
+    /// 与账号的会话粘滞配合形成「暂时绑定」；设备重建或增删后会自然重新分配
+    pub fn pick_for(&self, account_id: &str) -> Option<WarpExit> {
+        if account_id.is_empty() {
+            return self.pick();
+        }
+        let Ok(slots) = self.exits.lock() else {
+            return None;
+        };
+        let count = slots.len();
+        if count == 0 {
+            return None;
+        }
+        let mut hash = 0usize;
+        for byte in account_id.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(byte as usize);
+        }
+        let start = hash % count;
+        for offset in 0..count {
+            let index = (start + offset) % count;
+            if let Some(exit) = slots[index].clone() {
+                exit.stats.on_assigned();
+                drop(slots);
+                let now = logging::now_ms();
+                if let Ok(mut bindings) = self.bindings.lock() {
+                    prune_bindings(&mut bindings, now);
+                    bindings.insert(account_id.to_string(), now + BIND_TTL_MS);
+                }
+                return Some(exit);
+            }
+        }
+        None
+    }
+
+    /// 该账号是否仍在 WARP 出口的临时绑定期内
+    pub fn is_bound(&self, account_id: &str) -> bool {
+        if account_id.is_empty() {
+            return false;
+        }
+        let now = logging::now_ms();
+        let Ok(mut bindings) = self.bindings.lock() else {
+            return false;
+        };
+        // 顺手清掉过期项：绑定表只按账号增长，不清会一直留着历史账号
+        prune_bindings(&mut bindings, now);
+        bindings
+            .get(account_id)
+            .is_some_and(|until| *until > now)
+    }
+
+    /// 管理页读一份池状态（出口读数 + 期望数量）
+    pub fn payload(&self) -> Value {
+        let exits: Vec<Value> = match self.exits.lock() {
+            Ok(slots) => slots.iter().enumerate()
+                .filter_map(|(index, slot)| slot.as_ref().map(|exit| exit.describe(index)))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        json!({
+            "exits": exits,
+            "ready": true,
+            "targetSize": settings::target_size(),
+            "maxSize": settings::MAX_SIZE,
+        })
+    }
+
     /// 上游 429 且池内出口不足时，注册一台新设备并追加到池中
     ///
     /// 保留现有出口：新设备注册失败时旧出口仍可用，不会把池子清空
-    pub async fn add_exit(self: &Arc<Self>) -> Option<WarpExit> {
+    pub async fn add_exit(self: &Arc<Self>) -> Result<WarpExit, String> {
         let index = {
             let Ok(slots) = self.exits.lock() else {
-                return None;
+                return Err("WARP 出口池状态不可用".to_string());
             };
-            if slots.len() >= MAX_POOL_SIZE {
-                return None;
+            if slots.len() >= settings::MAX_SIZE {
+                return Err(format!("WARP 出口数已达上限 {}", settings::MAX_SIZE));
             }
             slots.len()
         };
-        match build_exit(&self.registrar, index).await {
-            Ok(exit) => {
-                if let Ok(mut slots) = self.exits.lock() {
-                    if slots.len() < MAX_POOL_SIZE {
-                        slots.push(Some(exit.clone()));
-                    }
-                }
-                Some(exit)
+        let exit = build_exit(&self.registrar, index).await?;
+        let size = {
+            let Ok(mut slots) = self.exits.lock() else {
+                return Err("WARP 出口池状态不可用".to_string());
+            };
+            if slots.len() >= settings::MAX_SIZE {
+                return Err(format!("WARP 出口数已达上限 {}", settings::MAX_SIZE));
             }
-            Err(error) => {
-                logging::log(
-                    "[WARP]",
-                    &format!("注册新的 WARP 出口失败：{error}"),
-                );
-                None
-            }
-        }
+            slots.push(Some(exit.clone()));
+            slots.len()
+        };
+        // 期望数量跟着涨：重启后按同样的台数重建
+        let _ = settings::save_size(size);
+        logging::log("[WARP]", &format!("已添加 WARP 出口 {}，本地 SOCKS5 127.0.0.1:{}", index + 1, exit.port));
+        Ok(exit)
+    }
+
+    /// 删除一台设备：停止本地 SOCKS5 服务、注销设备、从池中移除
+    ///
+    /// 在途连接会随本地服务停止而中断
+    pub async fn remove_exit(self: &Arc<Self>, id: &str) -> Result<Value, String> {
+        let (exit, size) = {
+            let Ok(mut slots) = self.exits.lock() else {
+                return Err("WARP 出口池状态不可用".to_string());
+            };
+            let Some(position) = slots.iter().position(|slot| {
+                slot.as_ref().is_some_and(|exit| exit.id == id)
+            }) else {
+                return Err("WARP 设备不存在（可能已被重建或删除）".to_string());
+            };
+            let exit = slots.remove(position)
+                .ok_or_else(|| "WARP 设备不存在（可能已被重建或删除）".to_string())?;
+            (exit, slots.len())
+        };
+        // 先停本地服务再注销设备：Wi-Fi 侧断链后不必等隧道超时
+        exit.stop.notify_waiters();
+        self.registrar.unregister(&exit.registration).await;
+        let _ = settings::save_size(size);
+        logging::log("[WARP]", &format!("已删除 WARP 出口（设备 {}），剩余 {size} 台", exit.id));
+        Ok(self.payload())
     }
 
     /// 后台重建一个槽位（隧道异常或替换失败时调用）
@@ -155,11 +342,7 @@ pub fn spawn() {
         return;
     }
     crate::spawn_task(async move {
-        let size = std::env::var("ZCODE_WARP_POOL_SIZE")
-            .ok()
-            .and_then(|value| value.trim().parse::<usize>().ok())
-            .unwrap_or(DEFAULT_POOL_SIZE)
-            .clamp(1, MAX_POOL_SIZE);
+        let size = settings::target_size();
         let mut delay = Duration::from_secs(30);
         loop {
             match start(size).await {
@@ -190,6 +373,15 @@ pub fn spawn() {
 
 async fn start(count: usize) -> Result<Arc<WarpPool>, String> {
     let registrar = Arc::new(WarpRegistrar::new()?);
+    // 目标数量为 0 时不注册设备：管理页把出口删空后重启，应保持空池
+    if count == 0 {
+        return Ok(Arc::new(WarpPool {
+            exits: Mutex::new(Vec::new()),
+            cursor: AtomicUsize::new(0),
+            registrar,
+            bindings: Mutex::new(HashMap::new()),
+        }));
+    }
     // 第一个出口同步建立，成功后立即发布池子；其余出口后台补齐，
     // 避免某个设备注册或探测失败把整池启动拖长
     let first = build_exit(&registrar, 0).await?;
@@ -199,6 +391,7 @@ async fn start(count: usize) -> Result<Arc<WarpPool>, String> {
         exits: Mutex::new(slots),
         cursor: AtomicUsize::new(0),
         registrar,
+        bindings: Mutex::new(HashMap::new()),
     });
 
     for index in 1..count {
@@ -292,7 +485,9 @@ async fn connect_endpoint(
         .local_addr()
         .map_err(|error| format!("读取本地 SOCKS5 端口失败: {error}"))?
         .port();
-    tokio::spawn(socks::serve(listener, net));
+    let stats = Arc::new(ExitStats::default());
+    let stop = Arc::new(Notify::new());
+    tokio::spawn(socks::serve(listener, net, Arc::clone(&stats), Arc::clone(&stop)));
 
     let egress_ip = Arc::new(Mutex::new(String::new()));
     let mut probe_error = None;
@@ -333,9 +528,14 @@ async fn connect_endpoint(
         non_direct: false,
     };
     Ok(WarpExit {
+        id: registration.id.clone(),
         port,
         egress_ip,
         proxy,
+        stats,
+        created_at: logging::now_ms() as u64,
+        registration: Arc::new(registration.clone()),
+        stop,
     })
 }
 

@@ -1779,6 +1779,10 @@ pub fn shim_js() -> &'static str {
     removeProxyPoolItem: function (id) { return call('POST', '/api/proxies/pool/remove', { id: String(id || '') }); },
     testProxyPoolItem: function (id) { return call('POST', '/api/proxies/pool/test', { id: String(id || '') }); },
     syncClashToProxyPool: function () { return call('POST', '/api/proxies/pool/sync-clash', {}); },
+    // WARP 出口池（「网络代理」页的 WARP 设备分页；与桌面壳 bridge.rs 成对维护）
+    getWarpExits: function () { return call('GET', '/api/proxies/warp'); },
+    addWarpExit: function () { return call('POST', '/api/proxies/warp/add', {}); },
+    removeWarpExit: function (id) { return call('POST', '/api/proxies/warp/remove', { id: String(id || '') }); },
     // 代理设置（「网络代理」页的设置弹窗；与桌面壳 bridge.rs 的同名方法
     // 成对存在，契约见 api::proxies 的模块头 settings 两条）
     getProxySettings: function () { return call('GET', '/api/proxies/settings'); },

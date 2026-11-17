@@ -6,11 +6,14 @@
 //! （MIT OR Apache-2.0）改造而来，移除了外部池依赖，由本项目的出口池分别启动。
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
 
 use super::netstack::NetHandle;
+use super::pool::ExitStats;
 
 const VER: u8 = 0x05;
 const CMD_CONNECT: u8 = 0x01;
@@ -19,23 +22,42 @@ const ATYP_DOMAIN: u8 = 0x03;
 const ATYP_V6: u8 = 0x04;
 
 /// Serve SOCKS5 on `listener`, routing every CONNECT through `net`.
-pub async fn serve(listener: TcpListener, net: NetHandle) {
+///
+/// `stop` 收到通知时退出监听并释放端口（删除出口时使用）；已在途的连接
+/// 由各自的转发任务自然结束
+pub async fn serve(
+    listener: TcpListener,
+    net: NetHandle,
+    stats: Arc<ExitStats>,
+    stop: Arc<Notify>,
+) {
     loop {
-        let Ok((client, _)) = listener.accept().await else {
+        let accepted = tokio::select! {
+            _ = stop.notified() => break,
+            accepted = listener.accept() => accepted,
+        };
+        let Ok((client, _)) = accepted else {
             continue;
         };
         let net = net.clone();
+        let stats = Arc::clone(&stats);
         tokio::spawn(async move {
-            let _ = handle_single(client, net).await;
+            let _ = handle_single(client, net, stats).await;
         });
     }
 }
 
-async fn handle_single(mut client: TcpStream, net: NetHandle) -> std::io::Result<()> {
+async fn handle_single(
+    mut client: TcpStream,
+    net: NetHandle,
+    stats: Arc<ExitStats>,
+) -> std::io::Result<()> {
     let Some((host, port)) = read_request(&mut client).await? else {
         return Ok(());
     };
-    via_netstack(client, &net, &host, port).await
+    // 统计只覆盖真正建立的连接：握手失败的请求不算一次出口连接
+    let _active = stats.begin_connection();
+    via_netstack(client, &net, &host, port, &stats).await
 }
 
 /// Resolve + connect `host:port` through `net`, then splice with the client.
@@ -44,6 +66,7 @@ async fn via_netstack(
     net: &NetHandle,
     host: &str,
     port: u16,
+    stats: &Arc<ExitStats>,
 ) -> std::io::Result<()> {
     let ip = match net.resolve(host).await {
         Ok(ip) => ip,
@@ -60,7 +83,7 @@ async fn via_netstack(
         }
     };
     client.write_all(&reply(0x00)).await?;
-    relay(client, conn).await;
+    relay(client, conn, stats).await;
     Ok(())
 }
 
@@ -118,12 +141,13 @@ async fn read_request(client: &mut TcpStream) -> std::io::Result<Option<(String,
 }
 
 /// Splice the client and the tunnelled connection until either ends.
-async fn relay(client: TcpStream, conn: super::netstack::TcpConn) {
+async fn relay(client: TcpStream, conn: super::netstack::TcpConn, stats: &Arc<ExitStats>) {
     let (mut cr, mut cw) = client.into_split();
     let (mut reader, writer) = conn.into_split();
 
     let net_to_client = async {
         while let Some(chunk) = reader.recv().await {
+            stats.add_download(chunk.len());
             if cw.write_all(&chunk).await.is_err() {
                 break;
             }
@@ -135,7 +159,10 @@ async fn relay(client: TcpStream, conn: super::netstack::TcpConn) {
         loop {
             match cr.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
-                Ok(n) => writer.send(buf[..n].to_vec()),
+                Ok(n) => {
+                    stats.add_upload(n);
+                    writer.send(buf[..n].to_vec());
+                }
             }
         }
         writer.close();

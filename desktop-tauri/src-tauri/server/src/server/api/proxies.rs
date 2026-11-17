@@ -1,5 +1,6 @@
 //! 代理管理：手动地址 CRUD、Clash Verge 端点同步、启停与连通性测试。
 //! 写操作返回最新代理列表，测试失败以 `success:false` 返回 200。
+//! 另含 WARP 出口池的设备清单与增删（「网络代理」页的 WARP 设备分页）。
 
 use axum::body::Bytes;
 use axum::response::Response;
@@ -244,7 +245,62 @@ pub async fn settings_get() -> Response {
     ok_json(proxy_settings::get())
 }
 
-pub async fn settings_save(body: &Bytes) -> Response {
+// ─── WARP 出口池（「网络代理」页的 WARP 设备分页）───
+//
+// 设备由池在启动与 429 补救时自动注册，这三条只做「看清单 / 加一台 / 删一台」。
+// 设备不落盘，`targetSize` 是唯一持久化的口径：重启后按它重建同样台数。
+
+/// 出口池状态：出口读数（出口 IP / 端口 / 使用情况）+ 期望数量
+pub async fn warp_list() -> Response {
+    match crate::server::core::warp::pool::global() {
+        Some(pool) => ok_json(pool.payload()),
+        // 池尚未初始化（注册设备与建隧道需要几十秒，失败还会退避重试）：
+        // 返回一份空清单加说明，界面据此显示「准备中」而不是报错
+        None => ok_json(json!({
+            "exits": [],
+            "ready": false,
+            "targetSize": crate::server::core::warp::settings::target_size(),
+            "maxSize": crate::server::core::warp::settings::MAX_SIZE,
+        })),
+    }
+}
+
+/// 添加一台设备：注册新设备、建隧道、追加到池中
+pub async fn warp_add() -> Response {
+    let Some(pool) = crate::server::core::warp::pool::global() else {
+        return management_error(409, "WARP 出口池尚未就绪，请稍后再试（可看运行日志的 [WARP] 行）");
+    };
+    match pool.add_exit().await {
+        Ok(exit) => {
+            let mut data = pool.payload();
+            data["added"] = json!(exit.id);
+            ok_json(data)
+        }
+        Err(message) => management_error(400, format!("添加 WARP 设备失败：{message}")),
+    }
+}
+
+/// 删除一台设备：停止其本地出口、注销设备并从池中移除
+pub async fn warp_remove(body: &Bytes) -> Response {
+    let payload = match parse_body(body) {
+        Ok(value) => value,
+        Err(_) => return management_error(400, "请求内容不是有效 JSON"),
+    };
+    let id = payload.get("id").and_then(Value::as_str).unwrap_or("").trim();
+    if id.is_empty() {
+        return management_error(400, "缺少设备 id");
+    }
+    let Some(pool) = crate::server::core::warp::pool::global() else {
+        return management_error(409, "WARP 出口池尚未就绪");
+    };
+    match pool.remove_exit(id).await {
+        Ok(mut data) => {
+            data["removed"] = json!(id);
+            ok_json(data)
+        }
+        Err(message) => management_error(404, message),
+    }
+}pub async fn settings_save(body: &Bytes) -> Response {
     let payload = match parse_body(body) {
         Ok(value) => value,
         Err(_) => return management_error(400, "请求内容不是有效 JSON"),

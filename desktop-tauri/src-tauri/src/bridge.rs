@@ -461,6 +461,12 @@ const BRIDGE_JS: &str = r#"
     removeProxyPoolItem: id => call('POST', '/api/proxies/pool/remove', { id: String(id || '') }),
     testProxyPoolItem: id => call('POST', '/api/proxies/pool/test', { id: String(id || '') }),
     syncClashToProxyPool: () => call('POST', '/api/proxies/pool/sync-clash', {}),
+    // WARP 出口池（「网络代理」页的 WARP 设备分页）。与 web_shim.rs 成对维护：
+    // 清单带出口 IP、端口与使用情况；增删只作用于本进程内的池，
+    // 期望出口数由后端持久化（kv 的 warpPool），重启后按它重建。
+    getWarpExits: () => call('GET', '/api/proxies/warp'),
+    addWarpExit: () => call('POST', '/api/proxies/warp/add', {}),
+    removeWarpExit: id => call('POST', '/api/proxies/warp/remove', { id: String(id || '') }),
     // ── 代理设置（「网络代理」页的设置弹窗：测试目标网址）──
     // 与 web_shim.rs 的同名方法成对存在（教训同上）。契约见 `api::proxies`
     // 的模块头 settings 两条：GET 带 `defaults`（弹窗的默认值读它），

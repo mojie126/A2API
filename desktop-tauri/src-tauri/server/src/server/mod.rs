@@ -399,6 +399,9 @@ impl ServerState {
         // 它不参与启动预热，位置只要求早于任何一次 `/api/proxies/pool*` 请求。
         core::proxy_pool::install(db.clone());
         core::proxy_settings::install(db.clone());
+        // WARP 出口池的期望出口数：与代理设置同为 kv 形态，必须早于下面的
+        // `warp::pool::spawn` —— 它决定启动时注册几台设备
+        core::warp::settings::install(db.clone());
         // 先装云同步设置；自动同步须等账号迁移完成后启动，不能上传半份启动状态。
         core::cloud_sync::install(db.clone());
         // 模型清单的持久化缓存：把**同一个 `Db`** 传进去（与配置 / 日志库 /

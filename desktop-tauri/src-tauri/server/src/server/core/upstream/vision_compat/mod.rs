@@ -156,7 +156,7 @@ async fn recover(service: &UpstreamService, ctx: &ProviderContext<'_>, original:
         return Err(GatewayError::bad_request("本次图片兼容已经执行，未递归调用或改用其他处理方式").with_code("vision_recursion_blocked"));
     }
     let started = Instant::now();
-    connections.rebind(None);
+    connections.rebind(None, &original.provider);
     let mut detail = json!({ "mode": rule.mode.as_str(), "trigger": trigger, "status": "processing",
         "sourceProvider": original.provider, "sourceModel": targets::actual_model(ctx, original),
         "targetProvider": "", "targetModel": "", "durationMs": 0, "cachedImages": 0, "imageCount": 0,

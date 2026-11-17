@@ -264,7 +264,7 @@ async fn cancellation_wakes_an_idle_stream_and_releases_connection() {
     let source = cancellation::cancellable(futures::stream::pending().boxed(), Some(token.clone()));
     let connections = Connections::new();
     let mut guard = ConnectionGuard::new(connections.clone());
-    guard.rebind(Some("account-1".into()));
+    guard.rebind(Some("account-1".into()), "demo");
     let mut stream = stream_with(source, WireProtocol::Anthropic, "wire", telemetry.clone());
     stream._connection = guard.handoff();
     assert_eq!(connections.snapshot(), vec![("account-1".into(), 1)]);

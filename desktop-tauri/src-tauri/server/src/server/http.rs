@@ -493,6 +493,10 @@ pub fn panel_router(state: ServerState) -> Router {
         .route("/api/proxies/pool/test", any(api::accounts::proxies_entry))
         .route("/api/proxies/pool/sync-clash", any(api::accounts::proxies_entry))
         .route("/api/proxies/settings", any(api::accounts::proxies_entry))
+        // WARP 出口池（「网络代理」页的 WARP 设备分页）：清单与增删，方法判定同上
+        .route("/api/proxies/warp", any(api::accounts::proxies_entry))
+        .route("/api/proxies/warp/add", any(api::accounts::proxies_entry))
+        .route("/api/proxies/warp/remove", any(api::accounts::proxies_entry))
         // ── 已下线的订阅入口只返回状态，不再读取请求体或执行内核操作 ──
         .route("/api/subscriptions", any(retired_proxy_feature))
         .route("/api/subscriptions/{*rest}", any(retired_proxy_feature))

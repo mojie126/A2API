@@ -702,6 +702,8 @@ async fn attempt_queue(
     let mut send_cache: HashMap<(&'static str, String, String, bool), SendBody<'_>> = HashMap::new();
     // 轮询档账号的换出口次数（只对 429 生效，见下面 Err 分支的补救）
     let mut exit_rotations = 0usize;
+    // 直连优先：本次请求先走账号原出口；仅在直连并发占满或 429 后才切 WARP
+    let mut warp_fallback = false;
 
     // 标签是必需的：下面「429 降级到下一个账号」发生在**内层发送循环**里，
     // 裸 `continue` 会回到内层（用同一个账号再发一次，正好是要避免的事）。
@@ -730,8 +732,20 @@ async fn attempt_queue(
             target.proxy = override_proxy.clone();
             target.proxy_notice = None;
         } else {
-            // WARP 出口池：ZCode 账号默认开启；池未就绪时保留账号原代理
-            warp_exit = warp_exit_for(target.account.as_ref(), &target.provider);
+            // 直连优先：同一提供商没有其他在途请求时先走账号原出口；
+            // 已有 ZCode 请求占着直连、账号处于 WARP 临时绑定、或本请求
+            // 刚吃过 429 时才切 WARP
+            let account_id = target
+                .account
+                .as_ref()
+                .and_then(|account| account.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let pool = crate::server::core::warp::pool::global();
+            let warp_bound = pool.as_ref().is_some_and(|pool| pool.is_bound(account_id));
+            if warp_fallback || warp_bound || zcode_direct_in_flight(service, pool.as_deref()) {
+                warp_exit = warp_exit_for(target.account.as_ref(), &target.provider);
+            }
             if let Some(exit) = &warp_exit {
                 target.proxy = Some(exit.proxy.clone());
                 target.proxy_notice = None;
@@ -772,7 +786,7 @@ async fn attempt_queue(
         // 连接计数改绑到这一轮选中的账号：失败重试换账号时计数跟着走，
         // 于是「一个请求任意时刻只占一个账号」这条口径不需要每个分支各维护一次
         // （429 降级、401 刷新后换号、会话式失败顺延三条路径都经过这里）。
-        connections.rebind(target.account_id.clone());
+        connections.rebind(target.account_id.clone(), &target.provider);
         if let Some(model) = &ctx.direct_model {
             if let Some(account) = target.account.as_mut() { account["routingModel"] = model.clone().into(); }
         }
@@ -1510,16 +1524,21 @@ async fn attempt_queue(
                         ctx.telemetry.finish_last_attempt(Some(i64::from(failure.error.status_code)), Some(&failure.error.message));
                         return Err(failure.error);
                     }
-                    // ── 轮询档的 429 补救：换下一个出口重发 ─────────────────
-                    // 这类 429 是上游按出口判定的并发或额度限制，换账号无效，
-                    // 换出口往往就能过。回到账号循环重新选路时会按轮询游标取
-                    // 下一个出口（见 AccountStore::get_session_by_id），同账号
-                    // 继续排在最前；不标记账号冷却、不扣换号预算。换满仍失败
-                    // 才落到下面的限额分支，按原有逻辑冷却并顺延下一个账号。
+                    // ── 429 补救：优先直连的请求切 WARP 重试 ─────────────────
+                    // ZCode 直连在并发占满时会被上游按出口判 429；第一次 429
+                    // 先把本请求切到 WARP 出口，后续 429 再轮换或追加设备。
+                    // 不标记账号冷却、不扣换号预算；换满仍失败才落到下面的
+                    // 限额分支，按原有逻辑冷却并顺延下一个账号。
+                    // 池里至少有一个出口才算「可切 WARP」：池被删空时进入这段
+                    // 只会白耗换出口预算（下一轮 pick 仍拿不到出口）
+                    let warp_ready = warp_exit.is_some()
+                        || (warp_enabled_for(target.account.as_ref(), &target.provider)
+                            && crate::server::core::warp::pool::global()
+                                .is_some_and(|pool| !pool.is_empty()));
                     if matches!(
                         &failure.class,
                         UpstreamErrorClass::QuotaLimited { status: 429, .. }
-                    ) && (custom_forward::is_rotate_account(target.account.as_ref()) || warp_exit.is_some())
+                    ) && (custom_forward::is_rotate_account(target.account.as_ref()) || warp_ready)
                         && exit_rotations < MAX_ROTATE_EXIT_RETRIES
                     {
                         exit_rotations += 1;
@@ -1529,6 +1548,10 @@ async fn attempt_queue(
                             Some(&failure.error.message),
                         );
                         ctx.telemetry.note_attempt_retry("轮询换出口重试", Some(429), 0);
+                        if warp_exit.is_none() && warp_ready {
+                            // 下一次尝试开始走 WARP
+                            warp_fallback = true;
+                        }
                         // 池里没有其他出口时，注册一台新设备追加到池中再试；
                         // 有多个出口时下一轮轮询会自然换到另一个
                         if let (Some(_), Some(pool)) = (
@@ -3400,15 +3423,40 @@ fn warp_exit_for(
     account: Option<&Value>,
     provider: &str,
 ) -> Option<crate::server::core::warp::pool::WarpExit> {
-    if !matches!(provider, "zcode" | "zcode-intl") {
+    if !warp_enabled_for(account, provider) {
         return None;
     }
-    let enabled = account
+    let account_id = account
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    crate::server::core::warp::pool::global().and_then(|pool| pool.pick_for(account_id))
+}
+
+/// 该账号是否允许使用 WARP 出口池（只限 ZCode 国内 / 国际版，默认开启）
+fn warp_enabled_for(account: Option<&Value>, provider: &str) -> bool {
+    if !matches!(provider, "zcode" | "zcode-intl") {
+        return false;
+    }
+    account
         .and_then(|item| item.get("zcodeEgressPool"))
         .and_then(Value::as_bool)
-        .unwrap_or(true);
-    if !enabled {
-        return None;
-    }
-    crate::server::core::warp::pool::global().and_then(|pool| pool.pick())
+        .unwrap_or(true)
+}
+
+/// 当前是否有 **直连** 的 ZCode 请求占着出口
+///
+/// 直连优先：没有在途直连 ZCode 请求时先走直连；已有请求在途说明直连
+/// 出口正被占用，新请求改走 WARP。已绑定 WARP 的账号不算占用直连
+///
+/// 判定按连接计数里记下的 **provider** 过滤（`zcode` 与 `zcode-intl`），
+/// 不依赖账号 id 的命名约定
+fn zcode_direct_in_flight(
+    service: &UpstreamService,
+    pool: Option<&crate::server::core::warp::pool::WarpPool>,
+) -> bool {
+    service.connections.any_in_flight(|account_id, provider| {
+        crate::server::core::account_store::is_zcode_family(provider)
+            && !pool.is_some_and(|pool| pool.is_bound(account_id))
+    })
 }

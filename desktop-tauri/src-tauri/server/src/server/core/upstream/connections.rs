@@ -28,13 +28,22 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// 在途计数表的一项：在途请求数与该账号的提供商
+///
+/// provider 由每次选路带下来：它只是账号的属性，记在这里是为了让
+/// 「有没有同一家的请求在途」这类判定不必再反查账号库
+struct Entry {
+    count: usize,
+    provider: String,
+}
+
 /// 账号 id → 当前正在使用该账号的下游请求数（0 的账号不留在表里）。
 ///
 /// `Clone` 是浅拷贝（内部 `Arc`）：`ServerState` 的 handler 克隆状态后，
 /// 拿到的仍是同一份计数。
 #[derive(Clone)]
 pub struct Connections {
-    inner: Arc<Mutex<HashMap<String, usize>>>,
+    inner: Arc<Mutex<HashMap<String, Entry>>>,
 }
 
 impl Connections {
@@ -50,19 +59,34 @@ impl Connections {
         let guard = lock_counts(&self.inner);
         let mut entries: Vec<(String, usize)> = guard
             .iter()
-            .map(|(id, count)| (id.clone(), *count))
+            .map(|(id, entry)| (id.clone(), entry.count))
             .collect();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
     }
 
+    /// 是否存在满足条件的在途账号（回调收到账号 id 与提供商）
+    ///
+    /// 供「按提供商统计在途」一类判定使用（例如 ZCode 直连出口是否被占用）；
+    /// 与 [`Self::snapshot`] 一样只读一次锁
+    pub fn any_in_flight(&self, mut predicate: impl FnMut(&str, &str) -> bool) -> bool {
+        let guard = lock_counts(&self.inner);
+        guard.iter().any(|(id, entry)| predicate(id, &entry.provider))
+    }
+
     /// 计数 +1（空 id 是「没有账号」的转发，不计数）
-    fn add(&self, account_id: &str) {
+    fn add(&self, account_id: &str, provider: &str) {
         if account_id.is_empty() {
             return;
         }
         let mut guard = lock_counts(&self.inner);
-        *guard.entry(account_id.to_string()).or_insert(0) += 1;
+        let entry = guard.entry(account_id.to_string()).or_insert_with(|| Entry {
+            count: 0,
+            provider: provider.to_string(),
+        });
+        entry.count += 1;
+        // 账号的提供商不随时间变化，这里同步一次只是防止老记录缺字段
+        entry.provider = provider.to_string();
     }
 
     /// 计数 -1（减到 0 就删项；无记录时是空操作 —— 幂等，重复释放不会变负数）
@@ -72,7 +96,7 @@ impl Connections {
         }
         let mut guard = lock_counts(&self.inner);
         match guard.get_mut(account_id) {
-            Some(count) if *count > 1 => *count -= 1,
+            Some(entry) if entry.count > 1 => entry.count -= 1,
             Some(_) => {
                 guard.remove(account_id);
             }
@@ -89,8 +113,8 @@ impl Default for Connections {
 
 /// 取计数表锁；锁中毒不致命（与 `mod.rs` 的 `lock_table` 同一策略）
 fn lock_counts<'a>(
-    inner: &'a Mutex<HashMap<String, usize>>,
-) -> std::sync::MutexGuard<'a, HashMap<String, usize>> {
+    inner: &'a Mutex<HashMap<String, Entry>>,
+) -> std::sync::MutexGuard<'a, HashMap<String, Entry>> {
     match inner.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -122,7 +146,8 @@ impl ConnectionGuard {
     ///
     /// 空字符串与 None 等价（都表示「没有账号」），这样调用方可以直接把
     /// `RouteTarget::account_id` 传进来，不必先做一次归一。
-    pub(super) fn rebind(&mut self, account_id: Option<String>) {
+    /// `provider` 随计数一起记录，供「按家统计在途」的判定使用
+    pub(super) fn rebind(&mut self, account_id: Option<String>, provider: &str) {
         let next = account_id.filter(|id| !id.is_empty());
         if self.account_id == next {
             return;
@@ -131,7 +156,7 @@ impl ConnectionGuard {
             self.connections.sub(previous);
         }
         if let Some(current) = next.as_deref() {
-            self.connections.add(current);
+            self.connections.add(current, provider);
         }
         self.account_id = next;
     }

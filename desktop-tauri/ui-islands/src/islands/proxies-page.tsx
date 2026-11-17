@@ -16,6 +16,7 @@ import {
   toggleItem, togglePick, wb, type ProxyPoolItem,
 } from './proxies-state'
 import { ProxyModal, ProxySettingsModal } from './proxies-dialogs'
+import { WarpPanel } from './proxies-warp'
 import { COL_CLASS, closeColumnPanel, repaintColumnWidths, setupColumns, visibleColumns } from './proxies-columns'
 import { TableFooter, useClientPaging } from './table-shell'
 import { t } from '../i18n'
@@ -37,6 +38,9 @@ function ProxiesPage() {
     noticeListeners.add(listener)
     return () => { noticeListeners.delete(listener) }
   }, () => noticeRevision)
+  /* 页内两个视图：手动 / Clash 代理清单与 WARP 设备清单。WARP 那页是
+     运行时状态（设备不落盘），与代理清单没有共用数据，切换只影响渲染 */
+  const [tab, setTab] = React.useState<'list' | 'warp'>('list')
   const [noticeOpen, setNoticeOpen] = React.useState(false)
   const [modal, setModal] = React.useState<{ item: ProxyPoolItem | null } | null>(null)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
@@ -185,6 +189,12 @@ function ProxiesPage() {
   }
 
   return <>
+    <div className='flex shrink-0 items-center gap-2.5 pb-2.5'>
+      <SegmentedControl options={[{ value: 'list', label: t('代理列表') }, { value: 'warp', label: t('WARP 设备') }]}
+        value={tab} onValueChange={value => setTab(value === 'warp' ? 'warp' : 'list')}
+        aria-label={t('代理页视图')} />
+    </div>
+    {tab === 'warp' ? <WarpPanel /> : <>
     <Card render={<section />} className='panel'>
       <CardHeader className='panel-head'>
         <h2>{t('代理列表')}</h2><Badge variant='secondary' shape='tag'>{rows.length}</Badge>
@@ -250,6 +260,7 @@ function ProxiesPage() {
     {modal ? <ProxyModal item={modal.item} onClose={() => setModal(null)} /> : null}
     {settingsOpen ? <ProxySettingsModal onClose={() => setSettingsOpen(false)} /> : null}
     <ProxyRetirementDialog open={noticeOpen} onClose={() => setNoticeOpen(false)} t={t} />
+    </>}
   </>
 }
 
