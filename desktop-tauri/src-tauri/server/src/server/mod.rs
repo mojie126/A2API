@@ -464,6 +464,9 @@ impl ServerState {
         // 由 `migrate::import_debug` 一次性搬入），所以传的是**同一个 `Db`** ——
         // `Option<Db>`：打不开时报文写入静默丢弃（丢一份调试报文不影响任何业务）。
         core::debug_traffic::init(db.clone());
+        // WARP 出口池：后台注册设备并建立隧道，不阻塞网关启动；
+        // 未就绪或失败时 ZCode 请求回退账号原代理或直连
+        core::warp::pool::spawn();
         // 注意这里**不再有 `config::storage_dirs()`**：三类数据的保存目录
         // （`logDir` / `requestStatsDir` / `debugDir`）已经全部失去消费方 ——
         // 数据都在统一库的配置目录里，各 store 的构造只接 `Db`。

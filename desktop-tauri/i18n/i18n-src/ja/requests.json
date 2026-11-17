@@ -1,4 +1,7 @@
 {
+  "WARP 出口": "WARP 出口",
+  "代理出口": "プロキシ出口",
+  "出口 IP：{ip}": "出口 IP：{ip}",
   " · {n} 进行中": " · 処理中 {n} 件",
   " · 会话粘住": " · セッション粘着",
   "<div class=\"cv-parse-empty\">无响应原文</div>": "<div class=\"cv-parse-empty\">レスポンス原文がありません</div>",

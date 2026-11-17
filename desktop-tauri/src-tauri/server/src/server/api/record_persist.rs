@@ -94,6 +94,8 @@ fn persist(context: &RecordContext, fallback_error: Option<String>) {
     entry.source.outbound_client = if !snapshot.outbound_client.is_empty() { snapshot.outbound_client }
         else { entry.source.client.clone() };
     entry.source.outbound_user_agent = snapshot.outbound_user_agent;
+    entry.egress_kind = snapshot.egress_kind.clone();
+    entry.egress_ip = snapshot.egress_ip.clone();
     entry.error = error;
     entry.prompt_tokens = snapshot.prompt_tokens;
     entry.completion_tokens = snapshot.completion_tokens;

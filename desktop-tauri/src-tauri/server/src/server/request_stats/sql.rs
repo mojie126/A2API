@@ -84,7 +84,7 @@ pub(super) const REQUEST_COLUMNS: &str = "id, ts, model, account_id, account_nam
      cache_read_tokens, provider, client_model, upstream_model, attempt_details, sensitive_hits, \
      client_reasoning, upstream_reasoning, phase, phase_started_at, is_test, route, client, \
      api_key_id, api_key_name, api_key_source, credit, client_evidence, \
-     identified_client, outbound_client, outbound_user_agent, protocol";
+     identified_client, outbound_client, outbound_user_agent, protocol, egress_kind, egress_ip";
 
 // `request_daily`（按天聚合）那一支的列常量、编解码与读-改-写语句在
 // `daily.rs` —— 两张表的语句分文件后各自独立演化。
@@ -174,6 +174,9 @@ pub(super) fn decode_request(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         // 末列是 schema v23 加的（积分消耗）；旧行 / 没上报的行是 NULL ——
         // 读成 None，与「上报了 0」分开（前端前者显示「—」）。
         credit: row.get(29)?,
+        // schema v32：出口方式与出口 IP（空串 = 旧行或没有记录）
+        egress_kind: row.get(35)?,
+        egress_ip: row.get(36)?,
     })
 }
 
@@ -756,7 +759,8 @@ pub(super) fn update_running_request(
          client_reasoning = ?20, upstream_reasoning = ?21, phase = '', phase_started_at = NULL, \
          is_test = ?22, route = ?23, client = ?24, \
          api_key_id = ?25, api_key_name = ?26, api_key_source = ?27, credit = ?28, client_evidence = ?29, \
-         identified_client = ?30, outbound_client = ?31, outbound_user_agent = ?32, protocol = ?33 \
+         identified_client = ?30, outbound_client = ?31, outbound_user_agent = ?32, protocol = ?33, \
+         egress_kind = ?34, egress_ip = ?35 \
          WHERE id = ?1 AND status = 0",
         params![
             entry.id,
@@ -796,6 +800,8 @@ pub(super) fn update_running_request(
             entry.source.outbound_client,
             entry.source.outbound_user_agent,
             entry.source.protocol,
+            entry.egress_kind,
+            entry.egress_ip,
         ],
     )
 }
@@ -823,9 +829,9 @@ pub(super) fn insert_request(conn: &Connection, entry: &RequestEntry) -> rusqlit
          cache_read_tokens, provider, client_model, upstream_model, attempt_details, \
          sensitive_hits, client_reasoning, upstream_reasoning, is_test, route, client, \
          api_key_id, api_key_name, api_key_source, credit, client_evidence, \
-         identified_client, outbound_client, outbound_user_agent, protocol) \
+         identified_client, outbound_client, outbound_user_agent, protocol, egress_kind, egress_ip) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
-         ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)",
+         ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)",
         params![
             entry.id,
             entry.ts,
@@ -860,6 +866,8 @@ pub(super) fn insert_request(conn: &Connection, entry: &RequestEntry) -> rusqlit
             entry.source.outbound_client,
             entry.source.outbound_user_agent,
             entry.source.protocol,
+            entry.egress_kind,
+            entry.egress_ip,
         ],
     )?;
     Ok(())

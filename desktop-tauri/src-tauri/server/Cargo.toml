@@ -118,6 +118,11 @@ bytes = "1"
 # CatPaw 适配器的内联图片压缩（providers/catpaw/image_compress.rs）
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 base64 = "0.22"
+# Cloudflare WARP 用户态出口池的设备密钥（注册与 WireGuard 握手共用）
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+# 用户态 WARP 隧道：WireGuard 握手与用户态 TCP/IP 栈
+boringtun = "0.7"
+smoltcp = { version = "0.12", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-dns"] }
 # Qoder 网页登录的 PKCE verifier / nonce
 getrandom = "0.2"
 # P-256 密钥（两家共用一份依赖）：

@@ -204,6 +204,23 @@
 - 修复：`newParts()` 与 `tool_result` 递归入口的 `thinking` 统一初始化为数组，`parseJsonResponse` 原有的数组分支继续生效
 - 验证：通过远程网关 CDP 复现旧版异常与弹窗存活时间线；注入修复版后弹窗持续存在、预览渲染出 4 个气泡；`node --check` 通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功
 
+### 2026-11-17 补记（ZCode 轮询档 429 换出口）
+
+- 实测：同一出口下，一个 ZCode 套餐池请求在途时，另一个请求换账号仍返回 429（`{"code":3008,"msg":"user concurrency limit exceeded"}`）；换到不同出口 IP 后，两个请求并发均成功，说明该限制包含出口维度
+- 内置提供商的无状态转发路径新增轮询档 429 补救：轮询档账号遇到 429 时先换下一个出口重发，不标记账号冷却、不扣换号预算；换满 3 次仍 429 才落到原有的限额冷却与顺延逻辑
+- 复用了 `AccountStore::get_session_by_id` 的轮询游标（每次选路取下一个出口）与 `MAX_ROTATE_EXIT_RETRIES`
+- 方案文档见 `docs/ZCode免费套餐并发与WARP出口池方案_2026-11-17.md`
+
+### 2026-11-17 补记（ZCode 内建 WARP 出口池）
+
+- 网关进程内新增用户态 WARP 出口池：WARP 设备注册、`boringtun` WireGuard 隧道、`smoltcp` 用户态 TCP/IP、本地 SOCKS5 入口与多出口轮询，不启动子进程
+- ZCode / zcode-intl 账号新增 `zcodeEgressPool` 开关，默认开启；关闭或池未就绪时回退账号原代理或直连
+- 设备只在本次服务运行期间复用，不写磁盘；重启后重新注册，WARP 状态不进入 WebDAV 备份与同步
+- 429 时轮换下一个出口；池内只有一个出口时注册新设备追加后重试，不把账号标记为额度冷却
+- 请求日志 schema v32 新增 `egressKind` / `egressIp`，客户端列下方换行展示 WARP / 代理标签，仅非直连展示，悬停显示出口 IP
+- 实测本地网关：WARP 出口 SOCKS5 请求 Cloudflare trace 返回 200，出口 IP `104.28.225.103`；请求日志可记录 `egressKind=warp`
+- 已知限制：WARP IPv4 为共享出口，多个设备出口 IP 相同；IPv6 端点在当前测试网络不可达，需 `ZCODE_WARP_IPV6=1` 且网络允许时再验证
+
 ### 2026-11-16 补记（请求日志协议展示）
 
 - 请求日志的模型列在模型名下方新增协议行，取值为 `Chat Completions`、`Responses`、`Anthropic`、`Images`，映射改写时为上游名与下游名两行后再接协议行
@@ -293,6 +310,7 @@
 - 2026-11-16 路由组内并发：服务端全量测试 469 个用例，458 通过、11 个既有插件环境条件用例忽略、0 失败（新增默认总数、上限锁定、平均分配余数、账号上限约束、总数小于账号数与开关关闭 6 个用例）；`cargo check -p agent2api-server` 无新增告警；页面岛 TypeScript 检查、Vite 构建与词典重建通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
 - 2026-11-16 请求日志协议展示：服务端全量测试 470 个用例，459 通过、11 个既有插件环境条件用例忽略、0 失败（新增协议在终态与进行中行往返读写 1 个用例，schema 升级用例覆盖 v31）；`cargo check -p agent2api-server` 无新增告警；页面岛 TypeScript 检查、Vite 构建与词典重建通过；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功，产物落 `target\release\agent2api.exe` 与 `target\release\agent2api-server.exe`
 - 2026-11-16 凭证维护误报修复：服务端全量测试 474 个用例，463 通过、11 个既有插件环境条件用例忽略、0 失败（新增 `refresh_advanced` 的 4 个判定用例）；判定改为只有账号原本有有效期时才要求刷新推进凭证指纹
+- 2026-11-17 ZCode 内建 WARP 出口池：服务端全量测试 466 通过、11 个既有插件环境条件用例忽略、0 失败；`cargo check -p agent2api-server` 零错误；`scripts/build-desktop.ps1 -SkipFrontend` Windows Release 构建成功；本地启动后 WARP 出口 SOCKS5 请求 Cloudflare trace 返回 200，出口 IP `104.28.225.103`；ZCode 请求日志可记录 `egressKind=warp`；IPv6 端点在当前网络不可达，默认走 IPv4
 
 ## 可 PR 上游清单（2026-11-10 盘点）
 

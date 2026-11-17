@@ -1,4 +1,7 @@
 {
+  "WARP 出口": "WARP egress",
+  "代理出口": "Proxy egress",
+  "出口 IP：{ip}": "Egress IP: {ip}",
   " · {n} 进行中": " · {n} in progress",
   " · 会话粘住": " · session stuck",
   "<div class=\"cv-parse-empty\">无响应原文</div>": "<div class=\"cv-parse-empty\">No raw response</div>",

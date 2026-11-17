@@ -66,6 +66,8 @@ export function AccountSettingsDialog({ id, onClose, initialAccount, initialPane
   const [balanceToken, setBalanceToken] = React.useState('')
   // ZCode 的「使用哪个套餐」草稿（非 ZCode 账号恒为空串，那一段也不渲染）
   const [planChannel, setPlanChannel] = React.useState(() => zcodePlanOf(account))
+  // ZCode 的 WARP 出口池开关（默认开启；非 ZCode 账号不渲染）
+  const [egressPool, setEgressPool] = React.useState(account?.zcodeEgressPool !== false)
   const [busy, setBusy] = React.useState(false)
   const [status, setStatus] = React.useState<React.ReactNode>('')
   const [provider, setProvider] = React.useState<ProviderSettings | null>(null)
@@ -453,6 +455,9 @@ export function AccountSettingsDialog({ id, onClose, initialAccount, initialPane
       const planPatch = supportsPlanChannel(target) && planChannel !== zcodePlanOf(target)
         ? { zcodePlan: planChannel }
         : {}
+      const egressPoolPatch = supportsPlanChannel(target) && egressPool !== (target.zcodeEgressPool !== false)
+        ? { zcodeEgressPool: egressPool }
+        : {}
       // 顺序（priority）**不在这张表单里**：分组模式下它由拖拽整队写（见
       // accounts-data 的 reorderQueue）。设置弹窗只改「账号自身」的属性，
       // 一次「改备注名」不该顺手把顺序也提交一遍
@@ -468,6 +473,7 @@ export function AccountSettingsDialog({ id, onClose, initialAccount, initialPane
         proxy,
         ...balancePatch,
         ...planPatch,
+        ...egressPoolPatch,
         ...credentialPatch,
         ...concPatch,
         ...(balanceQueryPatch ? { balanceQuery: balanceQueryPatch } : {}),
@@ -673,6 +679,12 @@ export function AccountSettingsDialog({ id, onClose, initialAccount, initialPane
                       onToggleNoAuth={next => { setNoAuthDraft(next); if (next) setApiKeyDraft('') }} /> : null}
                     {supportsPlanChannel(target) ? <SettingGroup title={t('使用套餐')}>
                       <PlanChannelField plan={planChannel} hasJwt={account.canClaim === true} onChange={setPlanChannel} />
+                      <Field className='acct-dlg-toggle-field'>
+                        <div><FieldLabel htmlFor='account-egress-pool'>{t('使用 WARP 出口池')}</FieldLabel>
+                          <FieldDescription>{t('默认开启：ZCode 请求在多个 WARP 出口之间轮换，遇到并发 429 时换出口重试，不把账号标记为限额。')}</FieldDescription>
+                        </div>
+                        <Switch id='account-egress-pool' checked={egressPool} onCheckedChange={setEgressPool} />
+                      </Field>
                     </SettingGroup> : null}
                     {provider ? <div className='acct-dlg-related'>
                       <AccountSettingsIcon name='agent' size={18} />

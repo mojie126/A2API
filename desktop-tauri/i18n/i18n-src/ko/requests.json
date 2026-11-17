@@ -1,4 +1,7 @@
 {
+  "WARP 出口": "WARP 송신",
+  "代理出口": "프록시 송신",
+  "出口 IP：{ip}": "송신 IP: {ip}",
   " · {n} 进行中": " · {n} 처리 중",
   " · 会话粘住": " · 세션 고정",
   "<div class=\"cv-parse-empty\">无响应原文</div>": "<div class=\"cv-parse-empty\">응답 원문 없음</div>",

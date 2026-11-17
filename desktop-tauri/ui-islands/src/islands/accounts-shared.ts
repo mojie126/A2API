@@ -184,6 +184,8 @@ export type AccountRecord = {
   canClaim?: boolean
   /** ZCode：这一行当前走哪条上游通道（`coding-plan` / `start-plan`，见 accounts-domain 的 ZCODE_PLAN_*） */
   zcodePlan?: string
+  /** ZCode：是否使用 WARP 出口池（默认开启） */
+  zcodeEgressPool?: boolean
   hasAccessToken?: boolean
   accessTokenExpiresAt?: number | null
   canRefresh?: boolean

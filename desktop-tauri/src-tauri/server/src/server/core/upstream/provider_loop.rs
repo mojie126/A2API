@@ -700,6 +700,8 @@ async fn attempt_queue(
     // 它是限额冷却的键，与发出去的字节同源（见 `payload::SendBody`）。
     // 缓存因此不只省一次脱敏：429 记账与成功清理都从这里取真名，不必再解析一遍。
     let mut send_cache: HashMap<(&'static str, String, String, bool), SendBody<'_>> = HashMap::new();
+    // 轮询档账号的换出口次数（只对 429 生效，见下面 Err 分支的补救）
+    let mut exit_rotations = 0usize;
 
     // 标签是必需的：下面「429 降级到下一个账号」发生在**内层发送循环**里，
     // 裸 `continue` 会回到内层（用同一个账号再发一次，正好是要避免的事）。
@@ -723,14 +725,23 @@ async fn attempt_queue(
             &ctx.routing,
         )
         .await?;
+        let mut warp_exit = None;
         if let Some(override_proxy) = ctx.proxy_override {
             target.proxy = override_proxy.clone();
             target.proxy_notice = None;
-        } else if target.proxy_notice.is_some()
-        {
-            return Err(GatewayError::with_status(400,
-                "指定账号的代理不可用；未回退直连、系统代理或其他账号")
-                .with_code("account_proxy_unavailable"));
+        } else {
+            // WARP 出口池：ZCode 账号默认开启；池未就绪时保留账号原代理
+            warp_exit = warp_exit_for(target.account.as_ref(), &target.provider);
+            if let Some(exit) = &warp_exit {
+                target.proxy = Some(exit.proxy.clone());
+                target.proxy_notice = None;
+                ctx.telemetry.note_egress("warp", &exit.egress_ip());
+            }
+            if target.proxy_notice.is_some() {
+                return Err(GatewayError::with_status(400,
+                    "指定账号的代理不可用；未回退直连、系统代理或其他账号")
+                    .with_code("account_proxy_unavailable"));
+            }
         }
         let direct = match ctx.proxy_override {
             Some(proxy) => proxy.is_none(),
@@ -1373,6 +1384,15 @@ async fn attempt_queue(
                         .unwrap_or_else(|| "?".to_string()),
                 ),
             );
+            // 请求日志的出口标签：只有非直连才展示；WARP 池已在选路后记录
+            if warp_exit.is_none() {
+                let egress_kind = if target.proxy.as_ref().is_some_and(|proxy| proxy.non_direct) {
+                    "proxy"
+                } else {
+                    "direct"
+                };
+                ctx.telemetry.note_egress(egress_kind, "");
+            }
             let transport = TransportRequest {
                 url: plan.url,
                 headers: plan.headers,
@@ -1489,6 +1509,37 @@ async fn attempt_queue(
                     if super::vision_compat::handles_error(ctx, &failure.error) {
                         ctx.telemetry.finish_last_attempt(Some(i64::from(failure.error.status_code)), Some(&failure.error.message));
                         return Err(failure.error);
+                    }
+                    // ── 轮询档的 429 补救：换下一个出口重发 ─────────────────
+                    // 这类 429 是上游按出口判定的并发或额度限制，换账号无效，
+                    // 换出口往往就能过。回到账号循环重新选路时会按轮询游标取
+                    // 下一个出口（见 AccountStore::get_session_by_id），同账号
+                    // 继续排在最前；不标记账号冷却、不扣换号预算。换满仍失败
+                    // 才落到下面的限额分支，按原有逻辑冷却并顺延下一个账号。
+                    if matches!(
+                        &failure.class,
+                        UpstreamErrorClass::QuotaLimited { status: 429, .. }
+                    ) && (custom_forward::is_rotate_account(target.account.as_ref()) || warp_exit.is_some())
+                        && exit_rotations < MAX_ROTATE_EXIT_RETRIES
+                    {
+                        exit_rotations += 1;
+                        // 本轮的尝试明细在这里定稿，下一轮会追加新的一条
+                        ctx.telemetry.finish_last_attempt(
+                            Some(i64::from(failure.error.status_code)),
+                            Some(&failure.error.message),
+                        );
+                        ctx.telemetry.note_attempt_retry("轮询换出口重试", Some(429), 0);
+                        // 池里没有其他出口时，注册一台新设备追加到池中再试；
+                        // 有多个出口时下一轮轮询会自然换到另一个
+                        if let (Some(_), Some(pool)) = (
+                            warp_exit.as_ref(),
+                            crate::server::core::warp::pool::global(),
+                        ) {
+                            if pool.len() <= 1 {
+                                let _ = pool.add_exit().await;
+                            }
+                        }
+                        continue 'accounts;
                     }
                     if let Some(account_id) = target.account_id.as_deref() {
                         if failure.policy.suspend_account {
@@ -3342,4 +3393,22 @@ mod local_failure {
         assert_eq!(502, error.status_code);
         assert_eq!(None, error.retry_after_secs, "内容型不该带 Retry-After");
     }
+}
+
+/// 本次选路是否要使用 WARP 出口池（ZCode 账号开关默认开启）
+fn warp_exit_for(
+    account: Option<&Value>,
+    provider: &str,
+) -> Option<crate::server::core::warp::pool::WarpExit> {
+    if !matches!(provider, "zcode" | "zcode-intl") {
+        return None;
+    }
+    let enabled = account
+        .and_then(|item| item.get("zcodeEgressPool"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    if !enabled {
+        return None;
+    }
+    crate::server::core::warp::pool::global().and_then(|pool| pool.pick())
 }

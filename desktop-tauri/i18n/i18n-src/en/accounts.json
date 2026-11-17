@@ -1,4 +1,6 @@
 {
+  "使用 WARP 出口池": "Use WARP egress pool",
+  "默认开启：ZCode 请求在多个 WARP 出口之间轮换，遇到并发 429 时换出口重试，不把账号标记为限额。": "On by default: ZCode requests rotate across multiple WARP egresses and retry on another egress when concurrency 429 occurs, without marking the account as rate-limited.",
   " · 今日 {used} / {quota}": " · Today {used} / {quota}",
   " · 当前 {n}": " · Currently {n}",
   " · 本周期 {used} / {quota}": " · This period {used} / {quota}",

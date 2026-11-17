@@ -352,7 +352,7 @@ pub fn is_reserved(key: &str) -> bool {
 /// 请求日志的模型列在模型名下方展示这条请求走的协议
 /// （`chat` / `responses` / `anthropic` / `images`）。空串 = 旧行或没有记录，
 /// 与 `client_model` 同一套「键恒在、空串就是没有」的契约。
-pub const SCHEMA_VERSION: i64 = 31;
+pub const SCHEMA_VERSION: i64 = 32;
 
 /// 版本 1 的全部表与索引：改造前所有 JSON / JSONL 文件的对应形态。
 ///
@@ -920,6 +920,16 @@ const V31_SCHEMA: &str = "
 ALTER TABLE requests ADD COLUMN protocol TEXT NOT NULL DEFAULT '';
 ";
 
+/// 版本 32：`requests` 补出口方式与出口 IP（schema v32）
+///
+/// `egress_kind` 取 `direct` / `proxy` / `warp`，空串 = 旧行或没记录
+/// 前端只对非直连的请求在客户端列下方展示出口标签
+const V32_SCHEMA: &str = "
+-- ── requests 补出口方式与出口 IP（schema v32）────────────────
+ALTER TABLE requests ADD COLUMN egress_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE requests ADD COLUMN egress_ip TEXT NOT NULL DEFAULT '';
+";
+
 /// 把库升到 [`SCHEMA_VERSION`]（幂等：已是最新版时什么都不做）。
 ///
 /// **库版本高于本程序时返回 `Err` 拒绝打开**（v14 起有意反转的一条既有决定，
@@ -1105,6 +1115,8 @@ fn apply_version(
         30 => conn.execute_batch(include_str!("schema_client_egress.sql")),
         // v31：requests 补下游请求协议一列（模型列第二行展示，见 V31_SCHEMA）
         31 => conn.execute_batch(V31_SCHEMA),
+        // v32：requests 补出口方式与出口 IP（客户端列出口标签，见 V32_SCHEMA）
+        32 => conn.execute_batch(V32_SCHEMA),
         _ => Ok(()),
     }
 }

@@ -135,6 +135,12 @@ impl AccountStore {
                     .to_string(),
             ),
         );
+        // WARP 出口池开关（默认开启）：账号页据此展示，转发层据此决定是否
+        // 自动使用出口池
+        public.insert(
+            "zcodeEgressPool".to_string(),
+            Value::Bool(record.zcode_egress_pool()),
+        );
         // `chatSupported` / `maxConcurrent` 不在这里写：它们是跨家统一事实，
         // 由 `store_view::public_account` 注入（与 Qoder 那份同样的处置）
         Value::Object(public)
@@ -206,7 +212,35 @@ impl AccountStore {
         Ok(changes)
     }
 
-    /// 落一次领取结果（套餐 id → 时刻），返回是否写盘成功。
+    /// 设置该 ZCode 账号是否使用 WARP 出口池（默认开启），返回变化描述
+    ///
+    /// 与 `update_zcode_plan` 同一处境：只有 ZCode 认识这个键，所以显式落盘并做
+    /// 类型校验；关闭时转发层回到账号原代理或直连，不影响其他提供商
+    pub fn update_zcode_egress_pool(
+        &self,
+        account_id: &str,
+        patch: &Value,
+    ) -> Result<Vec<String>, AccountStoreError> {
+        let Some(enabled) = patch.as_bool() else {
+            return Err(AccountStoreError::bad_request(
+                "ZCode 出口池开关需要布尔值",
+            ));
+        };
+        let guard = self.guard();
+        let Some(mut record) = self.record_by_id(&guard, account_id) else {
+            return Err(AccountStoreError::not_found("账号不存在"));
+        };
+        if record.zcode_egress_pool() == enabled {
+            return Ok(Vec::new());
+        }
+        record.set_zcode_egress_pool(enabled);
+        record.set_updated_at(logging::now_ms());
+        self.with_conn(&guard, |conn| sql::update_in_place(conn, &record))?;
+        Ok(vec![format!(
+            "WARP 出口池 → {}",
+            if enabled { "开启" } else { "关闭" }
+        )])
+    }
     ///
     /// 成功与「上游说已领过」都该写：后者意味着这一份套餐已经被领掉了
     /// （可能是另一台设备领的），界面同样该显示「今日已领」——

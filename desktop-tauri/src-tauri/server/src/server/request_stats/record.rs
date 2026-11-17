@@ -255,6 +255,13 @@ pub struct RequestEntry {
     /// 请求发生时的统计分类与识别依据；旧行没有依据，不重新猜测来源。
     #[serde(flatten)]
     pub source: RequestSource,
+    /// 出口方式（`direct` / `proxy` / `warp`；空串 = 旧行或没有记录）。
+    /// 前端只对非直连的请求在客户端列下方展示出口标签。
+    #[serde(rename = "egressKind", default, skip_serializing_if = "String::is_empty")]
+    pub egress_kind: String,
+    /// 出口 IP（WARP 出口在注册或探测时缓存；空串 = 未采集）。
+    #[serde(rename = "egressIp", default, skip_serializing_if = "String::is_empty")]
+    pub egress_ip: String,
 }
 
 /// 一个被命中的敏感词及其次数（存储契约）。
@@ -452,6 +459,10 @@ pub struct NewRequestEntry {
     /// 不采集的路径为空串）。模型测试没有下游 UA，保持空串 —— 「谁发起的」
     /// 那件事已经由 `is_test` 表达，这里不编一个 `test` 值出来。
     pub source: RequestSource,
+    /// 出口方式（`direct` / `proxy` / `warp`；空串 = 未记录）
+    pub egress_kind: String,
+    /// 出口 IP（WARP 出口缓存值；空串 = 未采集）
+    pub egress_ip: String,
 }
 
 impl NewRequestEntry {
@@ -492,6 +503,8 @@ impl NewRequestEntry {
             // 客户端同样「有采集才有值」：入口取到 UA 才填（见 `RequestEntry::client`），
             // 拿不到 UA 的路径保持空串，前端显示占位符
             source: RequestSource::default(),
+            egress_kind: String::new(),
+            egress_ip: String::new(),
         }
     }
 
@@ -627,6 +640,9 @@ impl NewRequestEntry {
             is_test: self.is_test,
             // 分类在入口定稿，收尾时不因设置变动重新归类。
             source: self.source.normalized(),
+            // 出口方式与出口 IP 原样透传（空串 = 没有记录）
+            egress_kind: self.egress_kind.trim().to_string(),
+            egress_ip: self.egress_ip.trim().to_string(),
         }
     }
 }

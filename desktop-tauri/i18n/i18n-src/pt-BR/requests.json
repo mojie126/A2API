@@ -1,4 +1,7 @@
 {
+  "WARP 出口": "Saída WARP",
+  "代理出口": "Saída do proxy",
+  "出口 IP：{ip}": "IP de saída: {ip}",
   " · {n} 进行中": " · {n} em andamento",
   " · 会话粘住": " · sessão presa",
   "<div class=\"cv-parse-empty\">无响应原文</div>": "<div class=\"cv-parse-empty\">Sem resposta original</div>",

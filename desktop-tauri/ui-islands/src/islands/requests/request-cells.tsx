@@ -39,6 +39,10 @@ export type RequestEntry = {
   outboundUserAgent?: string
   clientEvidence?: import('../../../../ui-shared/client-identification').ClientEvidence
   apiKeyId?: string; apiKeyName?: string; apiKeySource?: string
+  /** 出口方式（direct / proxy / warp；空串或缺键 = 旧行） */
+  egressKind?: string
+  /** 出口 IP（仅 WARP 出口有缓存值） */
+  egressIp?: string
 }
 
 export type VisibleColumn = { key: string; label: string; sel: string; track: string; align: 'left' | 'center' | 'right' }
@@ -416,7 +420,22 @@ export function RequestCell({ entry, column, namesHidden }: { entry: RequestEntr
         : evidence?.userAgent || t('来源客户端：{client}', { client: label }),
         entry.outboundUserAgent ? t('上游实际 User-Agent：{value}', { value: entry.outboundUserAgent }) : '',
       ].filter(Boolean).join('\n')
-      return <span key={key} className={className} title={tip}>{label}</span>
+      const egressKind = String(entry.egressKind ?? '').trim()
+      const egressIp = String(entry.egressIp ?? '').trim()
+      // 只有非直连的请求才挂出口标签；直连保持原样，不增加视觉噪音
+      const egressLabel = egressKind === 'warp' ? t('WARP 出口')
+        : egressKind === 'proxy' ? t('代理出口') : ''
+      return (
+        <span key={key} className={className} title={tip}>
+          <span className='inline-flex flex-col items-start gap-0.5'>
+            <span>{label}</span>
+            {egressLabel ? (
+              <Badge variant='outline' shape='tag'
+                title={egressIp ? t('出口 IP：{ip}', { ip: egressIp }) : undefined}>{egressLabel}</Badge>
+            ) : null}
+          </span>
+        </span>
+      )
     }
 
     case 'apiKey': {

@@ -1,4 +1,6 @@
 {
+  "使用 WARP 出口池": "Usar pool de saída WARP",
+  "默认开启：ZCode 请求在多个 WARP 出口之间轮换，遇到并发 429 时换出口重试，不把账号标记为限额。": "Ativado por padrão: as solicitações do ZCode alternam entre várias saídas WARP e tentam outra saída em caso de 429 por concorrência, sem marcar a conta como limitada.",
   " · 今日 {used} / {quota}": " · Hoje {used} / {quota}",
   " · 当前 {n}": " · Atual {n}",
   " · 本周期 {used} / {quota}": " · Este período {used} / {quota}",

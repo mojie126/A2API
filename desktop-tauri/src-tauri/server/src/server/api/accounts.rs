@@ -1458,6 +1458,31 @@ pub async fn patch_account(state: &ServerState, id: &str, body: &Bytes) -> Respo
             Err(error) => return store_error(error),
         }
     }
+    // ZCode 的 WARP 出口池开关（默认开启）：同样只有这一家认这个键
+    if let Some(value) = patch.get("zcodeEgressPool") {
+        if state.store().zcode_account_record(&id).is_none() {
+            let known = state
+                .store()
+                .list_accounts()
+                .get("accounts")
+                .and_then(Value::as_array)
+                .map(|accounts| {
+                    accounts
+                        .iter()
+                        .any(|item| item.get("id").and_then(Value::as_str) == Some(id))
+                })
+                .unwrap_or(false);
+            return if known {
+                management_error(400, "只有 ZCode 账号可以设置 WARP 出口池（zcodeEgressPool）")
+            } else {
+                store_error(AccountStoreError::new("账号不存在", 404))
+            };
+        }
+        match state.store().update_zcode_egress_pool(&id, value) {
+            Ok(changes) => balance_changes.extend(changes),
+            Err(error) => return store_error(error),
+        }
+    }
     // 自定义账号的凭证（`apiKey` / `noAuth`）**与上游地址覆盖项（`baseUrl`）**：
     // 与上面两段同一处境 —— 只有自定义家认这几个键，所以不进通用 `apply_patch`。
     // **账号 id 由 HTTP 路径给定，改凭证不改 id**（id 是身份：限额冷却、请求日志、

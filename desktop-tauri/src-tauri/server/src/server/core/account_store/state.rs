@@ -485,6 +485,31 @@ impl StoredAccount {
         }
     }
 
+    /// ZCode 账号是否使用 WARP 出口池（默认开启，缺失键按开启处理）
+    pub fn zcode_egress_pool(&self) -> bool {
+        const KEY: &str = "zcodeEgressPool";
+        self.fields
+            .get(KEY)
+            .and_then(Value::as_bool)
+            .or_else(|| {
+                self.fields
+                    .get("pluginSecret")
+                    .and_then(|secret| secret.get(KEY))
+                    .and_then(Value::as_bool)
+            })
+            .unwrap_or(true)
+    }
+
+    pub fn set_zcode_egress_pool(&mut self, value: bool) {
+        const KEY: &str = "zcodeEgressPool";
+        self.fields.insert(KEY.to_string(), Value::Bool(value));
+        for field in ["pluginSecret", "pluginPublic"] {
+            if let Some(Value::Object(fields)) = self.fields.get_mut(field) {
+                fields.insert(KEY.to_string(), Value::Bool(value));
+            }
+        }
+    }
+
     /// 是否「有可用凭证」（当前账号派生、凭据查询都以此为准）
     pub fn has_token(&self) -> bool {
         !self.access_token().is_empty()

@@ -251,6 +251,10 @@ pub struct TelemetrySnapshot {
     pub outbound_client: String,
     /// 上游实际收到的 User-Agent
     pub outbound_user_agent: String,
+    /// 出口方式（`direct` / `proxy` / `warp`；空串 = 未记录）
+    pub egress_kind: String,
+    /// 出口 IP（WARP 出口缓存值；空串 = 未采集）
+    pub egress_ip: String,
     /// 实际发给上游的模型名（映射 + 备援按家改写后的**最终值**；空串 =
     /// 一次都没发出去，例如转发前就失败）。
     ///
@@ -903,6 +907,17 @@ impl RequestTelemetry {
         let mut guard = self.lock();
         guard.outbound_client = client.trim().to_string();
         guard.outbound_user_agent = user_agent.map(str::trim).unwrap_or("").to_string();
+        self.flush_live(&guard);
+    }
+
+    /// 记录本次请求实际使用的出口方式与出口 IP（覆盖式，最后一次为准）
+    ///
+    /// `kind` 取 `direct` / `proxy` / `warp`；`ip` 只有 WARP 出口在注册或探测
+    /// 时缓存的值，普通代理留空。前端只对非直连的请求展示出口标签。
+    pub fn note_egress(&self, kind: &str, ip: &str) {
+        let mut guard = self.lock();
+        guard.egress_kind = kind.trim().to_string();
+        guard.egress_ip = ip.trim().to_string();
         self.flush_live(&guard);
     }
 
