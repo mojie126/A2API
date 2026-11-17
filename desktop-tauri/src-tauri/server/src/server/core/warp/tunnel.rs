@@ -77,6 +77,9 @@ pub async fn connect(registration: &WarpRegistration, endpoint: &str) -> Result<
                     if let Ok(size) = received {
                         let result = tunnel.decapsulate(None, &recv_buffer[..size], &mut buffer);
                         send_or_queue(&socket, result, &inbound_tx).await;
+                        // 握手完成后把建链前排队的 IP 包吐出来，否则最先发出的
+                        // SYN 会一直留在 boringtun 的队列里
+                        flush_queued(&socket, &mut tunnel, &mut buffer, &inbound_tx).await;
                     }
                 }
                 packet = outbound_rx.recv() => {
@@ -87,6 +90,7 @@ pub async fn connect(registration: &WarpRegistration, endpoint: &str) -> Result<
                 _ = tick.tick() => {
                     let result = tunnel.update_timers(&mut buffer);
                     send_or_queue(&socket, result, &inbound_tx).await;
+                    flush_queued(&socket, &mut tunnel, &mut buffer, &inbound_tx).await;
                 }
             }
         }
@@ -130,12 +134,34 @@ async fn send_or_queue(
             let _ = inbound.send(data.to_vec()).await;
         }
         TunnResult::Err(error) => {
-            crate::server::logging::verbose(
-                "[WARP]",
-                &format!("隧道加解密错误: {error:?}"),
-            );
+            // 会话轮换期间的 ConnectionExpired 是正常现象（旧连接的海量重传），
+            // 不写日志，避免把运行日志刷满
+            let detail = format!("{error:?}");
+            if detail != "ConnectionExpired" {
+                crate::server::logging::verbose(
+                    "[WARP]",
+                    &format!("隧道加解密错误: {detail}"),
+                );
+            }
         }
         TunnResult::Done => {}
+    }
+}
+
+/// 倾空 boringtun 在会话建立前缓存的 IP 包
+async fn flush_queued(
+    socket: &UdpSocket,
+    tunnel: &mut Tunn,
+    buffer: &mut [u8],
+    inbound: &mpsc::Sender<Vec<u8>>,
+) {
+    for _ in 0..32 {
+        let result = tunnel.decapsulate(None, &[], buffer);
+        let done = matches!(result, TunnResult::Done | TunnResult::Err(_));
+        send_or_queue(socket, result, inbound).await;
+        if done {
+            break;
+        }
     }
 }
 

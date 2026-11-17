@@ -264,7 +264,9 @@ async fn build_tunnel(registration: &WarpRegistration, index: usize) -> Result<W
             Ok(exit) => return Ok(exit),
             Err(error) => {
                 last_error = format!("{endpoint}: {error}");
-                logging::log(
+                // 单个端点失败是选路过程，不是运行错误；只写详细日志，
+                // 避免管理页把每个备用端点都报成错误
+                logging::verbose(
                     "[WARP]",
                     &format!("WARP 出口 {} 端点不可用：{last_error}", index + 1),
                 );
@@ -326,7 +328,9 @@ async fn connect_endpoint(
         username: String::new(),
         password: String::new(),
         label: format!("WARP 出口 {}", index + 1),
-        non_direct: true,
+        // WARP 出口是本地 SOCKS5，走 chain::endpoint 的直通分支；
+        // 标成 non_direct 会被当作需要系统代理中转的代理链，容器里会直接失败
+        non_direct: false,
     };
     Ok(WarpExit {
         port,
@@ -343,8 +347,6 @@ fn endpoint_order(registration: &WarpRegistration) -> Vec<String> {
     let prefer_ipv6 = std::env::var("ZCODE_WARP_IPV6")
         .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
         .unwrap_or(false);
-    // 注册接口下发的 peer 端点并不总是可达（实测 162.159.192.7 会超时），
-    // 先用已知可用的 Cloudflare 端点，再补注册结果里的端点
     let ipv4_preferred = [
         "162.159.192.1:2408",
         "162.159.193.1:2408",
@@ -352,15 +354,26 @@ fn endpoint_order(registration: &WarpRegistration) -> Vec<String> {
     ];
     let ipv6_preferred = ["[2606:4700:d0::a29f:c001]:2408"];
     let mut ordered: Vec<String> = Vec::new();
+    // 先试注册结果里的标准端点：实测已知固定端点（.1 / .193）在本网络
+    // 经常超时，注册端点通常更快可用；IPv6 端点仅在显式开启时加入
+    for endpoint in &registration.endpoints {
+        let Ok(addr) = endpoint.parse::<std::net::SocketAddr>() else {
+            continue;
+        };
+        if addr.port() != 2408 {
+            continue;
+        }
+        if addr.is_ipv6() && !prefer_ipv6 {
+            continue;
+        }
+        push_unique(&mut ordered, endpoint);
+    }
     let preferred: Vec<&str> = if prefer_ipv6 {
         ipv6_preferred.iter().chain(ipv4_preferred.iter()).copied().collect()
     } else {
-        ipv4_preferred.iter().chain(ipv6_preferred.iter()).copied().collect()
+        ipv4_preferred.iter().copied().collect()
     };
     for endpoint in preferred {
-        push_unique(&mut ordered, endpoint);
-    }
-    for endpoint in &registration.endpoints {
         push_unique(&mut ordered, endpoint);
     }
     ordered

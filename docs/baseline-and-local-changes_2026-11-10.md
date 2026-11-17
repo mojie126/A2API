@@ -218,7 +218,9 @@
 - 设备只在本次服务运行期间复用，不写磁盘；重启后重新注册，WARP 状态不进入 WebDAV 备份与同步
 - 429 时轮换下一个出口；池内只有一个出口时注册新设备追加后重试，不把账号标记为额度冷却
 - 请求日志 schema v32 新增 `egressKind` / `egressIp`，客户端列下方换行展示 WARP / 代理标签，仅非直连展示，悬停显示出口 IP
-- 实测本地网关：WARP 出口 SOCKS5 请求 Cloudflare trace 返回 200，出口 IP `104.28.225.103`；请求日志可记录 `egressKind=warp`
+- 实测本地网关：WARP 出口 SOCKS5 请求 Cloudflare trace 返回 200，响应为 `ip=104.28.225.103` 与 `warp=on`；请求日志可记录 `egressKind=warp`
+- 出口代理按普通本地 SOCKS5 接入（`nonDirect=false`），容器内不再出现「未配置可用的系统代理」错误
+- 端点顺序以注册结果里的 2408 端口为先，IPv6 端点仅在 `ZCODE_WARP_IPV6=1` 时加入；单端点失败写详细日志，会话轮换期的 `ConnectionExpired` 不再写日志
 - 已知限制：WARP IPv4 为共享出口，多个设备出口 IP 相同；IPv6 端点在当前测试网络不可达，需 `ZCODE_WARP_IPV6=1` 且网络允许时再验证
 
 ### 2026-11-16 补记（请求日志协议展示）
