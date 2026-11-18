@@ -1,6 +1,6 @@
 import { invalidateUsageTasks } from './accounts-usage-tasks'
 import {
-  errorMessage, POOL_VALUE_PREFIX, shared, toast,
+  errorMessage, POOL_VALUE_PREFIX, WARP_VALUE_PREFIX, shared, toast,
   type AccountRecord,
   type UsageEntry,
 } from './accounts-shared'
@@ -13,6 +13,7 @@ import {
   allAccounts, bump, findAccount, getStore, isPicked, patch,
 } from './accounts-store'
 import { invalidateProxyPoolCache, proxyPoolSnapshot, refreshProxyPool } from './proxy-pool-cache'
+import { refreshWarpExits, warpExitsSnapshot } from './accounts-warp-cache'
 import { installListRefresh, refreshList } from './accounts-refresh'
 import { syncAccountSorting } from './accounts-sort'
 import { confirmBatchResult, refreshSavedAccounts, updateAccountConfirmed } from './accounts-update'
@@ -33,8 +34,14 @@ export { saveGroupSortRules as setGroupSortRules } from './accounts-sort'
 
 export {
   acceptProxyPool, ensureProxyPoolOptions, invalidateProxyPoolCache, poolError,
-  proxyPoolOptions, proxyPoolSnapshot, refreshProxyPool, subscribeProxyPool,
+  proxyPoolOptions, proxyPoolSnapshot, proxyPoolVersion, refreshProxyPool, subscribeProxyPool,
 } from './proxy-pool-cache'
+
+/** 代理列的 WARP 设备清单（与代理池同一套缓存 / 订阅口径） */
+export {
+  ensureWarpExits, refreshWarpExits, subscribeWarpExits, warpExitLabel, warpExitsError,
+  warpExitsReady, warpExitsSnapshot, warpExitsVersion,
+} from './accounts-warp-cache'
 
 /* ─── 弹窗 ─────────────────────────────────── */
 
@@ -240,9 +247,10 @@ export async function clearLimits(id: string, model?: string): Promise<void> {
 }
 
 /**
- * 代理列选中即保存（`value` 是下拉的值）。下拉的选项只有三类：
+ * 代理列选中即保存（`value` 是下拉的值）。下拉的选项只有四类：
  *   ''                     → 直连（proxy = null）
  *   `pool:<proxyId>`       → 引用「网络代理」页的池条目
+ *   `warp:<deviceId>`      → 引用出口池里的一台 WARP 设备（运行期注册）
  *   两个 `__proxy_*__` 占位值 → 「当前值的显示项」与「打开设置弹窗」，
  *                             都不是一次修改（在前两个分支里拦掉）
  *
@@ -270,7 +278,10 @@ export async function applyProxyPick(id: string, value: string | null, fallback:
   const poolId = value.startsWith(POOL_VALUE_PREFIX)
     ? value.slice(POOL_VALUE_PREFIX.length).trim()
     : ''
-  if (value !== '' && !poolId) return
+  const warpId = value.startsWith(WARP_VALUE_PREFIX)
+    ? value.slice(WARP_VALUE_PREFIX.length).trim()
+    : ''
+  if (value !== '' && !poolId && !warpId) return
   if (poolId) {
     const item = (proxyPoolSnapshot() || []).find(entry => entry.id === poolId)
     if (item && item.enabled === false) {
@@ -280,8 +291,19 @@ export async function applyProxyPick(id: string, value: string | null, fallback:
       return
     }
   }
+  if (warpId) {
+    // 设备由出口池运行期注册：清单里没有说明它已被删除或重启重建，
+    // 存下去只会让这个账号在解析时报「设备不存在」
+    const item = (warpExitsSnapshot() || []).find(entry => entry.id === warpId)
+    if (!item) {
+      toast(t('该 WARP 设备已不存在，请刷新后重新选择'), 'err')
+      return
+    }
+  }
   try {
-    const proxy = poolId ? { source: 'pool', proxyId: poolId } : null
+    const proxy = warpId
+      ? { source: 'warp', deviceId: warpId }
+      : poolId ? { source: 'pool', proxyId: poolId } : null
     await updateAccountConfirmed(id, { proxy })
     toast(`✅ ${t('代理已更新')}`)
   } catch (error) {
@@ -349,6 +371,8 @@ export type AccountsViewApi = {
    * 可能一次都没重新读过。失败不抛，界面按 `poolError()` 显示「读取失败」。
    */
   refreshProxyPool(): Promise<void>
+  /** 强制重读 WARP 设备清单（切回本页时调，设备随服务重启重建） */
+  refreshWarpExits(): Promise<void>
   applyBalances(
     balances: { results?: Array<Record<string, unknown>>; at?: unknown } | null | undefined,
   ): number
@@ -464,6 +488,7 @@ export function installAccountsApi(): void {
     invalidateUsageTasks,
     syncConnections,
     refreshProxyPool,
+    refreshWarpExits,
     applyBalances,
     syncBalancesSnapshot,
     queryUsageFor,

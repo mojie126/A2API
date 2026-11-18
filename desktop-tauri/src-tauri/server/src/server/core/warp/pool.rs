@@ -212,6 +212,24 @@ impl WarpPool {
         None
     }
 
+    /// 按设备 id 取出口（账号代理引用指定设备时使用）
+    ///
+    /// 与 `pick` / `pick_for` 不同，这里不计入使用统计：解析账号出口是
+    /// 展示与出网准备，不代表一次真实的出口分配
+    pub fn find(&self, id: &str) -> Option<WarpExit> {
+        if id.is_empty() {
+            return None;
+        }
+        let Ok(slots) = self.exits.lock() else {
+            return None;
+        };
+        slots
+            .iter()
+            .flatten()
+            .find(|exit| exit.id == id)
+            .cloned()
+    }
+
     /// 该账号是否仍在 WARP 出口的临时绑定期内
     pub fn is_bound(&self, account_id: &str) -> bool {
         if account_id.is_empty() {

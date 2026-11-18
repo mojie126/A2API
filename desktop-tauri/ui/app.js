@@ -603,6 +603,8 @@ function showPage(name, { persist = true, checkUpdate = false } = {}) {
     // 代理列的下拉读的是与「网络代理」页共用的那份池缓存：那一页的写操作会就地
     // 更新它，但池也可能在应用外被改过（另一个窗口 / 手工改库），切回来时重读一次
     void window.wbAccountsView?.refreshProxyPool?.();
+    // WARP 设备同理：设备随服务重启重建，切回账号页时对一次最新清单
+    void window.wbAccountsView?.refreshWarpExits?.();
   }
   // 网关 Key 页持有数据，切进去时拉一次最新（模型管理页在上面已经拉过）
   if (page === 'keys') {

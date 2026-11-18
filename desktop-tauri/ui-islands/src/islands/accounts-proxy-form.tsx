@@ -11,7 +11,7 @@ import {
   errorMessage, esc, poolItemLabel, shared, toast,
   type AccountRecord, type PoolItem,
 } from './accounts-shared'
-import { proxyPoolOptions } from './accounts-data'
+import { ensureWarpExits, proxyPoolOptions, refreshWarpExits, subscribeWarpExits, warpExitLabel, warpExitsError, warpExitsReady, warpExitsSnapshot } from './accounts-data'
 import { DIALOG_SEG_CLASS } from './dialog-segmented'
 import type { ClashProxySnapshot } from '../../../ui-shared/clash-proxy'
 import { readSystemProxy } from '../../../ui-shared/proxy-system'
@@ -33,15 +33,18 @@ function testFailure(result?: { error?: string; status?: unknown } | null): stri
 export type ProxyPayload =
   | null
   | { source: 'pool'; proxyId: string }
+  | { source: 'warp'; deviceId: string }
   | { source: 'rotate'; all: boolean; proxyIds?: string[] }
   | { source: 'clash'; listenerUid: string }
   | { source: 'custom'; protocol: 'http' | 'socks5'; host: string; port: number; username: string; password: string; nonDirect?: boolean }
 
 export type ProxyDraft = {
-  mode: 'none' | 'pool' | 'rotate' | 'clash' | 'custom' | 'retired'
+  mode: 'none' | 'pool' | 'warp' | 'rotate' | 'clash' | 'custom' | 'retired'
   listenerUid: string
   /** 池条目 id（mode === 'pool'） */
   proxyId: string
+  /** WARP 设备 id（mode === 'warp'；设备由出口池在运行期注册） */
+  deviceId: string
   /** 轮询档：true = 池里全部启用的出口（"全部"，默认档；false = 只在 rotateIds 里轮） */
   rotateAll: boolean
   /** 轮询档：指定要轮询的池条目 id（rotateAll 为 true 时不用） */
@@ -61,10 +64,12 @@ export function draftOfProxy(proxy: AccountRecord['proxy']): ProxyDraft {
   const rotate = source === 'rotate'
   return {
     mode: source === 'pool' ? 'pool'
-      : rotate ? 'rotate'
-        : source === 'clash' ? 'clash' : source === 'custom' ? 'custom' : source === 'subscription' ? 'retired' : 'none',
+      : source === 'warp' ? 'warp'
+        : rotate ? 'rotate'
+          : source === 'clash' ? 'clash' : source === 'custom' ? 'custom' : source === 'subscription' ? 'retired' : 'none',
     listenerUid: source === 'clash' ? String(config?.listenerUid || '') : '',
     proxyId: source === 'pool' ? String(config?.proxyId || '') : '',
+    deviceId: source === 'warp' ? String(config?.deviceId || '') : '',
     // `all` 缺键按「全部」读（后端同一个口径：那是这一档的默认语义）
     rotateAll: rotate ? config?.all !== false : true,
     rotateIds: rotate && Array.isArray(config?.proxyIds) ? config.proxyIds.map(String) : [],
@@ -88,6 +93,10 @@ export function readProxyDraft(draft: ProxyDraft): ProxyPayload {
   if (draft.mode === 'pool') {
     if (!draft.proxyId) throw new Error(t('请先选择已保存的代理'))
     return { source: 'pool', proxyId: draft.proxyId }
+  }
+  if (draft.mode === 'warp') {
+    if (!draft.deviceId) throw new Error(t('请先选择 WARP 设备'))
+    return { source: 'warp', deviceId: draft.deviceId }
   }
   if (draft.mode === 'rotate') {
     // 「全部」不写 proxyIds：池里以后新增的出口自动进轮询（后端归一也是这个形状）
@@ -148,6 +157,12 @@ export function ProxyForm({
   /** 池列表：「已保存的代理」与「轮询」两档共用的选项（模块级缓存，见 accounts-data） */
   const [pool, setPool] = React.useState<PoolItem[] | null>(null)
   const [poolError, setPoolError] = React.useState('')
+  /** WARP 设备清单：与代理列同一份缓存（设备由出口池在运行期注册） */
+  const [, setWarpVersion] = React.useState(0)
+  const warpItems = warpExitsSnapshot() || []
+  const warpError = warpExitsError()
+  React.useEffect(() => subscribeWarpExits(() => setWarpVersion(version => version + 1)), [])
+  React.useEffect(() => { if (draft.mode === 'warp') ensureWarpExits() }, [draft.mode])
   const [clash, setClash] = React.useState<ClashProxySnapshot | null>(null)
   const [clashError, setClashError] = React.useState('')
   const options = clash?.options || []
@@ -331,6 +346,7 @@ export function ProxyForm({
         options={[
           { value: 'none', label: t('无代理（直连）') },
           { value: 'pool', label: t('已保存的代理') },
+          { value: 'warp', label: t('WARP 设备') },
           // 轮询档只对 OpenCode Zen 出现（见 allowRotate 的说明）
           ...(allowRotate ? [{
             value: 'rotate' as const,
@@ -388,6 +404,44 @@ export function ProxyForm({
                 : pool.length
                   ? t('地址与端口由「网络代理」页管理：那边改一次、测一次，所有引用它的账号一起生效')
                   : t('「网络代理」页还没有出口 —— 去那里添加手动地址或同步 Clash Verge 的端点')}
+          </div>
+        </div>
+      ) : null}
+
+      {draft.mode === 'warp' ? (
+        <div className='mt-3'>
+          <Field orientation='horizontal' className='field-row'>
+            <FieldLabel htmlFor={`${idPrefix}-warp-exit`}>{t('WARP 设备')}</FieldLabel>
+            {/* 与池选择器同一写法：value 恒为字符串，空串 = 还没选 */}
+            <Select value={draft.deviceId} disabled={!warpItems.length}
+              onValueChange={value => set({ deviceId: String(value) })}>
+              <SelectTrigger id={`${idPrefix}-warp-exit`} className='min-w-[220px]'>
+                <SelectValue>
+                  {warpItems.find(item => item.id === draft.deviceId)
+                    ? warpExitLabel(warpItems.find(item => item.id === draft.deviceId)!)
+                    : draft.deviceId
+                      ? t('当前设备不可用，请重新选择')
+                      : (warpExitsSnapshot() === null ? t('正在读取…') : warpItems.length ? t('请选择 WARP 设备') : warpExitsReady() ? t('还没有 WARP 设备') : t('WARP 出口池准备中…'))}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {warpItems.map(item => (
+                  <SelectItem key={item.id} value={item.id}>{warpExitLabel(item)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button variant='outline' size='sm' onClick={() => void refreshWarpExits()}>{t('重新读取')}</Button>
+          </Field>
+          <div className='detail mt-1.5'>
+            {warpError
+              ? t('读取失败：{error}', { error: warpError })
+              : warpExitsSnapshot() === null
+                ? t('正在读取 WARP 设备…')
+                : warpItems.length
+                  ? t('设备由「网络代理」页的 WARP 分页注册与管理；服务重启后设备会重建，届时需要重新选择')
+                  : warpExitsReady()
+                    ? t('「网络代理」页还没有 WARP 设备 —— 去那里的「WARP 设备」分页添加')
+                    : t('WARP 出口池准备中…')}
           </div>
         </div>
       ) : null}

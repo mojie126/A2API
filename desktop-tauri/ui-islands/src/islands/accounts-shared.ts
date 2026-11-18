@@ -41,6 +41,8 @@ export type ProxyConfig = {
     listenerUid?: string
     /** `source === 'pool'` 时的池条目 id（见 PoolItem） */
     proxyId?: string
+    /** `source === 'warp'` 时的 WARP 设备 id（出口池运行期注册） */
+    deviceId?: string
     /** `source === 'rotate'`：true = 轮询池里全部启用的出口 */
     all?: boolean
     /** `source === 'rotate' && all !== true`：要轮询的池条目 id */
@@ -364,6 +366,11 @@ export type AccountsBridge = {
   } | null | undefined>
   getProxies(): Promise<{ clash?: import('../../../ui-shared/clash-proxy').ClashProxySnapshot } | null | undefined>
   getProxyPool(): Promise<{ items?: PoolItem[] } | null | undefined>
+  /** WARP 设备清单（代理列的「WARP 设备」选项读它；与「网络代理」页 WARP 分页同一接口） */
+  getWarpExits?(): Promise<{
+    exits?: Array<{ id?: string; label?: string; egressIp?: string; port?: number; endpoint?: string }>
+    ready?: boolean
+  } | null | undefined>
   /** 测一条池条目（账号表单里选中池引用时的「测试出口」）：
    *  结果会记进那条代理的「上次测试」，与代理页那颗按钮同一个动作 */
   testProxyPoolItem(id: string): Promise<{
@@ -445,6 +452,9 @@ export function poolItemLabel(item: PoolItem): string {
  * 一边改了前缀、另一边没改，症状是「选了代理池条目却报不支持」，很难查。
  */
 export const POOL_VALUE_PREFIX = 'pool:'
+
+/** 代理下拉里「WARP 设备」这一类的值前缀：`warp:<deviceId>`（与池条目分开值域） */
+export const WARP_VALUE_PREFIX = 'warp:'
 
 /**
  * window 上由别的脚本 / 别的岛挂载的共享桥。**只声明本页用到的成员**，

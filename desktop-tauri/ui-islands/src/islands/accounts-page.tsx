@@ -11,12 +11,12 @@ import { shared, toast, type AccountRecord, type ColSettingsHandle } from './acc
 import { isDesktopAccount, isEnabled, providerOf, supportsUsage } from './accounts-domain'
 import { ACCOUNT_COLUMNS, bindColumnGrips, columnWidths, tableMinWidth } from './accounts-columns'
 import {
-  allAccounts, bump, clearFilter, clearLimits, ensureProxyPoolOptions,
+  allAccounts, bump, clearFilter, clearLimits, ensureProxyPoolOptions, ensureWarpExits,
   filterActive, getStore, groupSortRules, groupView, hiddenAccounts, installAccountsApi, normalizeProviderFilter, openBatchDialog,
   providerSummaryList, queryAllUsage, cancelAllUsage, refreshList, reorderQueue, rowContext, seats, segmentCounts,
   setAllGroupsCollapsed, setAllPicked, setProviderFilter, setSearchFilter, setSegmentFilter,
-  snapshot, startConnectionsPolling, subscribe, subscribeProxyPool, syncGroupTotalPreference,
-  tokenUsageOf, togglePick, usageEntryOf, GROUP_TOTAL_FILTERED_KEY,
+  snapshot, startConnectionsPolling, subscribe, subscribeProxyPool, subscribeWarpExits, syncGroupTotalPreference,
+  tokenUsageOf, togglePick, usageEntryOf, GROUP_TOTAL_FILTERED_KEY, proxyPoolVersion, warpExitsVersion,
 } from './accounts-data'
 import {
   AccountCell, ActionsCell, ConnectionsCell, ExpiryCell, GroupBandRow, LimitsCell, OrderCell,
@@ -144,12 +144,18 @@ function AccountsPage() {
   // Clash 出口那一组已经不在这一页了 —— 出口统一由代理页的「同步 Clash Verge」
   // 导入池，这里只读池（见 accounts-panels 的 ProxyCell）
   React.useEffect(() => { ensureProxyPoolOptions() })
+  // WARP 设备清单同一口径：设备由出口池在后台注册，未就绪时补拉
+  React.useEffect(() => { ensureWarpExits() })
 
   // 池列表是账号页与「网络代理」页共用的一份缓存（见 proxy-pool-cache.ts）：那一页
   // 禁用节点 / 删除订阅 / 同步 Clash 之后会把新列表写进来，这里订阅到就重画 ——
   // 代理下拉的选项因此不会停在旧数据上（曾经它是一次性缓存，删掉的节点还留在
   // 下拉里，选中才被后端拒绝）
   React.useEffect(() => subscribeProxyPool(() => { bump() }), [])
+  React.useEffect(() => subscribeWarpExits(() => { bump() }), [])
+  // 代理单元格按内容版本 memo 比较：这两份清单变化时才重渲下拉（见 ProxyCell）
+  const proxyVersion = proxyPoolVersion()
+  const warpVersion = warpExitsVersion()
 
   // 存盘里筛的那一家已经不在摘要里（账号删光、家也删了）就复位成「全部」—— 否则下拉
   // 找不到那一项、回落显示「全部」，列表却仍按它过滤（见 store 的 normalizeProviderFilter）
@@ -345,7 +351,7 @@ function AccountsPage() {
       case 'account':
         return <AccountCell account={account} namesHidden={store.namesHidden} />
       case 'proxy':
-        return <ProxyCell account={account} />
+        return <ProxyCell account={account} poolVersion={proxyVersion} warpVersion={warpVersion} />
       case 'connections':
         return <ConnectionsCell account={account} />
       case 'status':

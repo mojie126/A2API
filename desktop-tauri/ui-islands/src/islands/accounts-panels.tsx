@@ -41,7 +41,7 @@ import {
   TooltipTrigger,
   cn,
   TableRow, TableCell, TableHeader, TableHead as UiTableHead } from '@ui'
-import { formatTime, numberText, poolItemLabel, POOL_VALUE_PREFIX, shared, type AccountRecord, type LimiterRule, type TokenReading, type UsageEntry } from './accounts-shared'
+import { formatTime, numberText, poolItemLabel, POOL_VALUE_PREFIX, WARP_VALUE_PREFIX, shared, type AccountRecord, type LimiterRule, type TokenReading, type UsageEntry } from './accounts-shared'
 import {
   accountTags, activeLimits, balanceBlockedOf,
   displayNameOf, expiryMillis, formatIntervalSeconds, formatResetText,
@@ -68,6 +68,7 @@ import {
   connectionsOf, getStore, groupSortRules, maskName, openBatchDialog, openGroupDialog, openSettingsDialog,
   poolError, proxyPoolSnapshot, queryUsageOnce, setAccountEnabled, setGroupEnabled,
   tokenUsageOf, toggleGroupCollapsed, toggleNamesHidden, usageEntryOf, usageFailureOf, usageFailureStatusOf, usageUpdatedAtOf,
+  warpExitsError, warpExitsReady, warpExitsSnapshot, warpExitLabel,
 } from './accounts-data'
 import type { AccountGroup } from './accounts-domain'
 import { activeGroupSortRules, groupSortSummary, manualOrderBlockedMessage } from './accounts-group-settings'
@@ -1353,18 +1354,44 @@ export function AccountCell({ account, namesHidden }: { account: AccountRecord; 
 }
 
 
-export function ProxyCell({ account }: { account: AccountRecord }) {
+/**
+ * 代理单元格（受控下拉，选中即保存）。
+ *
+ * ── 为什么 memo，且按「代理签名 + 池版本 + WARP 设备版本」比较 ──
+ * 账号页每 20 秒自动刷新一次（app.js 的 refresh），连接数每 2 秒轮询一轮；
+ * 这些后台重绘会把每个单元格重新渲染一遍。代理下拉若跟着重建，展开中的
+ * 下拉与键盘焦点都会被重置。这里只在**这一格读到的内容真的变了**时才重渲：
+ * 账号里的代理配置（签名）、代理池内容、WARP 设备清单各占一个判据。
+ */
+type ProxyCellProps = {
+  account: AccountRecord
+  /** 代理池内容版本（`proxyPoolVersion()`）：池增删改后必须换选项 */
+  poolVersion: number
+  /** WARP 设备清单版本（`warpExitsVersion()`）：设备增删后必须换选项 */
+  warpVersion: number
+}
+
+/** 账号代理配置的稳定签名：账号对象每次刷新都会重建，只能按内容比 */
+function proxySignature(account: AccountRecord): string {
+  return JSON.stringify(account.proxy ?? null)
+}
+
+function ProxyCellInner({ account }: ProxyCellProps) {
   const proxy = account.proxy
   const source = proxy?.config?.source || proxy?.source
   const label = proxy?.label || (source === 'custom' ? t('自定义代理') : t('已设置'))
   const broken = proxy?.error
   const pool = proxyPoolSnapshot()
   const poolItems = Array.isArray(pool) ? pool : []
+  const warp = warpExitsSnapshot()
+  const warpItems = Array.isArray(warp) ? warp : []
 
-  // 当前值映射回下拉的值域：池条目用 `pool:<id>`、其余（Clash 直引 / custom /
-  // 轮询 / 坏形状）落到补位项 —— 绝不能回落成「直连」：那会把「配置坏了」显示成「没配」
+  // 当前值映射回下拉的值域：池条目用 `pool:<id>`、WARP 设备用 `warp:<deviceId>`、
+  // 其余（Clash 直引 / custom / 轮询 / 坏形状）落到补位项 —— 绝不能回落成
+  // 「直连」：那会把「配置坏了」显示成「没配」
   let current = ''
   if (source === 'pool' && proxy?.config?.proxyId) current = `${POOL_VALUE_PREFIX}${proxy.config.proxyId}`
+  else if (source === 'warp' && proxy?.config?.deviceId) current = `${WARP_VALUE_PREFIX}${proxy.config.deviceId}`
   else if (proxy) current = PROXY_CUSTOM_CURRENT
 
   const items: Array<{ value: string; label: string; disabled?: boolean }> = [{ value: '', label: t('直连') }]
@@ -1395,6 +1422,24 @@ export function ProxyCell({ account }: { account: AccountRecord }) {
       disabled: true,
     })
   }
+  for (const item of warpItems) {
+    // 出口 IP 是同一台设备最有辨识度的读数（设备名只有序号）；还没探测到就只写名字
+    items.push({
+      value: `${WARP_VALUE_PREFIX}${item.id}`,
+      label: warpExitLabel(item),
+    })
+  }
+  if (warp === null) {
+    items.push({ value: '__hint_warp__', label: t('正在读取 WARP 设备…'), disabled: true })
+  } else if (!warpItems.length) {
+    items.push({
+      value: '__hint_warp__',
+      label: warpExitsError()
+        ? t('WARP 设备读取失败（重试中）')
+        : warpExitsReady() ? t('还没有 WARP 设备（去「网络代理」页添加）') : t('WARP 出口池准备中…'),
+      disabled: true,
+    })
+  }
   if (current === PROXY_CUSTOM_CURRENT) {
     // 补位项：不带动任何写操作（PROXY_CUSTOM_CURRENT 在 applyProxyPick 里被忽略），
     // 只是把当前值原样显示出来。轮询档不加前缀 —— 后端给的 label 本身就是
@@ -1403,6 +1448,9 @@ export function ProxyCell({ account }: { account: AccountRecord }) {
     items.push({ value: PROXY_CUSTOM_CURRENT, label: `${prefix}${label}${broken ? t('（不可用）') : ''}` })
   } else if (source === 'pool' && !poolItems.some(item => `${POOL_VALUE_PREFIX}${item.id}` === current)) {
     // 池引用但条目已不在池里（被删 / Clash 侧删了出口）：补位显示当前值
+    items.push({ value: current, label: `${label}${broken ? t('（不可用）') : ''}` })
+  } else if (source === 'warp' && !warpItems.some(item => `${WARP_VALUE_PREFIX}${item.id}` === current)) {
+    // 设备引用但设备已不在池里（重启重建 / 已删除）：补位显示当前值
     items.push({ value: current, label: `${label}${broken ? t('（不可用）') : ''}` })
   }
   items.push({ value: PROXY_CUSTOM_EDIT, label: t('自定义代理…') })
@@ -1413,11 +1461,13 @@ export function ProxyCell({ account }: { account: AccountRecord }) {
       ? t('当前：{label}（每条请求换一个出口）；「自定义代理…」打开完整设置', { label })
       : source === 'clash'
         ? t('当前：{label}（Clash Verge 直接引用）；可在「网络代理」页同步端点后改选', { label })
-        : source === 'custom'
-          ? t('当前：{label}（未经过代理池 —— 可在「网络代理」页添加相同地址后来这里改选）', { label })
-          : t('当前：{label}；选项来自「网络代理」页；「自定义代理…」打开完整设置', {
-          label: proxy ? label : t('直连'),
-        })
+        : source === 'warp'
+          ? t('当前：{label}（WARP 设备出口）；设备随服务重启重建，届时需重新选择', { label })
+          : source === 'custom'
+            ? t('当前：{label}（未经过代理池 —— 可在「网络代理」页添加相同地址后来这里改选）', { label })
+            : t('当前：{label}；选项来自「网络代理」页；「自定义代理…」打开完整设置', {
+            label: proxy ? label : t('直连'),
+          })
   const selected = items.find(item => item.value === current)
 
   return (
@@ -1437,6 +1487,15 @@ export function ProxyCell({ account }: { account: AccountRecord }) {
     </Select>
   )
 }
+
+/**
+ * 比较函数读 `poolVersion` / `warpVersion`：池与设备清单一变，所有代理单元格
+ * 都要换选项；两者都没变时，后台自动刷新不再重渲任何一行。
+ */
+export const ProxyCell = React.memo(ProxyCellInner, (prev, next) =>
+  prev.poolVersion === next.poolVersion
+  && prev.warpVersion === next.warpVersion
+  && proxySignature(prev.account) === proxySignature(next.account))
 
 /* ─── 操作列 ────────────────────────────────── */
 

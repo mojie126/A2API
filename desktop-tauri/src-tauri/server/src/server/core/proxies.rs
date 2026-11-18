@@ -181,6 +181,15 @@ pub fn normalize_account_proxy(input: &Value) -> Result<Option<Value>, ProxyConf
         })));
     }
 
+    // WARP 设备引用：只存设备 id，本地 SOCKS5 端口由出口池在解析时给出 ——
+    // 设备重建后端口会变，落盘地址随即过期
+    if source == "warp" {
+        let device_id = clean_string(object.get("deviceId"), MAX_LABEL_LENGTH);
+        if device_id.is_empty() {
+            return Err(ProxyConfigError::new("缺少 WARP 设备 id"));
+        }
+        return Ok(Some(json!({ "source": "warp", "deviceId": device_id })));
+    }
     if source == "subscription" {
         return Err(ProxyConfigError::new(crate::server::core::proxy_pool::RETIRED_HINT));
     }
@@ -468,6 +477,24 @@ pub fn resolve_account_proxy(config: Option<&Value>) -> Option<ProxyResolution> 
             match crate::server::core::proxy_pool::resolve_reference(proxy_id) {
                 Ok(proxy) => ProxyResolution::Resolved(proxy),
                 Err(reason) => ProxyResolution::Failed(reason),
+            },
+        );
+    }
+
+    // WARP 设备引用：设备由出口池在运行期注册，解析按 id 取它当前的本地
+    // SOCKS5 端口 —— 池未就绪或设备已不存在（重启重建、已删除）时保留明确原因
+    if source == "warp" {
+        let device_id = object.get("deviceId").and_then(Value::as_str).unwrap_or("");
+        if device_id.is_empty() {
+            return Some(ProxyResolution::Failed("WARP 设备引用缺少设备 id".to_string()));
+        }
+        let Some(pool) = crate::server::core::warp::pool::global() else {
+            return Some(ProxyResolution::Failed("WARP 出口池尚未就绪".to_string()));
+        };
+        return Some(
+            match pool.find(device_id) {
+                Some(exit) => ProxyResolution::Resolved(exit.proxy.clone()),
+                None => ProxyResolution::Failed("WARP 设备不存在（可能已重启或删除）".to_string()),
             },
         );
     }

@@ -87,7 +87,7 @@ pub(super) fn of(record: &StoredAccount) -> QueryConfig {
     let fingerprint = digest(&json!({
         "reading": reading,
         "proxy": connection(&proxy),
-        "proxyConfig": proxy.as_object().map(|fields| select(fields, &["source", "proxyId", "proxyIds", "all", "listenerUid"])),
+        "proxyConfig": proxy.as_object().map(|fields| select(fields, &["source", "proxyId", "proxyIds", "all", "listenerUid", "deviceId"])),
         "userAgent": record.get("userAgent"),
         "timeoutSeconds": crate::server::core::usage_records::query_timeout_of(record.get("usageQuery")),
         "retries": crate::server::core::usage_records::query_retries_of(record.get("usageQuery")),

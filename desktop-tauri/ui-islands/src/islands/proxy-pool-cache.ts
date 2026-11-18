@@ -49,6 +49,8 @@ function remember(items: PoolItem[]): void {
 }
 
 const listeners = new Set<() => void>()
+/** 内容版本号：每次内容变化 +1，代理单元格据此判断是否重绘 */
+let version = 0
 
 export function subscribeProxyPool(listener: () => void): () => void {
   listeners.add(listener)
@@ -56,7 +58,13 @@ export function subscribeProxyPool(listener: () => void): () => void {
 }
 
 function emit(): void {
+  version += 1
   listeners.forEach(listener => listener())
+}
+
+/** 内容版本号（每次变化 +1）：代理单元格的 memo 比较读它 */
+export function proxyPoolVersion(): number {
+  return version
 }
 
 /** 已缓存的池列表（`null` = 还没读过） */
