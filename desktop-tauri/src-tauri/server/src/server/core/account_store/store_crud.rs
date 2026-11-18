@@ -686,9 +686,12 @@ impl AccountStore {
         if patch.contains_key("proxy") || patch.contains_key("userAgent") || patch.contains_key("usageQuery") {
             crate::server::core::usage_query::jobs::invalidate_changed(id, &crate::server::core::usage_query::config::fingerprint(&record));
         }
-        logging::log(
+        // 显式 info：这条文案是「改了什么」的说明，变更项里完全可能出现
+        // 「失败重试 → 3 次」这类设置名，靠关键字推断会把它误判成错误日志
+        logging::log_with_level(
             "[Accounts]",
             &format!("✏️  账号已更新: {name}（{}）", changes.join("，")),
+            "info",
         );
         let limiter_changed = patch.contains_key("limiterGroups") || patch.contains_key("limiters");
         if was_enabled && now_disabled || limiter_changed {
