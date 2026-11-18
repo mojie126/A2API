@@ -5,8 +5,13 @@ import {
 } from '@ui'
 import { t } from '../ui-kit/src/i18n'
 import {
-  buildProxyPick, EMPTY_PROXY_SELECTION, fetchProxySelection, saveProxy, type ProxySelection,
+  buildProxyPick, fetchUpdateProxyChoice, saveProxy, toast, type UpdateProxyChoice,
 } from '../ui-islands/src/islands/update-shared'
+import {
+  ensureProxyPoolOptions, ensureWarpExits, poolError, proxyPoolSnapshot, subscribeProxyPool,
+  subscribeWarpExits, warpExitsError, warpExitsReady, warpExitsSnapshot,
+} from '../ui-islands/src/islands/accounts-data'
+import { POOL_VALUE_PREFIX, WARP_VALUE_PREFIX } from '../ui-islands/src/islands/accounts-shared'
 import { RunCounts, RunStatus } from './maintenance-shared'
 import { duration, maintenanceLabel, sourceLabel, stamp } from './maintenance-format'
 import type { MaintenanceRun, MaintenanceTask, MaintenanceTaskId } from './maintenance-types'
@@ -39,6 +44,68 @@ type TaskRow = {
   stalled: boolean
 }
 
+/**
+ * 模型目录更新的出网代理下拉（与账号页代理列同一套数据与刷新口径）。
+ *
+ * 选项来自代理池与 WARP 设备两份共享缓存，挂载时补拉，池或设备清单变化时
+ * 按版本号重绘，组件不接收 props，用 memo 隔开父级 20 秒轮询，后台刷新不会
+ * 重建展开中的下拉与键盘焦点
+ */
+function MaintenanceProxyPickerInner() {
+  const [choice, setChoice] = React.useState<UpdateProxyChoice | null>(null)
+  const [busy, setBusy] = React.useState(false)
+  const [, setVersion] = React.useState(0)
+  React.useEffect(() => subscribeProxyPool(() => setVersion(version => version + 1)), [])
+  React.useEffect(() => subscribeWarpExits(() => setVersion(version => version + 1)), [])
+  React.useEffect(() => { ensureProxyPoolOptions(); ensureWarpExits() }, [])
+  React.useEffect(() => {
+    let alive = true
+    void fetchUpdateProxyChoice().then(result => { if (alive) setChoice(result.loaded ? result.choice : null) })
+    return () => { alive = false }
+  }, [])
+  const pick = buildProxyPick(
+    { proxyChoice: choice, proxyLoaded: true, pool: proxyPoolSnapshot(), poolError: poolError() || '' },
+    { items: warpExitsSnapshot(), ready: warpExitsReady(), error: warpExitsError() || '' },
+  )
+  const choose = async (value: string) => {
+    if (busy) return
+    const poolId = value.startsWith(POOL_VALUE_PREFIX) ? value.slice(POOL_VALUE_PREFIX.length).trim() : ''
+    const warpId = value.startsWith(WARP_VALUE_PREFIX) ? value.slice(WARP_VALUE_PREFIX.length).trim() : ''
+    if (poolId) {
+      // 视图已置灰，缓存刚被别处刷新时仍可能点到禁用项
+      const item = (proxyPoolSnapshot() || []).find(entry => entry.id === poolId)
+      if (item && item.enabled === false) {
+        toast(t('「{name}」已在「网络代理」页禁用，请先启用它或换一条', { name: item.name || poolId }), 'err')
+        return
+      }
+    }
+    if (warpId && !(warpExitsSnapshot() || []).some(entry => entry.id === warpId)) {
+      // 设备由出口池运行期注册：清单里没有说明它已被删除或重启重建
+      toast(t('该 WARP 设备已不存在，请刷新后重新选择'), 'err')
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await saveProxy(value)
+      if (result) setChoice(result.choice)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return <Select value={pick.current} disabled={busy} onValueChange={value => void choose(String(value))}>
+    <SelectTrigger className={cn('min-w-[140px]', pick.broken && 'border-destructive-bd')}
+      title={pick.title || t('更新出网代理')}
+      aria-label={t('更新出网代理')}>
+      <SelectValue className='min-w-0 truncate'>{pick.selected?.label || t('直连')}</SelectValue>
+    </SelectTrigger>
+    <SelectContent>
+      {pick.items.map(item => <SelectItem key={item.value} value={item.value} disabled={item.disabled}>{item.label}</SelectItem>)}
+    </SelectContent>
+  </Select>
+}
+
+const MaintenanceProxyPicker = React.memo(MaintenanceProxyPickerInner)
+
 export function MaintenanceSummary({ tasks, latest, busy, compact, onRun, onShowLatest }: {
   tasks: MaintenanceTask[]
   latest: Partial<Record<MaintenanceTaskId, MaintenanceRun>>
@@ -47,38 +114,7 @@ export function MaintenanceSummary({ tasks, latest, busy, compact, onRun, onShow
   onRun(id: MaintenanceTaskId): void
   onShowLatest(id: MaintenanceTaskId): void
 }) {
-  const [proxySelection, setProxySelection] = React.useState<ProxySelection>(EMPTY_PROXY_SELECTION)
-  const [proxyBusy, setProxyBusy] = React.useState(false)
-  const proxyPick = buildProxyPick(proxySelection)
-  React.useEffect(() => {
-    let alive = true
-    void fetchProxySelection().then(selection => { if (alive) setProxySelection(selection) })
-    return () => { alive = false }
-  }, [])
-  const chooseProxy = async (value: string) => {
-    if (proxyBusy) return
-    setProxyBusy(true)
-    try {
-      const result = await saveProxy(value)
-      if (result) setProxySelection(previous => ({ ...previous, proxyChoice: result.choice, proxyLoaded: true }))
-      const next = await fetchProxySelection()
-      setProxySelection(next)
-    } finally {
-      setProxyBusy(false)
-    }
-  }
-  const proxyPicker = (task: MaintenanceTask) => task.id !== 'modelRefresh' ? <span>—</span> : (
-    <Select value={proxyPick.current} disabled={proxyBusy} onValueChange={value => void chooseProxy(String(value))}>
-      <SelectTrigger className={cn('min-w-[140px]', proxyPick.broken && 'border-destructive-bd')}
-        title={proxyPick.title || t('更新出网代理')}
-        aria-label={t('更新出网代理')}>
-        <SelectValue className='min-w-0 truncate'>{proxyPick.selected?.label || t('直连')}</SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        {proxyPick.items.map(item => <SelectItem key={item.value} value={item.value} disabled={item.disabled}>{item.label}</SelectItem>)}
-      </SelectContent>
-    </Select>
-  )
+  const proxyPicker = (task: MaintenanceTask) => task.id !== 'modelRefresh' ? <span>—</span> : <MaintenanceProxyPicker />
   const rows: TaskRow[] = tasks.map(task => {
     const run = latest[task.id]
     const running = task.running || busy === task.id

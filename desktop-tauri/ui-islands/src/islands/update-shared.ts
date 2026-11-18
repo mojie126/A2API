@@ -25,8 +25,9 @@ export type { UpdateChannels, AssetProbe } from '../../../ui-shared/updates'
 // 代理池的共享类型与值前缀与账号页共用一份 —— 两处下拉的值域必须一致
 // （`pool:<id>`），各写一份迟早会漂移。accounts-shared 是纯类型 + 常量的
 // 自包含模块（不 import 任何业务模块），这里引用它不产生循环。
-import { POOL_VALUE_PREFIX, poolItemLabel, type PoolItem } from './accounts-shared'
+import { POOL_VALUE_PREFIX, WARP_VALUE_PREFIX, poolItemLabel, type PoolItem } from './accounts-shared'
 import { acceptProxyPool } from './proxy-pool-cache'
+import { warpExitLabel, type WarpExitItem } from './accounts-warp-cache'
 import { t } from '../i18n'
 
 /* ─── 类型 ─────────────────────────────────── */
@@ -169,7 +170,7 @@ export type UpdateProxyChoice = {
   source?: string
   label?: string
   error?: string
-  config?: { source?: string; listenerUid?: string; proxyId?: string } | null
+  config?: { source?: string; listenerUid?: string; proxyId?: string; deviceId?: string } | null
 } | null
 
 /** GitHub 令牌状态（`/api/update/token` 的返回）：**没有本体**，只有有没有、来自哪 */
@@ -409,18 +410,27 @@ export const EMPTY_PROXY_SELECTION: ProxySelection = {
   poolError: '',
 }
 
+/** 只读更新出网线路（`loaded=false` 表示桥未提供或读取失败） */
+export async function fetchUpdateProxyChoice(): Promise<{ choice: UpdateProxyChoice | null; loaded: boolean }> {
+  const api = shared().workbuddyDesktop
+  if (!api?.getUpdateProxy) return { choice: null, loaded: false }
+  try {
+    const data = await api.getUpdateProxy()
+    if (!data || !Object.prototype.hasOwnProperty.call(data, 'proxy')) throw new Error('更新线路响应异常')
+    return { choice: data.proxy ?? null, loaded: true }
+  } catch {
+    /* 设置读不到：按直连显示，保存动作会把真实值带回来 */
+    return { choice: null, loaded: false }
+  }
+}
+
 export async function fetchProxySelection(): Promise<ProxySelection> {
   const api = shared().workbuddyDesktop
   const selection: ProxySelection = { ...EMPTY_PROXY_SELECTION }
   if (!api?.getUpdateProxy) return selection
-  try {
-    const data = await api.getUpdateProxy()
-    if (!data || !Object.prototype.hasOwnProperty.call(data, 'proxy')) throw new Error('更新线路响应异常')
-    selection.proxyChoice = data.proxy ?? null
-    selection.proxyLoaded = true
-  } catch {
-    /* 设置读不到：按直连显示，保存动作会把真实值带回来 */
-  }
+  const { choice, loaded } = await fetchUpdateProxyChoice()
+  selection.proxyChoice = choice
+  selection.proxyLoaded = loaded
   try {
     if (typeof api.getProxyPool !== 'function') throw new Error('桥未提供代理池方法')
     const data = await api.getProxyPool()
@@ -440,9 +450,16 @@ export async function saveProxy(value: string): Promise<{ choice: UpdateProxyCho
   if (value === PROXY_OTHER_CURRENT) return null
   const api = shared().workbuddyDesktop
   if (!api?.setUpdateProxy) return null
+  const warpId = value.startsWith(WARP_VALUE_PREFIX)
+    ? value.slice(WARP_VALUE_PREFIX.length).trim()
+    : ''
+  // 未知值（提示项 / 动作项）不是一次线路切换
+  if (value !== '' && !value.startsWith(POOL_VALUE_PREFIX) && !warpId) return null
   const proxy = value === ''
     ? null
-    : { source: 'pool', proxyId: value.slice(POOL_VALUE_PREFIX.length) }
+    : warpId
+      ? { source: 'warp', deviceId: warpId }
+      : { source: 'pool', proxyId: value.slice(POOL_VALUE_PREFIX.length) }
   try {
     const result = await api.setUpdateProxy({ proxy })
     // 以后端回报的描述形态为准（含解析失败时的 error），不从本地猜
@@ -459,7 +476,17 @@ export async function saveProxy(value: string): Promise<{ choice: UpdateProxyCho
   }
 }
 
-export function buildProxyPick(selection: ProxySelection): {
+/** 代理下拉里的 WARP 设备选项（与账号页代理列同一份缓存口径） */
+export type ProxyWarpOptions = {
+  /** 设备清单（`null` = 还没读过） */
+  items: WarpExitItem[] | null
+  /** 出口池是否已就绪（`false` = 正在注册设备与建隧道，清单为空不代表没有设备） */
+  ready: boolean
+  /** 读取失败的原因（空串 = 没失败） */
+  error: string
+}
+
+export function buildProxyPick(selection: ProxySelection, warp?: ProxyWarpOptions): {
   current: string
   items: Array<{ value: string; label: string; disabled?: boolean }>
   selected: { value: string; label: string } | undefined
@@ -470,10 +497,12 @@ export function buildProxyPick(selection: ProxySelection): {
   const source = proxy?.config?.source || proxy?.source
   const label = proxy?.label || (source === 'custom' ? t('自定义代理') : t('已设置'))
   const poolItems = Array.isArray(selection.pool) ? selection.pool : []
+  const warpItems = warp && Array.isArray(warp.items) ? warp.items : []
   const broken = Boolean(proxy?.error)
   // 坏形状）落到占位项 —— 绝不能回落成「直连」
   let current = ''
   if (source === 'pool' && proxy?.config?.proxyId) current = `${POOL_VALUE_PREFIX}${proxy.config.proxyId}`
+  else if (source === 'warp' && proxy?.config?.deviceId) current = `${WARP_VALUE_PREFIX}${proxy.config.deviceId}`
   else if (proxy) current = PROXY_OTHER_CURRENT
 
   const items: Array<{ value: string; label: string; disabled?: boolean }> = [{ value: '', label: t('直连') }]
@@ -497,6 +526,23 @@ export function buildProxyPick(selection: ProxySelection): {
       disabled: true,
     })
   }
+  if (warp) {
+    for (const item of warpItems) {
+      // 出口 IP 是同一台设备最有辨识度的读数（设备名只有序号）；还没探测到就只写名字
+      items.push({ value: `${WARP_VALUE_PREFIX}${item.id}`, label: warpExitLabel(item) })
+    }
+    if (warp.items === null) {
+      items.push({ value: '__hint_warp__', label: t('正在读取 WARP 设备…'), disabled: true })
+    } else if (!warpItems.length) {
+      items.push({
+        value: '__hint_warp__',
+        label: warp.error
+          ? t('WARP 设备读取失败（重试中）')
+          : warp.ready ? t('还没有 WARP 设备（去「网络代理」页添加）') : t('WARP 出口池准备中…'),
+        disabled: true,
+      })
+    }
+  }
   if (current === PROXY_OTHER_CURRENT) {
     // 现在没有对应的可选项（出口统一走池），但仍要显示出来 —— 它们照原样
     // 转发，用户想改就在这里选一条池条目或切回直连
@@ -504,6 +550,9 @@ export function buildProxyPick(selection: ProxySelection): {
     items.push({ value: PROXY_OTHER_CURRENT, label: `${prefix}${label}${broken ? t('（不可用）') : ''}` })
   } else if (source === 'pool' && !poolItems.some(item => `${POOL_VALUE_PREFIX}${item.id}` === current)) {
     // 后端解析失败的原因在 title 里
+    items.push({ value: current, label: `${label}${broken ? t('（不可用）') : ''}` })
+  } else if (source === 'warp' && !warpItems.some(item => `${WARP_VALUE_PREFIX}${item.id}` === current)) {
+    // 设备引用但设备已不在清单里（重启重建 / 已删除）：补位显示当前值
     items.push({ value: current, label: `${label}${broken ? t('（不可用）') : ''}` })
   }
   return {
@@ -513,6 +562,8 @@ export function buildProxyPick(selection: ProxySelection): {
     broken,
     title: broken
       ? t('当前线路不可用：{error}；请重新选择代理或切回直连', { error: String(proxy?.error || '') })
-      : t('检查更新与下载安装包使用所选线路；未选择代理时先直连，失败后尝试 Clash Verge 混合端口；指定代理不可用时不会自动改走直连。'),
+      : source === 'warp'
+        ? t('当前：{label}（WARP 设备出口）；设备随服务重启重建，届时需重新选择', { label })
+        : t('检查更新与下载安装包使用所选线路；未选择代理时先直连，失败后尝试 Clash Verge 混合端口；指定代理不可用时不会自动改走直连。'),
   }
 }
