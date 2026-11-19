@@ -92,10 +92,18 @@ jobs:
             exit 1
           fi
           provider_protocol_tag="$(sed -n '/agent2api-provider-protocol =/s/.*tag = "v\([^"]*\)".*/\1/p' desktop-tauri/src-tauri/server/Cargo.toml | head -1)"
-          if [[ "$provider_protocol_tag" != "$version" ]]; then
-            echo "::error::提供商协议库版本与网关不一致，网关=$version 协议库=$provider_protocol_tag"
+          if [[ -z "$provider_protocol_tag" ]]; then
+            echo "::error::未在服务端 Cargo.toml 找到协议库 tag"
             exit 1
           fi
+          # 协议库（插件仓库）与网关版本各自演进：协议库只在契约变化时发 tag，不跟随网关 beta 序列。
+          # 校验「该 tag 在远端确实存在」，避免写成不存在的版本导致 cargo 解析 git 依赖失败
+          if ! git ls-remote --tags --exit-code \
+            https://github.com/ProvidersPlugin/Agent2Providers "refs/tags/v$provider_protocol_tag" >/dev/null; then
+            echo "::error::协议库 tag v$provider_protocol_tag 在远端不存在"
+            exit 1
+          fi
+          echo "协议库 tag v$provider_protocol_tag 在远端存在"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: 读取已发布版本
