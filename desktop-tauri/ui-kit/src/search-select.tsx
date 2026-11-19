@@ -139,8 +139,9 @@ function SearchSelect<Value extends string = string>({
               // 可用宽度封顶 —— 长模型名不再被截断（理由与 MultiSelect 相同）
               'flex max-h-[280px] w-max min-w-[max(var(--anchor-width),220px)] max-w-[var(--available-width)] flex-col overflow-hidden',
               'rounded-lg border border-border-strong bg-raised shadow-3 outline-none',
-              'data-open:animate-in data-open:fade-in-0',
-              'data-closed:animate-out data-closed:fade-out-0'
+              // transition 替代关键帧，避开 `filter: blur()` 的逐帧计算
+              'transition-opacity duration-150',
+              'starting:opacity-0 data-ending-style:opacity-0'
             )}
           >
             <div className='flex flex-none items-center gap-1.5 border-b border-hairline px-2.5 py-1.5'>

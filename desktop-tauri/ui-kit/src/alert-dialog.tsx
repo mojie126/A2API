@@ -3,6 +3,7 @@ import { AlertDialog as AlertDialogPrimitive } from '@base-ui/react/alert-dialog
 import { cn } from './lib/cn'
 import { Button } from './button'
 import { t } from './i18n'
+import { holdModalActive } from './lib/modal-activity'
 
 /**
  * 确认对话框（标准形态，与 shadcn/ui 的 AlertDialog 一致）。
@@ -41,14 +42,14 @@ const AlertDialogDescription = (props: AlertDialogPrimitive.Description.Props) =
 )
 
 function AlertDialogOverlay({ className, ...props }: AlertDialogPrimitive.Backdrop.Props) {
-  // 与 dialog 的遮罩同一口径：全屏模糊不做入场动画，避免高负载掉帧。
+  // 与 dialog 的遮罩同一口径：纯色不模糊，出场只淡出 opacity。
   return (
     <AlertDialogPrimitive.Backdrop
       data-slot='alert-dialog-overlay'
       className={cn(
-        'fixed inset-0 isolate z-[38] bg-mask backdrop-blur-[3px]',
+        'fixed inset-0 isolate z-[38] bg-mask',
         'transition-opacity duration-150',
-        'data-closed:animate-out data-closed:fade-out-0 data-closed:fill-mode-forwards',
+        'starting:opacity-0 data-ending-style:opacity-0',
         className
       )}
       {...props}
@@ -67,6 +68,8 @@ function AlertDialogContent({
   showCloseButton = false,
   ...props
 }: AlertDialogContentProps) {
+  // 与 DialogContent 同一口径：打开期间暂停后台轮询，出场只用 transition
+  React.useEffect(() => holdModalActive(), [])
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
@@ -75,9 +78,9 @@ function AlertDialogContent({
         className={cn(
           'fixed top-1/2 left-1/2 z-[38] flex max-h-[calc(100vh-48px)] w-[min(440px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col',
           'overflow-hidden rounded-lg border border-border bg-surface shadow-3 outline-none',
-          'transition-[opacity,transform] duration-200 [transition-timing-function:cubic-bezier(.2,.9,.3,1)]',
-          'data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[.985] data-open:slide-in-from-bottom-2.5',
-          'data-closed:animate-out data-closed:fade-out-0 data-closed:fill-mode-forwards',
+          'transition-[opacity,scale] duration-200 [transition-timing-function:cubic-bezier(.2,.9,.3,1)]',
+          'starting:opacity-0 starting:scale-[.985]',
+          'data-ending-style:opacity-0 data-ending-style:scale-[.985]',
           className
         )}
         {...props}

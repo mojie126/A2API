@@ -946,9 +946,12 @@ async function syncRunningRequests() {
   paintRequestsBadge();
 }
 
-// 窗口隐藏时暂停（与 20 秒全局轮询同一取向）：后台页没有「第一眼」可言
+// 窗口隐藏时暂停（与 20 秒全局轮询同一取向）：后台页没有「第一眼」可言。
+// 弹窗打开时也暂停：轮询落地会重绘下层，而遮罩要按下层重新合成一遍，
+// 高负载下这就是弹窗开合卡顿的主要来源（见 ui-kit/src/lib/modal-activity.ts）。
 setInterval(() => {
   if (document.hidden) return;
+  if (window.wbModalActive?.()) return;
   void syncRunningRequests();
 }, 5_000);
 
@@ -1389,9 +1392,12 @@ document.addEventListener('visibilitychange', () => {
 // 慢轮询计数器：侧边栏布局这类低频同步每 3 轮（60 秒）做一次
 let slowPollTick = 0;
 
-// 定时轮询：限额标记（429 + 恢复时间）与账号状态变化自动刷新；窗口隐藏时暂停
+// 定时轮询：限额标记（429 + 恢复时间）与账号状态变化自动刷新；窗口隐藏时暂停。
+// 弹窗打开时也暂停：`refresh()` 会 `render()` 重画账号列表，遮罩要按下层重新
+// 合成，投资回报极低（没有用户会盯着遮罩看后面的数字跳动）。
 setInterval(() => {
   if (document.hidden) return;
+  if (window.wbModalActive?.()) return;
   refresh({ force: false });
   // 后端状态一起轮询：网关可能在这期间起停（端口冲突、用户结束占用进程后重启），
   // 而管理 API 打不通时 refresh() 只会静默失败，看不出发生了什么

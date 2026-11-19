@@ -3,6 +3,7 @@ import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import { cn } from './lib/cn'
 import { Button } from './button'
 import { t } from './i18n'
+import { holdModalActive } from './lib/modal-activity'
 
 /**
  * 底部抽屉（Sheet）—— 与 shadcn/ui 的 Sheet 同形，但**贴底展开**而不是侧滑。
@@ -23,7 +24,8 @@ import { t } from './i18n'
  *     `showHandle={false}` 可关掉（嵌套在另一抽屉里时用）。
  *
  * 交互仍交给 Base UI 的 Dialog：焦点陷阱、Esc、滚动锁定、关闭后焦点归位全部内建。
- * 入场/出场动画挂 `fill-mode-forwards` —— 理由与 DialogContent 相同（见那边注释）。
+ * 入场/出场用 transition + `starting` / `data-ending-style`，不用 tw-animate 的
+ * 关键帧（关键帧带 `filter: blur()` 声明，会逐帧计算滤镜，理由见 dialog.tsx）。
  *
  * `side` 只在桌面端宽屏有意义：`side='center'` 时按普通弹窗居中显示，
  * 用于同一份代码在桌面浏览器里打开时的观感（移动端不传即可）。
@@ -54,14 +56,15 @@ const SheetDescription = (props: DialogPrimitive.Description.Props) => (
 )
 
 function SheetOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) {
-  // 与 dialog 的遮罩同一口径：全屏模糊不做入场动画，避免高负载掉帧。
+  // 与 dialog 的遮罩同一口径：纯色不模糊（原因见 dialog.tsx 模块头），
+  // 出场只淡出 opacity。
   return (
     <DialogPrimitive.Backdrop
       data-slot='sheet-overlay'
       className={cn(
-        'fixed inset-0 isolate z-30 bg-mask backdrop-blur-[3px]',
+        'fixed inset-0 isolate z-30 bg-mask',
         'transition-opacity duration-200',
-        'data-closed:animate-out data-closed:fade-out-0 data-closed:fill-mode-forwards',
+        'starting:opacity-0 data-ending-style:opacity-0',
         className
       )}
       {...props}
@@ -101,6 +104,8 @@ function SheetContent({
   const centered = side === 'center'
   const right = side === 'right'
   const left = side === 'left'
+  // 弹窗打开期间标记 `<html data-modal-active>`，各定时轮询据此暂停。
+  React.useEffect(() => holdModalActive(), [])
   return (
     <SheetPortal keepMounted={keepMounted}>
       <SheetOverlay />
@@ -108,31 +113,34 @@ function SheetContent({
         data-slot='sheet-content'
         className={cn(
           'fixed z-30 flex flex-col overflow-hidden border border-border bg-surface shadow-3 outline-none',
-          'transition-[opacity,transform] duration-200 [transition-timing-function:cubic-bezier(.32,.9,.3,1)]',
+          // transition 替代 tw-animate 关键帧：关键帧里的 `filter: blur()` 会逐帧
+          // 计算滤镜，纯位移与淡入用 transition 即可，代价低得多。
+          // `translate` 是独立属性（不与 `-translate-x-1/2` 的定位冲突）。
+          'transition-[opacity,translate,scale] duration-200 [transition-timing-function:cubic-bezier(.32,.9,.3,1)]',
           centered
             ? [
                 'top-1/2 left-1/2 max-h-[calc(100vh-48px)] w-[min(560px,calc(100vw-48px))]',
                 '-translate-x-1/2 -translate-y-1/2 rounded-lg',
-                'data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[.985]',
-                'data-closed:animate-out data-closed:fade-out-0 data-closed:fill-mode-forwards',
+                'starting:opacity-0 starting:scale-[.985]',
+                'data-ending-style:opacity-0 data-ending-style:scale-[.985]',
               ]
             : right
               ? [
                   // 侧边抽屉最多占 86vw，保留关闭与上下文区域。
                   'top-0 right-0 bottom-0 h-full w-[min(340px,86vw)] rounded-l-xl',
-                  'data-open:animate-in data-open:slide-in-from-right data-open:fade-in-0',
-                  'data-closed:animate-out data-closed:slide-out-to-right data-closed:fade-out-0 data-closed:fill-mode-forwards',
+                  'starting:translate-x-full starting:opacity-0',
+                  'data-ending-style:translate-x-full data-ending-style:opacity-0',
                 ]
               : left
                 ? [
                     'top-0 left-0 bottom-0 h-full w-[min(340px,86vw)] rounded-r-xl',
-                    'data-open:animate-in data-open:slide-in-from-left data-open:fade-in-0',
-                    'data-closed:animate-out data-closed:slide-out-to-left data-closed:fade-out-0 data-closed:fill-mode-forwards',
+                    'starting:-translate-x-full starting:opacity-0',
+                    'data-ending-style:-translate-x-full data-ending-style:opacity-0',
                   ]
                 : [
                   'inset-x-0 bottom-0 max-h-[85svh] rounded-t-xl',
-                  'data-open:animate-in data-open:slide-in-from-bottom data-open:fade-in-0',
-                  'data-closed:animate-out data-closed:slide-out-to-bottom data-closed:fade-out-0 data-closed:fill-mode-forwards',
+                  'starting:translate-y-full starting:opacity-0',
+                  'data-ending-style:translate-y-full data-ending-style:opacity-0',
                 ],
           className
         )}

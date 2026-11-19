@@ -42,9 +42,10 @@ function TooltipContent({ className, sideOffset = 8, side = 'top', anchor, varia
             variant === 'plain' ? 'border border-border bg-raised text-foreground' : 'bg-primary text-primary-on',
             // 长账号 ID 这类无空格文本必须能在容器内任意断行，否则会被气泡裁掉
             'whitespace-pre-line [overflow-wrap:anywhere] outline-none',
-            'transition-[opacity,transform] duration-150 ease-out',
-            'data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95',
-            'data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95',
+            // transition 替代关键帧：关键帧带 `filter: blur()` 声明会逐帧计算滤镜
+            'transition-[opacity,scale] duration-150 ease-out',
+            'starting:opacity-0 starting:scale-95',
+            'data-ending-style:opacity-0 data-ending-style:scale-95',
             className
           )}
           {...props}

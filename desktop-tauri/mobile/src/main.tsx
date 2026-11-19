@@ -3,7 +3,11 @@ import { App } from './App'
 import { setAuthLostHandler } from './api/client'
 import { store } from './state/store'
 import { initPwa } from './lib/pwa'
+import { applyDeviceTier } from '@ui/lib/modal-activity'
 import './styles/mobile.css'
+
+// 低配设备判定：挂 `html[data-lite]`，样式层据此关掉抽屉过渡（见 ui-kit/styles/primitives.css）
+applyDeviceTier()
 
 /**
  * 手机端入口。

@@ -5,7 +5,7 @@ import {
   Badge, Button, InputGroup, InputGroupAddon, InputGroupInput,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   SegmentedControl, Switch,
-  Card, CardHeader, CardContent, Label } from '@ui'
+  Card, CardHeader, CardContent, Label, isModalActive } from '@ui'
 import { SERVER_PAGE_SIZES, TableFooter, readPageSize, writePageSize, type PageSizeChoice } from './table-shell'
 import { t } from '../i18n'
 import {
@@ -216,7 +216,9 @@ function LogsPanel() {
   React.useEffect(() => {
     if (!auto.enabled) return
     const timer = window.setInterval(() => {
-      if (!document.hidden && shared().wbApp?.currentPage === 'logs') void poll()
+      // 弹窗打开时暂停：轮询落地会重绘日志列表，遮罩要按下层重新合成
+      if (document.hidden || isModalActive()) return
+      if (shared().wbApp?.currentPage === 'logs') void poll()
     }, auto.ms)
     return () => window.clearInterval(timer)
   }, [auto.enabled, auto.ms, poll])

@@ -158,8 +158,9 @@ function MultiSelect<Value extends string = string>({
               // 所以只把触发器宽度当下限，再给可用宽度封顶
               'flex max-h-[280px] w-max min-w-[max(var(--anchor-width),220px)] max-w-[var(--available-width)] flex-col overflow-hidden',
               'rounded-lg border border-border-strong bg-raised shadow-3 outline-none',
-              'data-open:animate-in data-open:fade-in-0',
-              'data-closed:animate-out data-closed:fade-out-0'
+              // transition 替代关键帧，避开 `filter: blur()` 的逐帧计算
+              'transition-opacity duration-150',
+              'starting:opacity-0 data-ending-style:opacity-0'
             )}
           >
             {/* 搜索框在浮层里（input-inside-popup）：触发器保持「选择器」的样子，

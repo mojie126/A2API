@@ -3,6 +3,7 @@ import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import { cn } from './lib/cn'
 import { Button } from './button'
 import { t } from './i18n'
+import { holdModalActive } from './lib/modal-activity'
 
 /**
  * 弹窗（标准形态，与 shadcn/ui 的 Dialog 一致）。
@@ -17,13 +18,24 @@ import { t } from './i18n'
  *   · DialogBody    ← `.modal-body`（纵向排布、超高滚动的正文区）
  *   · DialogSection ← `.modal-section`（正文里的分区块，内嵌凹槽底 + 描边）
  *
- * 视觉对齐既有的 `.modal-mask` / `.modal` 一族：遮罩 46% 黑 + 3px 背景模糊，
- * 弹窗宽 min(620px, 100%)、--r-lg 圆角、--shadow-3 投影；入场是「淡入 + 上移 10px
- * 收 1.5%」，出场反向。z-index 取 30（与 .modal-mask 同档，轻提示在 40 之上）。
+ * 视觉对齐既有的 `.modal-mask` / `.modal` 一族：遮罩 46% 黑、弹窗宽
+ * min(620px, 100%)、--r-lg 圆角、--shadow-3 投影；入场是「淡入 + 上移 10px
+ * 收 1.5%」，出场反向。z-index 取 30（同 .modal-mask 档，轻提示在 40 之上）。
  *
- * 出场动画挂 `fill-mode-forwards`：tw-animate 默认 fill-mode:none，动画一结束元素就
- * 弹回原样（不透明），而 Base UI 要等动画结束那个微任务里才把内容藏起来 —— 中间这
- * 一帧就是「关窗闪一下」。forwards 让它停在动画末帧（opacity 0）上，等隐藏接手。
+ * ── 遮罩不再做背景模糊 ────────────────────────────────────────
+ * 原先遮罩挂 `backdrop-filter: blur(3px)`。该属性按定义要对元素背后的像素
+ * 重新采样，下层任何一帧变化都要把整个视口重算一次；而面板里的定时轮询
+ * （全局 20 秒、在途请求 5 秒、账号页 2 秒）在弹窗打开期间照旧跑，等于把
+ * 「每秒重算全屏模糊」挂在弹窗活着的整段时间上。模糊已去掉，改用纯色遮罩；
+ * 需要压暗靠 46% 黑本身就够。若将来要恢复，先读 lib/modal-activity.ts 的说明。
+ *
+ * ── 出场不用关键帧 ──────────────────────────────────────────
+ * tw-animate 的 `enter` / `exit` 关键帧里带 `filter: blur(...)` 声明，即使值
+ * 为 0 也会让元素单独建层并逐帧计算滤镜。这里改用 transition + 状态数据属性，
+ * 出场只是 opacity 与 transform 的插值，没有滤镜参与。
+ *
+ * 面板记录（`lib/modal-activity.ts`）在 DialogContent 挂载期间累加，弹窗打开
+ * 时给 `<html>` 打标记，各定时轮询据此暂停。
  *
  * 交互交给 Base UI 的 Dialog：焦点陷阱、Esc 关闭、滚动锁定、aria-modal 与
  * 关闭后焦点归位全部内建。
@@ -54,16 +66,16 @@ const DialogDescription = (props: DialogPrimitive.Description.Props) => (
 )
 
 function DialogOverlay({ className, ...props }: DialogPrimitive.Backdrop.Props) {
-  // 遮罩带全屏 backdrop-filter，入场动画会迫使每一帧重新模糊整个背景，
-  // 高负载时掉帧明显，因此入场不设动画（挂载即终态，模糊只计算一次），
-  // 出场保留短淡出与 fill-mode-forwards（关窗闪一下的修复见上方注释）。
+  // 纯色遮罩：不再做 backdrop-filter。原因见模块头「遮罩不再做背景模糊」。
+  // 出场只淡出 opacity。Base UI 的出场状态属性是 `data-ending-style`
+  // （`data-closed` 只在真正关闭后出现，那时元素已被卸载/隐藏）。
   return (
     <DialogPrimitive.Backdrop
       data-slot='dialog-overlay'
       className={cn(
-        'fixed inset-0 isolate z-30 bg-mask backdrop-blur-[3px]',
+        'fixed inset-0 isolate z-30 bg-mask',
         'transition-opacity duration-150',
-        'data-closed:animate-out data-closed:fade-out-0 data-closed:fill-mode-forwards',
+        'starting:opacity-0 data-ending-style:opacity-0',
         className
       )}
       {...props}
@@ -106,6 +118,9 @@ function DialogContent({
   overlayForceRender = false,
   ...props
 }: DialogContentProps) {
+  // 弹窗打开期间标记 `<html data-modal-active>`，各定时轮询据此暂停：
+  // 轮询重绘下层会让遮罩重新合成，高负载下这就是弹窗卡顿的主要来源。
+  React.useEffect(() => holdModalActive(), [])
   return (
     <DialogPortal keepMounted={keepMounted}>
       <DialogOverlay forceRender={overlayForceRender} />
@@ -114,9 +129,11 @@ function DialogContent({
         className={cn(
           'fixed top-1/2 left-1/2 z-30 flex max-h-[calc(100vh-48px)] w-[min(620px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col',
           'overflow-hidden rounded-lg border border-border bg-surface shadow-3 outline-none',
-          'transition-[opacity,transform] duration-200 [transition-timing-function:cubic-bezier(.2,.9,.3,1)]',
-          'data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[.985] data-open:slide-in-from-bottom-2.5',
-          'data-closed:animate-out data-closed:fade-out-0 data-closed:fill-mode-forwards',
+          // 只用 transition，不用 tw-animate 的关键帧：enter/exit 关键帧带
+          // `filter: blur()` 声明，即使为 0 也会逐帧计算滤镜。
+          'transition-[opacity,scale] duration-200 [transition-timing-function:cubic-bezier(.2,.9,.3,1)]',
+          'starting:opacity-0 starting:scale-[.985]',
+          'data-ending-style:opacity-0 data-ending-style:scale-[.985]',
           className
         )}
         {...props}

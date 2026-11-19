@@ -1,4 +1,5 @@
 import { invalidateUsageTasks } from './accounts-usage-tasks'
+import { isModalActive } from '@ui/lib/modal-activity'
 import {
   errorMessage, POOL_VALUE_PREFIX, WARP_VALUE_PREFIX, shared, toast,
   type AccountRecord,
@@ -152,6 +153,8 @@ export function startConnectionsPolling(): void {
   if (connectionsTimer) return
   connectionsTimer = setInterval(() => {
     if (document.hidden || shared().wbApp?.currentPage !== 'accounts') return
+    // 弹窗打开时暂停：连接数只是装饰性读数，为此重绘下层不值得
+    if (isModalActive()) return
     void syncConnections()
   }, CONNECTIONS_POLL_MS)
 }

@@ -51,3 +51,20 @@
   .col-grip-end { right: 0; }
   body.col-resizing { cursor: col-resize; user-select: none; }
 }
+
+/* ─── 低配设备降级 ───────────────────────────────────────────
+   `html[data-lite]` 由 `lib/modal-activity.ts` 的 applyDeviceTier 按
+   hardwareConcurrency / deviceMemory 判定后挂上。低配机上的弹窗与浮层
+   去掉过渡与动画：过渡本身不贵，但每一帧仍要重新合成，叠加在本来就
+   掉帧的机器上只会更糟。这里只关过渡，不关交互与阴影。 */
+@layer utilities {
+  html[data-lite] [data-slot='dialog-content'],
+  html[data-lite] [data-slot='sheet-content'],
+  html[data-lite] [data-slot='alert-dialog-content'],
+  html[data-lite] [data-slot='dialog-overlay'],
+  html[data-lite] [data-slot='sheet-overlay'],
+  html[data-lite] [data-slot='alert-dialog-overlay'] {
+    transition: none !important;
+    animation: none !important;
+  }
+}

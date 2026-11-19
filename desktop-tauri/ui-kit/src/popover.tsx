@@ -96,9 +96,12 @@ function PopoverContent({
             'flex max-h-[min(70vh,560px)] flex-col overflow-hidden rounded-lg border border-border-strong bg-raised text-foreground shadow-3',
             'outline-none',
             // 入场：淡入 + 轻微上移。不做缩放 —— 浮层常常要「打开后立刻量尺寸摆位置」，
-            // transform 会污染坐标（与 SelectContent 同一条取舍）
-            'data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-top-1',
-            'data-closed:animate-out data-closed:fade-out-0',
+            // transform 会污染坐标（与 SelectContent 同一条取舍）。
+            // 用 transition 而不是 tw-animate 关键帧：关键帧带 `filter: blur()` 声明，
+            // 会逐帧计算滤镜（与弹窗同一取舍，见 dialog.tsx 模块头）。
+            'transition-[opacity,translate] duration-150',
+            'starting:opacity-0 starting:-translate-y-1',
+            'data-ending-style:opacity-0 data-ending-style:-translate-y-1',
             className
           )}
           {...props}

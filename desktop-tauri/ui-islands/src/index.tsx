@@ -1,5 +1,6 @@
 import { mountInput, observeInputs } from './input'
 import { mountSegmented } from './segmented'
+import { applyDeviceTier, isModalActive } from '@ui/lib/modal-activity'
 import './uikit'
 import './styles/islands.css'
 // 外壳须先同步创建页面挂载点，业务岛才能接管各 section。
@@ -10,15 +11,21 @@ import './island-registry'
 import './desktop-tray'
 import './plugin-startup'
 
+// 低配设备判定：挂 `html[data-lite]`，样式层据此关掉弹窗过渡（见 primitives.css）
+applyDeviceTier()
+
 declare global {
   interface Window {
     wbSegmented?: { mount: typeof mountSegmented }
     wbInput?: { mount: typeof mountInput }
+    /** 当前是否有全屏弹窗打开；经典脚本的定时轮询据此暂停（见 lib/modal-activity.ts） */
+    wbModalActive?: () => boolean
   }
 }
 
 window.wbSegmented = { mount: mountSegmented }
 window.wbInput = { mount: mountInput }
+window.wbModalActive = isModalActive
 observeInputs()
 
 // 首屏页现在就先挂上：`app.js` 的第一次 `showPage` 要等 DOMContentLoaded，
