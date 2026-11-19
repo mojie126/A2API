@@ -55,7 +55,11 @@ pub(crate) const SNAPSHOT_FORMAT: &str = "agent2api-cloud-sync-snapshot";
 pub(crate) const SNAPSHOT_VERSION: u32 = 1;
 
 /// 进快照的表（顺序即插入顺序：账号先于其它，便于失败时一眼看出走到哪一步）
-pub(crate) const SYNCED_TABLES: &[&str] = &["accounts", "account_usage_records", "checkin_records", "account_limiter_events"];
+///
+/// `account_limiter_events` 不进同步：它是按请求逐条累积的限额台账，只服务
+/// 本机的近期窗口判定，换台机器后既无法继续累积也没有展示价值，且是同步包
+/// 体积增长的主要来源。历史数据由限额模块按保留期修剪。
+pub(crate) const SYNCED_TABLES: &[&str] = &["accounts", "account_usage_records", "checkin_records"];
 
 /// 非保留配置键里**不进快照**的项（理由见模块头三类排除）。
 const EXCLUDED_CONFIG_KEYS: &[&str] = &[

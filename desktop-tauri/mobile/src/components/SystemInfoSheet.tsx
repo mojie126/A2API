@@ -203,7 +203,7 @@ export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () 
       '',
       `[${t('网关')}]`,
       `${t('版本')}: ${text(app.version)}`,
-      `${t('更新通道')}: ${app.channel === 'both' ? t('正式版与 beta 版') : app.channel === 'beta' ? t('仅 beta 版') : t('仅正式版')}`,
+      `${t('更新通道')}: ${app.channel === 'both' ? t('正式版与 beta 版') : app.channel === 'beta' ? t('仅 beta 版') : app.channel === 'none' ? t('未启用') : t('仅正式版')}`,
       `${t('运行形态')}: ${deploymentLabel}`,
       `${t('操作系统')}: ${osFull} (${text(runtime.arch)})`,
       `${t('监听地址')}: ${text(deployment.host)}:${text(deployment.port)}`,
@@ -248,7 +248,7 @@ export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () 
           ) : (
             <Card className='m-card'>
               <Row label={t('软件版本')} value={text(app.version)} mono />
-              <Row label={t('更新通道')} value={app.channel === 'both' ? t('正式版与 beta 版') : app.channel === 'beta' ? t('仅 beta 版') : t('仅正式版')} />
+              <Row label={t('更新通道')} value={app.channel === 'both' ? t('正式版与 beta 版') : app.channel === 'beta' ? t('仅 beta 版') : app.channel === 'none' ? t('未启用') : t('仅正式版')} />
               <Row label={t('运行形态')} value={deploymentLabel} />
               <Row
                 label={t('操作系统')}

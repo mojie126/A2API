@@ -421,6 +421,23 @@
 - `fork-build.yml`、`frontend-artifacts`、`warm-cache` 工作流与部署运行基线（个人环境）
 - `scripts/build-desktop.ps1` 本地增量构建脚本（默认路径钉在本机 mingw64，需参数化后再议）
 
+### 2026-11-19（云同步体积治理）
+
+- 用户反馈云同步数据持续变大，排查结论：同步范围是 `accounts`、`account_usage_records`、`checkin_records` 与 `account_limiter_events`（不含请求日志、原始请求、调试流量，也不整库同步）；主因是 `account_limiter_events` 按计费请求逐条插入且从无删除，V17 迁移还把历史请求全量灌入过；其次 `checkin_records` 无保留期、`account_usage_records.usage` 为整段 JSON；此前只有 256 MiB 硬拒绝，没有自动裁剪
+- 修复：`account_limiter_events` 移出同步表（上传与下载都不再携带，旧快照里多余的表按不在范围忽略、不覆盖本机）；新增 30 天保留期修剪 `limiter::prune_history`，在调度循环启动时执行一次、之后每 24 小时一次，数据库未就绪时下一轮重试
+- 影响：同步包体积不再随运行时间增长；本机数据库的限额台账也有上界
+- 面板提供商图标补充 `deepaicode` 与 `codar`：`ui-shared/provider-icons.ts` 增加映射，资源放在 `ui/assets/providers/`（科搭取自官方插件资源，DeepAI 使用参考仓库图标），桌面前端产物已重建
+- 报表 Top 账号悬停提示：超过 32 字符的账号标识单独成行，气泡支持任意断行并把最大宽度从 320px 放宽到 480px，长 ID 不再被裁掉
+- 验证：服务端编译通过
+
+### 2026-11-19 补记（更新检查可彻底关闭）
+
+- 用户要求允许彻底关闭更新检查：两个通道都关时不再报「至少需要关注正式版或 beta 版中的一个通道」
+- 软件更新：`UpdateChannels::from_raw` 与 `set_update_channels` 去掉强制回落正式版与通道校验，`key()` 增加 `none`、新增 `enabled()`；`check_with_mode` 在两个通道都关且无强制更新时不发起任何网络请求，手动检查返回「更新检查已关闭：未关注任何更新通道」，定时检查返回 `disabled: true`
+- 插件更新：插件设置 `stored()` 不再强制回落正式版、`configure()` 去掉同样的通道校验；`catalog::apply_automatic` 与自动检查调度循环在两通道都关时整轮跳过，不出网
+- 界面：桌面端与手机端的更新设置、插件设置去掉「至少需要关注」拦截，系统信息页通道标签支持显示「未启用」
+- 强制更新（上游要求的最低版本）不受通道关闭影响，仍按原逻辑提示与拦截
+
 ## 后续同步官方更新
 
 1. 在 `main` 执行 `git fetch origin --prune` 并快进到官方最新版本

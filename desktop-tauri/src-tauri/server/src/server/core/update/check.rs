@@ -133,6 +133,23 @@ impl UpdateManager {
     async fn check_with_mode(&self, current_version: &str, manual: bool) -> Result<Value, UpdateError> {
         self.resolve_repository().await;
         let required = self.force_update(current_version);
+        // 两个通道都关 = 用户彻底关闭更新检查：不发起任何网络请求。
+        // 强制更新（上游要求的最低版本）不受影响。
+        let channels = config::update_channels();
+        if !channels.enabled() && required.is_none() {
+            if manual {
+                return Err(UpdateError::new("更新检查已关闭：未关注任何更新通道"));
+            }
+            let mut result = self.build_check_result(current_version);
+            result["checked"] = json!(false);
+            result["disabled"] = json!(true);
+            result["hasUpdate"] = json!(false);
+            result["channels"] = json!(channels);
+            result["checking"] = json!(false);
+            result["lastError"] = Value::Null;
+            result["nextCheckAt"] = Value::Null;
+            return Ok(result);
+        }
         let key = self.check_key_for(current_version);
         let interval = config::scheduled_settings().update_check.interval * 60_000;
         let started = logging::now_ms();

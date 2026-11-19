@@ -25,6 +25,17 @@ pub fn install(db: Option<Db>) {
     sources::reload();
 }
 
+/// 限额事件保留期（30 天）。
+///
+/// 台账只用于近期的窗口判定，保留期之外的记录不再参与计算；修剪后云同步
+/// 包与本机数据库都不会随运行时间无限增长。
+pub const LIMITER_EVENT_RETENTION_MS: i64 = 30 * 86_400_000;
+
+/// 修剪限额事件历史，返回删除行数；数据库未就绪时返回 `None`。
+pub fn prune_history() -> Option<usize> {
+    counter::prune_events(LIMITER_EVENT_RETENTION_MS)
+}
+
 pub fn note_request_tokens(account_id: &str, tokens: i64, now_ms: i64) {
     legacy::note_request_tokens(account_id, tokens, now_ms);
 }

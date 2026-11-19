@@ -390,7 +390,19 @@ pub fn spawn(store: AccountStore, update: UpdateManager) {
                 logging::log("[Tasks]", &format!("恢复「{}」排期失败：{error}", task.label));
             }
         }
+        // 限额事件历史的修剪：启动即做一次，之后每天一次。
+        // 数据库未就绪（启动早期）时返回 None，下一轮再试。
+        let mut last_prune = i64::MIN / 2;
         loop {
+            let now = logging::now_ms();
+            if now.saturating_sub(last_prune) >= 86_400_000 {
+                if let Some(removed) = crate::server::core::limiter::prune_history() {
+                    if removed > 0 {
+                        logging::verbose("[Tasks]", &format!("修剪限额事件历史 {removed} 行"));
+                    }
+                    last_prune = now;
+                }
+            }
             let Ok(states) = task_state::read_all() else {
                 tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
                 continue;

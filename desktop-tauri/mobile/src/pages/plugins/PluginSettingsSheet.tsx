@@ -26,11 +26,6 @@ export function PluginSettingsSheet({ onClose, onChanged }: { onClose: () => voi
 
   async function save(patch: Partial<PluginSettings>) {
     if (busy || !settings) return
-    const next = { ...settings, ...patch }
-    if (patch.channelMode !== 'follow' && !next.stable && !next.beta) {
-      setError(t('至少需要关注正式版或 beta 版中的一个通道'))
-      return
-    }
     setBusy(true)
     try {
       const next = await savePluginSettings(patch)

@@ -43,11 +43,6 @@ export function PluginSettingsDialog({ open, onClose, onChanged }: {
 
   async function save(patch: Partial<PluginSettings>): Promise<void> {
     if (busy || !settings) return
-    const next = { ...settings, ...patch }
-    if (patch.channelMode !== 'follow' && !next.stable && !next.beta) {
-      toast(t('至少需要关注正式版或 beta 版中的一个通道'), 'err')
-      return
-    }
     setBusy(true)
     try {
       const result = await api<PluginSettings>('PATCH', '/api/plugins/settings', patch)

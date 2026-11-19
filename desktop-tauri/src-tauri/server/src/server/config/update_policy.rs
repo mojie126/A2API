@@ -24,7 +24,7 @@ impl Default for UpdateChannels {
 
 impl UpdateChannels {
     pub(super) fn from_raw(raw: &Map<String, Value>) -> Self {
-        let mut channels = Self {
+        let channels = Self {
             stable: raw
                 .get(KEY_UPDATE_STABLE)
                 .and_then(Value::as_bool)
@@ -34,9 +34,7 @@ impl UpdateChannels {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         };
-        if !channels.stable && !channels.beta {
-            channels.stable = true;
-        }
+        // 两个通道都关 = 彻底关闭更新检查，不再强制回落到正式版
         channels
     }
 
@@ -48,11 +46,17 @@ impl UpdateChannels {
         }
     }
 
+    /// 是否开启了更新检查（任一通道）
+    pub fn enabled(self) -> bool {
+        self.stable || self.beta
+    }
+
     pub fn key(self) -> &'static str {
         match (self.stable, self.beta) {
             (true, true) => "both",
             (false, true) => "beta",
-            _ => "stable",
+            (true, false) => "stable",
+            (false, false) => "none",
         }
     }
 }
@@ -129,9 +133,7 @@ pub fn set_update_channels(
         stable: patch.stable.unwrap_or(previous.stable),
         beta: patch.beta.unwrap_or(previous.beta),
     };
-    if !next.stable && !next.beta {
-        return Err("至少需要关注正式版或 beta 版中的一个通道".to_string());
-    }
+    // 允许两个通道都关：表示彻底关闭更新检查
     let saved = update(|config| {
         if let Some(stable) = patch.stable {
             config

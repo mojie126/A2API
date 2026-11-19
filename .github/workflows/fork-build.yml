@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       title: ${{ steps.title.outputs.value }}
+      version: ${{ steps.release.outputs.version }}
     permissions:
       contents: read
     steps:
@@ -299,13 +300,27 @@ jobs:
             exit 1
           fi
 
+      - name: 准备发布说明
+        run: |
+          set -euo pipefail
+          # 版本号升级后发布说明文件名会随之变化：按当前版本取 docs/release-notes_<版本>.md，
+          # 文件缺失时退回一份最小说明，避免发布步骤因找不到文件而失败
+          version="${{ needs.prepare.outputs.version }}"
+          src="docs/release-notes_${version}.md"
+          if [[ -f "$src" ]]; then
+            cp "$src" release-notes.generated.md
+          else
+            echo "::warning::未找到 $src，使用最小发布说明"
+            printf '版本 %s 构建\n\n- 变更文档缺失（%s），请补充后再发布正式版\n' "$version" "$src" > release-notes.generated.md
+          fi
+
       - name: 创建或更新草稿 Release
         uses: ncipollo/release-action@v1.21.0
         with:
           allowUpdates: true
           replacesArtifacts: true
           artifacts: "dist/*"
-          bodyFile: docs/release-notes_3.5.0-beta.1.md
+          bodyFile: release-notes.generated.md
           draft: true
           tag: ${{ needs.prepare.outputs.title }}
           token: ${{ secrets.GITHUB_TOKEN }}

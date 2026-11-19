@@ -230,7 +230,7 @@ function toPlainText(info: SystemInfo): string {
     [t('开源许可'), text(app.license)],
     [t('源代码'), text(app.sourceUrl)],
     [t('版权声明'), text(app.copyright)],
-    [t('更新通道'), app.channel === 'both' ? t('正式版与 beta 版') : app.channel === 'beta' ? t('仅 beta 版') : t('仅正式版')],
+    [t('更新通道'), app.channel === 'both' ? t('正式版与 beta 版') : app.channel === 'beta' ? t('仅 beta 版') : app.channel === 'none' ? t('未启用') : t('仅正式版')],
     [t('数据库 schema'), text(app.schemaVersion)],
     [t('库中 schema'), text(app.dbSchemaVersion)],
   ])
@@ -382,7 +382,9 @@ function SystemInfoPanel() {
           ? <Badge variant='warning' shape='tag'>{t('正式版与 beta 版')}</Badge>
           : app.channel === 'beta'
             ? <Badge variant='warning' shape='tag'>{t('仅 beta 版')}</Badge>
-            : <Badge variant='outline' shape='tag'>{t('仅正式版')}</Badge>],
+            : app.channel === 'none'
+              ? <Badge variant='outline' shape='tag'>{t('未启用')}</Badge>
+              : <Badge variant='outline' shape='tag'>{t('仅正式版')}</Badge>],
         [t('数据库 schema'), (
           <span className='sysinfo-mono'>
             {text(app.schemaVersion)}

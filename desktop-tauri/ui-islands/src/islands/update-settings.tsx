@@ -73,11 +73,6 @@ export function UpdateSettingsDialog({ open, onClose }: { open: boolean; onClose
 
   async function saveChannel(patch: Partial<Pick<UpdateChannels, 'stable' | 'beta'>>): Promise<void> {
     if (channelBusy || !channels) return
-    const next = { ...channels, ...patch }
-    if (!next.stable && !next.beta) {
-      toast(t('至少需要关注正式版或 beta 版中的一个通道'), 'err')
-      return
-    }
     setChannelBusy(true)
     try {
       const result = await shared().workbuddyDesktop?.setUpdateChannels(patch)

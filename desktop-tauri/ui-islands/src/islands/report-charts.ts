@@ -225,12 +225,17 @@ export function rankRows(list: StatsGroup[] | undefined): RankRowView[] | null {
     const text = formatTokens(item.tokens)
     const name = item.label || item.id || t('未知')
     const full = item.id ? t('{name}（{id}）', { name, id: item.id }) : name
+    // 账号 id 可能是几十个字符的连串标识：单独占一行，交给提示气泡的
+    // 任意断行处理，避免整段挤在名称后面被裁掉
+    const tip = item.id.length > 32
+      ? `${name}\n${item.id}\n${t('{tokens} tokens · 占 {pct}%', { tokens: text, pct: percent.toFixed(1) })}`
+      : t('{name}：{tokens} tokens · 占 {pct}%', { name: full, tokens: text, pct: percent.toFixed(1) })
     return {
       key: `${index}-${item.id || name}`,
       id: item.id,
       name,
       full,
-      tip: t('{name}：{tokens} tokens · 占 {pct}%', { name: full, tokens: text, pct: percent.toFixed(1) }),
+      tip,
       tokensText: text,
       percentText: `${percent.toFixed(1)}%`,
       barWidth: `${percent.toFixed(1)}%`,

@@ -27,11 +27,6 @@ export function AppUpdateSettings({ onChanged }: { onChanged: (channelsChanged: 
 
   async function saveChannel(patch: Partial<Pick<UpdateChannels, 'stable' | 'beta'>>) {
     if (busy || !channels) return
-    const next = { ...channels, ...patch }
-    if (!next.stable && !next.beta) {
-      setError(t('至少需要关注正式版或 beta 版中的一个通道'))
-      return
-    }
     setBusy(true)
     setError('')
     try {

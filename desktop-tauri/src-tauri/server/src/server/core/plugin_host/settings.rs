@@ -75,9 +75,7 @@ fn stored() -> PluginSettings {
     if !(MIN_INTERVAL..=MAX_INTERVAL).contains(&settings.interval) {
         settings.interval = defaults.interval;
     }
-    if !settings.stable && !settings.beta {
-        settings.stable = true;
-    }
+    // 两个通道都关 = 关闭插件更新检查，不再强制回落到正式版
     // 旧结构没有继承标记；只保留非默认的自定义值，默认值改为跟随软件。
     if value.get("channelMode").is_none()
         && (settings.beta != defaults.beta || settings.stable != defaults.stable)
@@ -189,9 +187,7 @@ pub fn configure(patch: &Value) -> Result<Value, String> {
             }
         }
     }
-    if !next.stable && !next.beta {
-        return Err("至少需要关注正式版或 beta 版中的一个通道".to_string());
-    }
+    // 允许两个通道都关：表示关闭插件更新检查
     let value = serde_json::to_value(next).map_err(|error| error.to_string())?;
     let saved = config::update_raw_field(KEY, value);
     notify_changed(before);

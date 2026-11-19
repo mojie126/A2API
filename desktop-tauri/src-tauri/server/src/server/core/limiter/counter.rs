@@ -104,6 +104,22 @@ fn slot() -> &'static Mutex<Facts> {
 
 pub fn install(db: Option<Db>) { let _ = DB.set(db); }
 
+/// 修剪限额事件历史：删除早于保留窗口的行，返回删除行数。
+///
+/// `None` = 数据库尚未安装（启动早期），调用方下次再试。
+/// 台账只服务本机的近期窗口判定，保留期之外的记录不再参与任何计算。
+pub fn prune_events(retention_ms: i64) -> Option<usize> {
+    let db = DB.get().and_then(Option::as_ref)?;
+    let cutoff = logging::now_ms().saturating_sub(retention_ms.max(0));
+    db.with_mut(|conn| {
+        conn.execute(
+            "DELETE FROM account_limiter_events WHERE ts < ?1",
+            params![cutoff],
+        )
+        .unwrap_or(0)
+    })
+}
+
 pub fn facts() -> Facts {
     let Ok(mut facts) = slot().lock() else { return Facts::new() };
     let now = logging::now_ms();

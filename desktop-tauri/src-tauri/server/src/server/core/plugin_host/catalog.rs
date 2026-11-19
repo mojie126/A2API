@@ -300,6 +300,10 @@ async fn apply_automatic() {
         return;
     }
     let channels = settings.channels();
+    if !channels.stable && !channels.beta {
+        // 两个通道都关 = 关闭插件更新检查
+        return;
+    }
     let catalog = snapshot();
     if catalog["stale"] == true || catalog["checked"] != true {
         return;
@@ -361,7 +365,9 @@ pub fn spawn() {
         loop {
             let settings = settings::current();
             let state = task_state::read(&key()).unwrap_or_default();
-            let network_enabled = settings.auto_check;
+            let channels = settings.channels();
+            // 两个通道都关时整轮跳过，不发起任何网络请求
+            let network_enabled = settings.auto_check && (channels.stable || channels.beta);
             if network_enabled && !state.running() && logging::now_ms() >= state.due_at() {
                 if let Err(error) = refresh(false).await {
                     logging::verbose("[Plugin]", &format!("插件自动检查：{error}"));

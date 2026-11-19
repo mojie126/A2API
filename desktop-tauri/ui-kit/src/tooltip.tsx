@@ -38,9 +38,10 @@ function TooltipContent({ className, sideOffset = 8, side = 'top', anchor, varia
         <BaseTooltip.Popup
           data-slot='tooltip-content'
           className={cn(
-            'max-w-[min(320px,calc(100vw-16px))] rounded-md px-2.5 py-2 text-[11.5px] leading-[1.55] shadow-3',
+            'max-w-[min(480px,calc(100vw-16px))] rounded-md px-2.5 py-2 text-[11.5px] leading-[1.55] shadow-3',
             variant === 'plain' ? 'border border-border bg-raised text-foreground' : 'bg-primary text-primary-on',
-            'break-words outline-none',
+            // 长账号 ID 这类无空格文本必须能在容器内任意断行，否则会被气泡裁掉
+            'whitespace-pre-line [overflow-wrap:anywhere] outline-none',
             'transition-[opacity,transform] duration-150 ease-out',
             'data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95',
             'data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95',

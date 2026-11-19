@@ -49,6 +49,8 @@ export const BUILTIN_PROVIDER_ICONS: Readonly<Record<string, string>> = {
   'qwenwork-intl': 'assets/providers/qwenwork.svg',
   'qwenwork-enterprise': 'assets/providers/qwenwork.svg',
   dumate: 'assets/providers/dumate.png',
+  deepaicode: 'assets/providers/deepaicode.svg',
+  codar: 'assets/providers/codar.png',
   'kimi-work': 'assets/providers/kimi-work.svg',
   opendesign: 'assets/providers/opendesign.svg',
   'nous-portal': 'assets/providers/nous-portal.svg',
