@@ -259,7 +259,22 @@ pub fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     create_main_window(app, true).ok()
 }
 
+/// 插件调用的 async 状态机叠加了账号出口、余额队列、容量准入等多层作用域包装，
+/// 默认 2 MiB 工作线程栈在 windows-gnu 下会溢出并让整个桌面进程闪退。
+/// 这里在 Tauri 用到它自己的默认运行时之前，换成 8 MiB 栈的运行时。
+fn install_runtime() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(8 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("创建 Tokio 运行时失败");
+    // 运行时必须活到进程结束：交给 Tauri 管句柄，Runtime 本身泄漏保留
+    tauri::async_runtime::set(runtime.handle().clone());
+    std::mem::forget(runtime);
+}
+
 pub fn run() {
+    install_runtime();
     if let Some(code) = server::core::providers::subscriptions::dispatch_helper() {
         std::process::exit(i32::from(code));
     }
