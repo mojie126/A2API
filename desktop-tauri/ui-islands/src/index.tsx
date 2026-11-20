@@ -10,6 +10,7 @@ import './desktop-titlebar'
 import './island-registry'
 import './desktop-tray'
 import './plugin-startup'
+import './advertisements'
 
 // 低配设备判定：挂 `html[data-lite]`，样式层据此关掉弹窗过渡（见 primitives.css）
 applyDeviceTier()

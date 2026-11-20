@@ -44,11 +44,13 @@ struct Entry {
 #[derive(Clone)]
 pub struct Connections {
     inner: Arc<Mutex<HashMap<String, Entry>>>,
+    // 上游 beta.2 新增：计数变化时唤醒等待方（面板事件推送的连接数也走这条）
+    changed: Arc<tokio::sync::Notify>,
 }
 
 impl Connections {
     pub fn new() -> Self {
-        Self { inner: Arc::new(Mutex::new(HashMap::new())) }
+        Self { inner: Arc::new(Mutex::new(HashMap::new())), changed: Arc::new(tokio::sync::Notify::new()) }
     }
 
     /// 全部**非零**计数（account_id → count），按 id 排序保证输出稳定。
@@ -87,6 +89,9 @@ impl Connections {
         entry.count += 1;
         // 账号的提供商不随时间变化，这里同步一次只是防止老记录缺字段
         entry.provider = provider.to_string();
+        drop(guard);
+        self.changed.notify_waiters();
+        crate::server::core::panel_events::notify(crate::server::core::panel_events::Change::Connections);
     }
 
     /// 计数 -1（减到 0 就删项；无记录时是空操作 —— 幂等，重复释放不会变负数）
@@ -102,7 +107,12 @@ impl Connections {
             }
             None => {}
         }
+        drop(guard);
+        self.changed.notify_waiters();
+        crate::server::core::panel_events::notify(crate::server::core::panel_events::Change::Connections);
     }
+
+    pub(super) fn changed_notify(&self) -> Arc<tokio::sync::Notify> { self.changed.clone() }
 }
 
 impl Default for Connections {
@@ -159,6 +169,31 @@ impl ConnectionGuard {
             self.connections.add(current, provider);
         }
         self.account_id = next;
+    }
+
+    pub(super) fn try_rebind(&mut self, account_id: Option<String>, provider: &str, limit: u64) -> bool {
+        let next = account_id.filter(|id| !id.is_empty());
+        if self.account_id == next { return true; }
+        let mut counts = lock_counts(&self.connections.inner);
+        if let Some(id) = &next {
+            if limit > 0 && counts.get(id).map(|entry| entry.count).unwrap_or(0) >= limit as usize { return false; }
+        }
+        if let Some(previous) = self.account_id.as_deref() {
+            if let Some(entry) = counts.get_mut(previous) {
+                entry.count = entry.count.saturating_sub(1);
+                if entry.count == 0 { counts.remove(previous); }
+            }
+        }
+        if let Some(id) = &next {
+            let entry = counts.entry(id.clone()).or_insert_with(|| Entry { count: 0, provider: provider.to_string() });
+            entry.count += 1;
+            entry.provider = provider.to_string();
+        }
+        self.account_id = next;
+        drop(counts);
+        self.connections.changed.notify_waiters();
+        crate::server::core::panel_events::notify(crate::server::core::panel_events::Change::Connections);
+        true
     }
 
     /// 把计数移交给响应流：返回一个持有当前账号的新凭证，自身转为已释放。

@@ -9,7 +9,7 @@ export const CAPABILITY_KEYS = [
 
 export type CapabilityKey = (typeof CAPABILITY_KEYS)[number]
 export type Capabilities = Partial<Record<CapabilityKey, number | boolean | null>>
-export type CapabilitySource = 'upstream' | 'modelsdev' | 'user'
+export type CapabilitySource = 'upstream' | 'modelsdev' | 'user' | 'gateway'
 
 /**
  * 思考档位表在覆盖层里用的键名（与后端 `core::capability::REASONING_LEVELS_KEY`
@@ -88,5 +88,5 @@ export function capSourceOf(
   key: CapabilityKey,
 ): CapabilitySource | '' {
   const raw = (model?.capSources as Record<string, unknown> | undefined)?.[key]
-  return raw === 'upstream' || raw === 'modelsdev' || raw === 'user' ? raw : ''
+  return raw === 'upstream' || raw === 'modelsdev' || raw === 'user' || raw === 'gateway' ? raw : ''
 }

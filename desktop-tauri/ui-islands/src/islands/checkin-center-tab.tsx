@@ -17,11 +17,12 @@ import { OfficeaceSubscriptionRow } from './checkin-officeace-row'
 import { ProviderRail, type ProviderOption } from './checkin-provider-rail'
 import { DailyAccountList } from './checkin-daily-panel'
 import { DetailLine, TaskTick, byStatus, filterOptions, type StatusFilter } from './checkin-shared'
-import { claimOnboarding, claimOnboardingBatch, onboardingClaimable, onboardingOf, queryOnboarding } from './checkin-onboarding'
+import { claimOnboarding, claimOnboardingBatch, onboardingClaimable, onboardingOf, queryOnboarding, queryOnboardingBatch } from './checkin-onboarding'
 import { onboardingSummary } from './checkin-onboarding-cache'
 import { t } from '../i18n'
 import { growthTaskCompleted, growthTaskRunnable } from '../../../ui-shared/checkin'
 import { accountCheckinStatus } from '../../../ui-shared/checkin-result'
+import { CheckinPluginTasks } from './checkin-plugin-tasks'
 
 /**
  * 「签到中心」标签页：总览卡 + 每日签到 + 新手福利 + 活动套餐 + 成长任务。
@@ -513,6 +514,13 @@ export function CenterTab({ center }: { center: CheckinCenter }): React.ReactEle
         }))
         : planGroups.map(group => ({ id: group.id, label: providerLabel(group.id), done: null, total: group.rows.length }))
 
+  // 插件附带的任务按分类并入左栏（上游 beta.2）
+  const taskCategory = section === 'daily' ? 'checkin' : section === 'growth' ? 'growth' : section === 'plans' ? 'rewards' : ''
+  for (const row of center.pluginTasks ?? []) {
+    if (row.category !== taskCategory || railOptions.some(option => option.id === row.provider)) continue
+    railOptions.push({ id: row.provider, label: row.providerLabel || providerLabel(row.provider), done: null, total: 0 })
+  }
+
   // 选中的提供商可能已经从左栏消失（它的账号被删了、或这一档不再有它的行）。
   // 这时右栏会空着，而左栏也没有能点回来的那一项 —— 直接回到「全部」。
   // 依赖用 id 的连接串而不是 railOptions 本身：后者每次渲染都是新数组，
@@ -648,9 +656,7 @@ export function CenterTab({ center }: { center: CheckinCenter }): React.ReactEle
                     size="sm"
                     variant="outline"
                     disabled={onboardingBusy || onboardingRows.length === 0}
-                    onClick={() => {
-                      for (const row of onboardingRows) void queryOnboarding(row.id)
-                    }}
+                    onClick={() => void queryOnboardingBatch(onboardingRows.map(row => row.id))}
                   >
                     {t('全部查询')}
                   </Button>
@@ -725,6 +731,10 @@ export function CenterTab({ center }: { center: CheckinCenter }): React.ReactEle
                   embedded
                 />
               ) : null}
+              {section === 'daily' || section === 'growth' || section === 'plans' ? <div className='px-4 pt-3'>
+                <CheckinPluginTasks center={center} provider={providerId}
+                  categories={section === 'growth' ? ['growth'] : section === 'plans' ? ['rewards'] : ['checkin']} />
+              </div> : null}
               {section === 'growth' ? growthRows.map(row => <GrowthRow key={row.id} row={row} />) : null}
               {empty ? <Empty className="ck-empty">{emptyText}</Empty> : null}
             </div>

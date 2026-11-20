@@ -128,7 +128,9 @@ pub fn launch(store: AccountStore, request: Request) -> Result<Detail, String> {
     );
     let task_name = task_label(&request.task_id);
     crate::spawn_task(async move {
-        if let Err(error) = complete(&store, request, guard, recorder).await {
+if let Err(error) = crate::server::core::runtime_capacity::background_scope(
+            complete(&store, request, guard, recorder),
+        ).await {
             logging::log_with_level("[Maintenance]", &types::safe_message(&error), "error");
         } else {
             logging::log(
@@ -145,7 +147,7 @@ pub fn launch(store: AccountStore, request: Request) -> Result<Detail, String> {
 
 pub async fn execute(store: &AccountStore, request: Request) -> Result<Detail, String> {
     let (guard, recorder) = prepare(&request)?;
-    complete(store, request, guard, recorder).await
+    crate::server::core::runtime_capacity::background_scope(complete(store, request, guard, recorder)).await
 }
 
 async fn complete(
@@ -237,20 +239,40 @@ async fn complete(
         0,
         interval(&request.task_id),
     );
-    let task_name = task_label(&request.task_id);
-    logging::log_with_level(
-        "[Maintenance]",
-        &format!("{task_name}：{note}"),
-        if failed > 0 || metadata_failed || detail.is_err() {
-            "error"
-        } else {
-            "info"
-        },
-    );
-    let detail = detail?;
-    if let Err(error) = schedule {
-        return Err(format!("维护结果已保存，但排期更新失败：{error}"));
+let task_name = if request.task_id == CREDENTIAL {
+        "凭证维护"
+    } else {
+        "模型目录更新"
+    };
+    // 凭证维护的「无法更新」多为长期 Cookie 账号的常态，降到 verbose；
+    // 模型目录更新的失败才按错误级别记录。
+    if request.task_id == CREDENTIAL || detail.is_err() {
+        logging::verbose("[Maintenance]", &format!("{task_name}：{note}"));
+    } else {
+        logging::log_with_level(
+            "[Maintenance]",
+            &format!("{task_name}：{note}"),
+            if failed > 0 || metadata_failed {
+                "error"
+            } else {
+                "info"
+            },
+        );
     }
+    if let Err(error) = &detail {
+        logging::log_with_level("[Maintenance]", &types::safe_message(error), "error");
+    }
+    let schedule = schedule.map_err(|error| {
+        let error = if detail.is_ok() {
+            format!("维护结果已保存，但排期更新失败：{error}")
+        } else {
+            format!("维护排期更新失败：{error}")
+        };
+        logging::log_with_level("[Maintenance]", &types::safe_message(&error), "error");
+        error
+    });
+    let detail = detail?;
+    schedule?;
     Ok(detail)
 }
 
@@ -534,7 +556,22 @@ pub async fn refresh_single(
         .map_err(|error| GatewayError::with_status(503, error))?;
     let before = types::accounts(store);
     let started = std::time::Instant::now();
-    let result = credential_maintenance::refresh_checked(store, adapter, id).await;
+    let result = async {
+        if let Some(account) = store.public_account_by_id(id) {
+            if account["needsRelogin"] == true && account["canSyncCredentials"] != true {
+                let reason = account["needsReloginReason"].as_str()
+                    .map(str::trim).filter(|reason| !reason.is_empty())
+                    .unwrap_or("登录授权已失效，请重新登录；自动续期无法恢复已过期或已撤销的刷新令牌。");
+                return Err(GatewayError::bad_request(reason).with_code("refresh_token_expired"));
+            }
+        }
+        if providers::is_executable_provider(adapter.provider_id()) && !adapter.supports_refresh() {
+            return Err(GatewayError::bad_request(format!(
+                "{} 当前未接入 Token 续期，请重新登录或在账号设置中更新凭证。", adapter.label(),
+            )).with_code("credential_refresh_unsupported"));
+        }
+        credential_maintenance::refresh_checked(store, adapter, id).await
+    }.await;
     let after = types::accounts(store);
     let raw = json!({
         "id": id, "provider": store.account_provider_of(id).unwrap_or_default(),

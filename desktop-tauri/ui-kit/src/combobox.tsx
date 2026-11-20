@@ -109,6 +109,7 @@ function ComboboxContent({ className, sideOffset = 4, container, children, final
 
   return (
     <BaseCombobox.Portal container={container ?? undefined}>
+      {/* 搜索框占用固定高度，菜单不能再受短弹窗正文的剩余高度限制。 */}
       <BaseCombobox.Positioner sideOffset={sideOffset} align='start' collisionBoundary={boundary}
         className='z-[35] data-anchor-hidden:invisible data-anchor-hidden:pointer-events-none'
         render={(positionerProps, state) => <ComboboxPositionerElement {...positionerProps}

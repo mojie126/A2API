@@ -94,7 +94,7 @@ export function ScriptCatalogStatus({ catalog, request, refresh, disabled, t }: 
         <Button variant='ghost' size='xs' disabled={disabled || refreshing} onClick={() => void reload()}>{t('刷新清单')}</Button>
       </div>
     </div>
-    {problems.length ? <Alert variant='warning' className='text-xs'>
+    {problems.length ? <Alert variant='warning' className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 text-xs'>
       <p className='m-0'>{t('部分信息未能更新，已读取的插件仍可查看。')}</p>
       {problems.map((problem, index) => <p key={index} className='m-0 mt-1 whitespace-pre-wrap break-words'>{problem}</p>)}
       {retryAt.length ? <p className='m-0 mt-1'>{t('受影响的来源将在 {time} 后自动重试', { time: new Date(Math.min(...retryAt)).toLocaleTimeString() })}</p> : null}

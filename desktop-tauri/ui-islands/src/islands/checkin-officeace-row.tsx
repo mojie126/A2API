@@ -33,8 +33,8 @@ const api: OfficeaceSubscriptionApi = {
 
 export function OfficeaceSubscriptionRow({ accountId, disabled }: { accountId: string; disabled?: boolean }) {
   return <OfficeaceSubscription accountId={accountId} api={api} t={t} disabled={disabled} onChange={() => {
-    void queryOnboarding(accountId)
-    void loadCenter()
+    void queryOnboarding(accountId, false, false)
+    void loadCenter(true)
     void (window as unknown as SubscriptionWindow).wbApp?.refresh?.()
   }} />
 }

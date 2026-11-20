@@ -127,6 +127,7 @@ pub fn panel_router(state: ServerState) -> Router {
         // 携带管理 API Key，因此由一次性任务 state 保护。参数形状不看 provider
         // —— 网关只转发查询串，解释权在插件。
         .route("/api/session/login/wasm-callback", get(api::plugin_login::callback))
+        .route("/auth/callback-accio", get(api::plugin_login::callback))
         .route(
             "/api/session/login/remote-callback",
             get(api::session::login_remote_callback),
@@ -215,6 +216,7 @@ pub fn panel_router(state: ServerState) -> Router {
         // 昵称、各家健康状态、路由中的账号等部署信息（字段清单见 session.rs），
         // 桌面壳的请求由壳带第一把 Key（gateway::request_builder）不受影响。
         .route("/api/session", get(api::session::get_session))
+        .route("/api/panel/events", get(api::panel_events::events))
         .route(
             "/api/config",
             get(api::config_api::get_config)
@@ -317,6 +319,7 @@ pub fn panel_router(state: ServerState) -> Router {
             "/api/routing",
             get(api::routing_api::get_routing).put(api::routing_api::put_routing),
         )
+        .route("/api/routing/errors", get(api::routing_errors::get).put(api::routing_errors::put))
         .route("/api/routing/queue", get(api::routing_api::get_routing_queue))
         .route("/api/routing/workspace", get(api::routing_workspace::get_workspace))
         .route("/api/routing/groups", get(api::routing_groups::get_groups).put(api::routing_groups::put_group))
@@ -538,6 +541,9 @@ pub fn panel_router(state: ServerState) -> Router {
         // 上游没有授权码 / 回调这条路，登录就是「发码 → 用码换 token」两次请求，
         // 因此不需要登录窗口与轮询。两条都挂 protected —— 它们都写账号库，
         // 与上面 callback 同一判据。
+        // 官方 beta.2 把这些原生登录入口整体退役成 410（改挂上游的
+        // `retired_provider_login`）；本地走原生插件体系，这些 handler 仍是活链路，
+        // 因此保留真实路由，不采用上游的退役写法。
         .route(
             "/api/session/login/sms/send",
             post(api::session::login_sms_send),
@@ -721,7 +727,30 @@ pub fn panel_router(state: ServerState) -> Router {
         .route("/api/plugins/tasks", get(api::plugin_tasks::list).patch(api::plugin_tasks::configure))
         .route("/api/plugins/tasks/run", post(api::plugin_tasks::run))
         .route("/api/plugins/helpers", get(api::plugin_helpers::list).patch(api::plugin_helpers::configure))
+        .route("/api/plugins/desktop-launch/pending", get(api::plugin_desktop_launch::pending))
+        .route("/api/plugins/desktop-launch/recovery-prepare", post(api::plugin_desktop_launch::recovery_prepare))
+        .route("/api/plugins/desktop-launch/prepare", post(api::plugin_desktop_launch::prepare))
+        .route("/api/plugins/desktop-launch/confirm", post(api::plugin_desktop_launch::confirm))
+        .route("/api/plugins/desktop-launch/status", get(api::plugin_desktop_launch::status))
+        .route("/api/plugins/desktop-launch/cancel", post(api::plugin_desktop_launch::cancel))
+        .route("/api/plugins/desktop-launch/retry-start", post(api::plugin_desktop_launch::retry_start))
+        .route("/api/plugins/desktop-launch/restore", post(api::plugin_desktop_launch::restore))
+        .route("/api/plugins/desktop-launch/settings", post(api::plugin_desktop_launch::settings).patch(api::plugin_desktop_launch::configure))
+        .route("/api/plugins/desktop-import/chatglm/prepare", post(api::plugin_desktop_import::prepare))
+        .route("/api/plugins/desktop-import/chatglm/confirm", post(api::plugin_desktop_import::confirm))
+        .route("/api/plugins/desktop-import/chatglm/cancel", post(api::plugin_desktop_import::cancel))
+        .route("/api/plugins/desktop-import/chatglm/status", get(api::plugin_desktop_import::status))
+        .route("/api/plugins/enrollment/codearts/prepare", post(api::plugin_codearts_enrollment::prepare))
+        .route("/api/plugins/enrollment/codearts/confirm", post(api::plugin_codearts_enrollment::confirm))
+        .route("/api/plugins/enrollment/codearts/cancel", post(api::plugin_codearts_enrollment::cancel))
+        .route("/api/plugins/enrollment/codearts/status", get(api::plugin_codearts_enrollment::status))
+        .route("/api/plugins/enrollment/cline-free/prepare", post(api::plugin_cline_free_enrollment::prepare))
+        .route("/api/plugins/enrollment/cline-free/confirm", post(api::plugin_cline_free_enrollment::confirm))
+        .route("/api/plugins/enrollment/cline-free/cancel", post(api::plugin_cline_free_enrollment::cancel))
+        .route("/api/plugins/enrollment/cline-free/status", get(api::plugin_cline_free_enrollment::status))
+        .route("/api/plugins/permissions", get(api::plugin_permissions::list).patch(api::plugin_permissions::configure))
         .route("/api/plugins/settings", get(api::plugins::settings).patch(api::plugins::save_settings))
+        .route("/api/plugins/capacity", get(api::runtime_capacity::get).patch(api::runtime_capacity::save))
         .route("/api/plugins/provider-settings", get(api::plugin_provider_settings::list).patch(api::plugin_provider_settings::configure))
         .route("/api/plugins/progress", get(api::plugins::progress))
         .route("/api/plugins/scripts/install", post(api::plugins::install_script))
@@ -816,6 +845,7 @@ pub fn panel_router(state: ServerState) -> Router {
         // 字节）：开关 + 长边 / 质量 / 阈值三项一起挂在同一条端点上。挂 protected
         // 的理由与 /api/sanitize 相同 —— 它改写的是发给上游的请求体（本功能只作用
         // 在对话链路，生图 / 图片编辑走独立分支、不经过压缩）。
+        .route("/api/web-tool-emulation", get(api::web_tools::get_settings).put(api::web_tools::put_settings))
         .route("/api/vision-compatibility", get(api::vision_compat::get_settings).put(api::vision_compat::put_settings))
         .route("/api/client-identification", get(api::client_identification::get_settings).put(api::client_identification::put_settings))
         .route("/api/client-identification/preview", post(api::client_identification::preview_settings))
@@ -871,6 +901,8 @@ pub fn panel_router(state: ServerState) -> Router {
             "/api/prompt",
             get(api::prompt::get_prompt).put(api::prompt::put_prompt),
         )
+        .route("/api/prompt/rules", get(api::prompt_rules::get_settings).put(api::prompt_rules::put_settings))
+        .route("/api/prompt/rules/preview", post(api::prompt_rules::preview_settings))
         // ── 定时签到（对照 server.mjs 726-746 行）──
         // 三条都在 Node 的最外层大 try 里，失败走 OpenAI 风格 body（含 run 的
         // 「签到正在执行中，请稍候」）—— 形状由 api::auto_checkin 自己保证。
@@ -954,6 +986,7 @@ pub fn panel_router(state: ServerState) -> Router {
         // 变成 405，与 Node 分叉）。
         // 注意：`/api/update`（没有尾斜杠）在 Node 里不命中前缀判定 → 全局 404，
         // 这里同样只注册 `{*rest}`（它要求至少一个非空段），行为一致。
+        .route("/api/advertisements", get(api::advertisements::get))
         .route("/api/update/{*rest}", any(api::update::entry))
         // ── 切片 7 收尾时要知道的事 ─────────────────────────────
         // 管理 API 到此**全部就位**（切片 1-6 覆盖了 health/session/config/logs/
@@ -1067,6 +1100,7 @@ pub fn gateway_router(state: ServerState) -> Router {
         .route("/mcp/image-generation", post(api::tool_runtime::mcp_image_generation)
             .get(api::tool_runtime::mcp_unsupported).delete(api::tool_runtime::mcp_unsupported))
         .route("/mcp/image-generation/files/{id}", get(api::tool_images::download))
+        .layer(middleware::from_fn(api::capacity_admission::admit))
         .layer(middleware::from_fn(require_api_key))
         .with_state(state);
     health.merge(open.merge(guarded))
@@ -1250,6 +1284,7 @@ async fn require_api_key(mut request: Request, next: Next) -> Response {
             Err(error) => return error.payload_response(),
         };
         request.extensions_mut().insert(access.source.api_key);
+        if let Some(source) = access.key_source { request.extensions_mut().insert(source); }
         if let Some(scope) = access.scope {
             crate::server::core::key_scope::attach(&mut request, scope);
         }
@@ -1322,6 +1357,7 @@ async fn require_api_key(mut request: Request, next: Next) -> Response {
 
     if let Some(access) = model_access {
         request.extensions_mut().insert(access.source.api_key);
+        if let Some(source) = access.key_source { request.extensions_mut().insert(source); }
         if let Some(scope) = access.scope {
             crate::server::core::key_scope::attach(&mut request, scope);
         }
@@ -1524,6 +1560,9 @@ mod cors_tests {
     }
 
     async fn gateway_cors_cases() {
+        // 合并上游 beta.2 后 set_cors_enabled 走 write_snapshot()，快照为空时
+        // fail-closed 拒绝写入；测试进程没有启动期 init，这里补一次出厂态初始化
+        crate::server::config::init(None);
         // ── 关闭（默认）：行为与修复前逐字一致 ──
         crate::server::config::set_cors_enabled(false);
         let router = probe_router();

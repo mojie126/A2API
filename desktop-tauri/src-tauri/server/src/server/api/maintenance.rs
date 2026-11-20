@@ -42,7 +42,7 @@ pub async fn overview(
         })
         .collect();
         Ok(json!({
-            "tasks": [scheduled_tasks::task_by_id(maintenance::CREDENTIAL), scheduled_tasks::task_by_id(maintenance::MODEL)],
+            "tasks": scheduled_tasks::tasks_by_ids(&[maintenance::CREDENTIAL, maintenance::MODEL]),
             "latest": latest,
             "records": records,
             "providers": providers,

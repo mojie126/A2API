@@ -26,6 +26,7 @@ import { DEFAULT_PAGE_SIZE, SERVER_PAGE_SIZES, readPageSize } from './table-shel
 import type { CheckinResultRow } from '../../../ui-shared/checkin'
 import { growthTaskRunnable } from '../../../ui-shared/checkin'
 import { rowCompleted, rowPending, rowMessage as resultMessage } from '../../../ui-shared/checkin-result'
+import { createRefreshRequest } from '../../../ui-shared/refresh-request'
 import { onboardingFromCenter } from './checkin-onboarding-cache'
 
 /** 新手福利的按账号缓存（明细要打上游，查一次存一次） */
@@ -136,6 +137,9 @@ export type UmidState = {
   available?: boolean
   installing?: boolean
   installSupported?: boolean
+  authorized?: boolean
+  componentAvailable?: boolean
+  message?: string
 }
 
 /** 批量签到返回汇总与 results，活动分档接口直接返回账号行。 */
@@ -292,19 +296,20 @@ export function patch(next: Partial<Store>): void {
 
 /* ─── 读 ───────────────────────────────────── */
 
-let centerRequest = 0
-
 /**
  * 拉聚合快照（页面打开 / 任何写动作之后）
  *
  * `preserveDrafts` 供后台轮询使用：总览变化不能清掉正在编辑的保活模型链与
- * 猫猫旅行时刻，用户没有保存的草稿只能由显式刷新或保存成功收起
+ * 猫猫旅行时刻，用户没有保存的草稿只能由显式刷新或保存成功收起。
+ * 请求序号与并发合并交给 createRefreshRequest（上游引入的通用工具）。
  */
-export async function loadCenter(preserveDrafts = false): Promise<void> {
-  const request = ++centerRequest
+let preserveDraftsOnNext = false
+const refreshCenter = createRefreshRequest(async isCurrent => {
+  const preserveDrafts = preserveDraftsOnNext
+  preserveDraftsOnNext = false
   try {
     const data = await bridge().getCheckinCenter?.()
-    if (request !== centerRequest) return
+    if (!isCurrent()) return
     if (!data) {
       patch({ loaded: true, loadError: '后端未返回签到中心数据' })
       return
@@ -318,8 +323,17 @@ export async function loadCenter(preserveDrafts = false): Promise<void> {
       ...(preserveDrafts ? {} : { keepaliveDraft: null, travelTimesDraft: null }),
     })
   } catch (error) {
-    if (request === centerRequest) patch({ loaded: true, loadError: errorMessage(error) })
+    if (isCurrent()) patch({ loaded: true, loadError: errorMessage(error) })
   }
+})
+
+/**
+ * `preserveDrafts` 同时承担两件事：写动作后的强制重读（afterChange）与
+ * 后台轮询时的草稿保留 —— 两种调用点传的都是 true，语义在本页一致。
+ */
+export function loadCenter(preserveDrafts = false): Promise<void> {
+  preserveDraftsOnNext = preserveDrafts
+  return refreshCenter(preserveDrafts)
 }
 
 let recordsRequest = 0
@@ -376,7 +390,7 @@ async function run<T>(
   patch({ saving: true })
   try {
     const result = await action()
-    if (options.reload !== false) await loadCenter()
+    if (options.reload !== false) await loadCenter(true)
     if (options.success) toast(options.success)
     return result
   } catch (error) {
@@ -398,7 +412,7 @@ export async function runAllCheckin(accountId?: string): Promise<void> {
     toast(`签到失败：${errorMessage(error)}`, 'err')
   } finally {
     patch({ runningAll: false })
-    await loadCenter()
+    await loadCenter(true)
   }
 }
 
@@ -420,7 +434,7 @@ export async function signSingle(accountId: string, mode: string): Promise<void>
     const after = new Set(store.signing)
     after.delete(key)
     patch({ signing: after })
-    await loadCenter()
+    await loadCenter(true)
   }
 }
 
@@ -469,7 +483,7 @@ export async function toggleMaster(enabled: boolean): Promise<void> {
     },
     { success: enabled ? '✅ 定时签到已开启' : '定时签到已关闭', reload: false, failure: '保存失败' },
   )
-  void loadCenter()
+  void loadCenter(true)
 }
 
 /** 保存一条定时条目（`closeEditor: false` = 行上的快捷开关，不收表单不弹提示） */
@@ -489,7 +503,7 @@ export async function saveScheduleEntry(
     },
     { success: options.silent ? undefined : '✅ 已保存', reload: false, failure: '保存失败' },
   )
-  if (saved) void loadCenter()
+  if (saved) void loadCenter(true)
   return saved === true
 }
 
@@ -514,7 +528,7 @@ export async function runScheduleEntry(id: string): Promise<void> {
     toast(`执行失败：${errorMessage(error)}`, 'err')
   } finally {
     patch({ runningScheduleId: null })
-    await loadCenter()
+    await loadCenter(true)
   }
 }
 

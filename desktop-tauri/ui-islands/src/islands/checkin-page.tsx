@@ -11,6 +11,7 @@ import { ScheduleTab } from './checkin-schedule-tab'
 import { MakeupTab } from './checkin-makeup-tab'
 import { t } from '../i18n'
 import { RecordsTab } from './checkin-records-tab'
+import { pluginTaskRunning } from '../../../ui-shared/plugin-task-types'
 
 /**
  * Agent2API · 签到中心（页面岛）。
@@ -85,11 +86,15 @@ function CheckinPage(): React.ReactElement {
       const page = (window as unknown as { wbApp?: { currentPage?: string } }).wbApp?.currentPage
       if (document.hidden || page !== 'checkin') return
       const now = store.center?.auto?.running === true
-      // 轮询只更新后台状态，不能把排程页正在编辑的草稿按旧快照清掉
-      if (now || activeTab === 'schedule' && store.center?.auto?.enabled) void loadCenter(true)
-      if (now && activeTab === 'records') void loadRecords()
+      // 轮询只更新后台状态，不能把排程页正在编辑的草稿按旧快照清掉。
+      // 插件任务（pluginTaskRunning）与旅行任务在跑时同样要刷新（上游 beta.2）
+      const pluginRunning = store.center?.pluginTasks?.some(pluginTaskRunning) === true
+      const travelRunning = store.center?.travel?.running === true
+      if (now || pluginRunning || travelRunning
+        || activeTab === 'schedule' && (store.center?.auto?.enabled || store.center?.pluginTasks?.some(row => row.task.enabled))) void loadCenter(true)
+      if ((now || pluginRunning) && activeTab === 'records') void loadRecords()
       if (running && !now && activeTab === 'records') void loadRecords()
-      running = now
+      running = now || pluginRunning || travelRunning
     }, 3000)
     return () => window.clearInterval(timer)
   }, [])
@@ -221,5 +226,5 @@ declare global {
 
 window.wbCheckin = {
   load: loadCenter,
-  refresh: () => { void loadCenter(); void loadRecords() },
+  refresh: () => { void loadCenter(true); void loadRecords() },
 }

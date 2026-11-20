@@ -5,6 +5,7 @@ import { confirmDialog } from '@ui'
 import { t } from '../i18n'
 import { callJson } from './assistant-api'
 import { MaintenancePanel } from '../../../ui-shared/maintenance-panel'
+import { api as pluginTaskRequest } from './plugins-shared'
 import type { MaintenanceApi, MaintenanceDetail, MaintenanceOverview, MaintenanceQuery, MaintenanceTask, MaintenanceTaskId } from '../../../ui-shared/maintenance-types'
 
 type Host = {
@@ -51,7 +52,7 @@ function AutoMaintenancePage() {
     window.addEventListener('wb:maintenance-refresh', onRefresh)
     return () => { window.removeEventListener('wb:page', onPage); window.removeEventListener('wb:maintenance-refresh', onRefresh) }
   }, [])
-  return <MaintenancePanel api={api} active={active} revision={revision}
+  return <MaintenancePanel api={api} active={active} revision={revision} pluginTaskRequest={pluginTaskRequest}
     confirmClear={() => confirmDialog(t('确定清空全部维护执行记录？清空后无法恢复。'))}
     notify={(message, kind) => host().wbApp?.toast?.(message, kind)}
     onChanged={() => host().wbApp?.refresh?.()}

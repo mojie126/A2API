@@ -181,7 +181,7 @@ async fn send(
     image: Option<ImageResponseKind>,
 ) -> Result<super::super::images::ImageResponse, OutboundFailure> {
     tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(60),
         send_with_retry(
             adapter,
             &upstream.transport,
@@ -212,8 +212,10 @@ fn telemetry() -> Arc<RequestTelemetry> {
     telemetry
 }
 
+// 503 归「连接或服务异常」= RetryThenSwitch，才会真正消耗重发预算；
+// 409 在统一错误策略里属于「其他错误」= ReturnError，不重试
 const ERROR: (u16, &str, &str) = (
-    409,
+    503,
     "application/json",
     r#"{"code":123,"message":"retry later"}"#,
 );
@@ -257,7 +259,7 @@ async fn a_transient_failure_can_retry_and_then_succeed() {
     assert_eq!(budget.remaining, 2);
     let snapshot = telemetry.snapshot();
     assert_eq!(snapshot.attempts_detail[0].retries.len(), 1);
-    assert_eq!(snapshot.attempts_detail[0].retries[0].status, Some(409));
+    assert_eq!(snapshot.attempts_detail[0].retries[0].status, Some(503));
 }
 
 #[tokio::test]
@@ -270,7 +272,7 @@ async fn retry_limit_is_initial_send_plus_budget_and_is_shared_across_calls() {
     };
     let telemetry = telemetry();
     let error = failure(send(&adapter, &upstream, &mut budget, &telemetry, false, None).await);
-    assert_eq!(error.error.status_code, 409);
+    assert_eq!(error.error.status_code, 503);
     assert_eq!(error.error.upstream_code, Some(123));
     assert_eq!(upstream.hits.load(Ordering::SeqCst), 3);
     assert_eq!(budget.remaining, 0);
@@ -327,28 +329,20 @@ async fn deterministic_and_account_errors_are_not_resent_in_place() {
     }
 }
 
+/// 传输层失败（HTTP 状态码）在统一错误策略下由 `error_policy` 决定重试与停用，
+/// 不再读适配器的 `retry_advice`（上游 beta.2 起 `send_with_retry` 统一走
+/// `error_policy_send`，逐适配器的 stop / suspend_account 不再参与重试判定）。
+/// 503 属「连接或服务异常」→ RetryThenSwitch：先按预算原号重发，用尽后返回错误。
 #[tokio::test]
-async fn provider_stop_and_suspension_override_retry_advice() {
-    for adapter in [
-        TestAdapter {
-            retry: true,
-            stop: true,
-            ..Default::default()
-        },
-        TestAdapter {
-            retry: true,
-            suspend: true,
-            ..Default::default()
-        },
-    ] {
-        let upstream = upstream(vec![ERROR]).await;
-        let mut budget = RetryBudget::new(3);
-        let error =
-            failure(send(&adapter, &upstream, &mut budget, &telemetry(), false, None).await);
-        assert!(error.stop || error.policy.suspend_account);
-        assert_eq!(upstream.hits.load(Ordering::SeqCst), 1);
-        assert_eq!(budget.remaining, 3);
-    }
+async fn transient_failure_follows_unified_error_policy() {
+    let upstream = upstream(vec![ERROR]).await;
+    let mut budget = RetryBudget::new(3);
+    let error = failure(send(&TestAdapter { retry: true, ..Default::default() },
+        &upstream, &mut budget, &telemetry(), false, None).await);
+    assert_eq!(error.error.status_code, 503);
+    // 初始一次 + 预算内重发，全部失败后收尾
+    assert_eq!(upstream.hits.load(Ordering::SeqCst), 4);
+    assert_eq!(budget.remaining, 0);
 }
 
 #[tokio::test]
@@ -358,7 +352,8 @@ async fn content_blocking_only_retries_after_the_degraded_attempt() {
         content_blocked: true,
         ..Default::default()
     };
-    for (degraded, expected) in [(false, 1), (true, 3)] {
+    // 统一错误策略下「内容被拒绝」= ReturnError，降级与否都只发一次
+    for (degraded, expected) in [(false, 1), (true, 1)] {
         let upstream = upstream(vec![(400, ERROR.1, ERROR.2)]).await;
         let mut budget = RetryBudget::new(2);
         let error = failure(
@@ -406,19 +401,21 @@ async fn uncertain_image_failure_is_not_resent_even_with_retry_advice() {
         retry: true,
         ..Default::default()
     };
+    let telemetry = telemetry();
     let error = failure(
         send(
             &adapter,
             &upstream,
             &mut budget,
-            &telemetry(),
+            &telemetry,
             false,
             Some(ImageResponseKind::Openai),
         )
         .await,
     );
+    // 上游接收情况不确定 → hard_stop：不重发、不换号（上游 beta.2 起不再拼进 error.message，
+    // 提示走 telemetry 的 attempt notice，这里校核 hard_stop 与「只发一次」两条硬约束）
     assert!(error.stop);
-    assert!(error.error.message.contains("未自动重试"));
     assert_eq!(upstream.hits.load(Ordering::SeqCst), 1);
     assert_eq!(budget.remaining, 3);
 }

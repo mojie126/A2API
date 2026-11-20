@@ -87,10 +87,14 @@ pub(super) fn of(record: &StoredAccount) -> QueryConfig {
     let fingerprint = digest(&json!({
         "reading": reading,
         "proxy": connection(&proxy),
+        // deviceId 是本地新增的 WARP 设备出口字段；userAgent 按上游口径做提供商门控
         "proxyConfig": proxy.as_object().map(|fields| select(fields, &["source", "proxyId", "proxyIds", "all", "listenerUid", "deviceId"])),
-        "userAgent": record.get("userAgent"),
+        "userAgent": crate::server::core::user_agent::override_value(
+            &record.provider(), record.get("userAgent").and_then(Value::as_str).unwrap_or(""),
+        ),
         "timeoutSeconds": crate::server::core::usage_records::query_timeout_of(record.get("usageQuery")),
         "retries": crate::server::core::usage_records::query_retries_of(record.get("usageQuery")),
+        "accountOriginGrant": crate::server::core::plugin_host::wasm::account_origin::grant_configuration(&record.provider()),
     }));
     QueryConfig { fingerprint, reading_key }
 }

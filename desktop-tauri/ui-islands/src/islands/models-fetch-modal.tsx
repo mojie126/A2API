@@ -65,7 +65,7 @@ import { ModelsFetchTable, type RefreshItem, type Row } from './models-fetch-tab
 type Account = {
   id?: unknown; provider?: string; name?: string; nickname?: string; email?: string
   nameCustom?: boolean
-  available?: boolean; enabled?: boolean
+  available?: boolean; hasCredentials?: boolean
 }
 
 /** 内置家注册表里的一项（`wbProviders.all()`）；自定义家目录里的一项（`customList()`） */
@@ -192,14 +192,12 @@ function accountLabel(account: Account): string {
   return name || t('未命名账号')
 }
 
-/** 该家可用于拉取目录的账号（「模型来源」下拉的选项）。过滤 = `available`（后端口径：启用 + 有
- *  凭证）+ `enabled`；排序用账号页同一条 `byPriorityOrder`（前端渲染层与后端 `order_key` 是同构
- *  实现，两边算出的「第一个账号」必然是同一条）。账号清单直接读主状态，不另拉接口。 */
+/** 目录来源只要求有凭据；账号停用不影响刷新，顺序沿用账号优先级。 */
 function sourceAccounts(providerId: string): Account[] {
   if (ACCOUNTLESS_REFRESH.has(providerId)) return []
   const order = shared().wbAccountsModel?.byPriorityOrder
   const list = accounts().filter(account => (account?.provider || 'workbuddy') === providerId
-    && account?.available !== false && account?.enabled !== false)
+    && account?.hasCredentials !== false)
   return order ? list.sort(order) : list
 }
 
@@ -214,7 +212,7 @@ function sourceAccounts(providerId: string): Account[] {
 function scopeProviders(): string[] {
   const ids = new Set<string>()
   for (const account of accounts()) {
-    if (account?.available === false || account?.enabled === false) continue
+    if (account?.hasCredentials === false) continue
     ids.add(account?.provider || 'workbuddy')
   }
   return [...ids]
