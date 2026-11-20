@@ -43,6 +43,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use crate::server::core::crypto::{self, SecretScope};
 use crate::server::db::schema::{self, SCHEMA_VERSION};
 use crate::server::db::Db;
 use crate::server::logging;
@@ -60,6 +61,14 @@ pub(crate) const SNAPSHOT_VERSION: u32 = 1;
 /// 本机的近期窗口判定，换台机器后既无法继续累积也没有展示价值，且是同步包
 /// 体积增长的主要来源。历史数据由限额模块按保留期修剪。
 pub(crate) const SYNCED_TABLES: &[&str] = &["accounts", "account_usage_records", "checkin_records"];
+/// 恢复时**本地优先**保留的账号设置字段（`accounts.data` JSON 内的键）。
+///
+/// 云端快照代表另一台机器上的配置，直接覆盖会把本机改过的余额查询间隔、
+/// 代理、User-Agent、并发上限与备注名一起冲掉；恢复的语义是「补回云端数据」，
+/// 不是「把本机设置退回旧值」。这几个键属于用户在**这台机器**上做的设置，
+/// 同 id 的本地账号存在时以本地为准；其余字段（凭证、页面展示字段等）仍取远端。
+const LOCAL_PREFERENCE_FIELDS: &[&str] =
+    &["usageQuery", "proxy", "userAgent", "maxConcurrent", "name"];
 
 /// 非保留配置键里**不进快照**的项（理由见模块头三类排除）。
 const EXCLUDED_CONFIG_KEYS: &[&str] = &[
@@ -338,11 +347,14 @@ fn apply_conn(
         if current_columns.is_empty() {
             continue;
         }
+        // accounts 表先读出本地同 id 账号，供下面的字段级合并使用（见 LOCAL_PREFERENCE_FIELDS）
+        let local = if *table == "accounts" { read_local_accounts(&tx)? } else { BTreeMap::new() };
         tx.execute(&format!("DELETE FROM {}", quote_identifier(table)), [])
             .map_err(|error| format!("清空 {table} 失败: {error}"))?;
         let mut inserted = 0usize;
         for row in rows {
-            insert_row(&tx, table, &current_columns, row)?;
+            let merged = if *table == "accounts" { merge_account_row(row, &local)? } else { row.clone() };
+            insert_row(&tx, table, &current_columns, &merged)?;
             inserted += 1;
         }
         applied.insert((*table).to_string(), json!(inserted));
@@ -388,6 +400,77 @@ fn apply_conn(
     tx.commit()
         .map_err(|error| format!("提交同步应用事务失败: {error}"))?;
     Ok((Value::Object(applied), content_hash))
+}
+
+/// 本地账号的合并素材：列上的 priority / enabled 与解密后的 `data`。
+struct LocalAccount {
+    priority: Value,
+    enabled: Value,
+    data: Value,
+}
+
+/// 读本地账号表（id → 素材）。`data` 解不开的账号跳过（不参与合并，恢复时按远端原样写入）。
+fn read_local_accounts(conn: &Connection) -> Result<BTreeMap<String, LocalAccount>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, priority, enabled, data FROM accounts")
+        .map_err(|error| format!("读取本地账号失败: {error}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|error| format!("读取本地账号失败: {error}"))?;
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (id, priority, enabled, data) = row.map_err(|error| format!("读取本地账号失败: {error}"))?;
+        if let Some(value) = decrypt_account_data(&data) {
+            out.insert(id, LocalAccount {
+                priority: json!(priority),
+                enabled: json!(enabled),
+                data: value,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// `accounts.data` 列 → JSON（密文信封先解开，历史明文直接解析）。失败返回 None。
+fn decrypt_account_data(text: &str) -> Option<Value> {
+    if crypto::is_envelope(text) {
+        let bytes = crypto::open(text, SecretScope::Accounts).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    } else {
+        serde_json::from_str(text).ok()
+    }
+}
+
+/// 把远端一行与本地同 id 账号合并：本地偏好字段与列（priority / enabled）优先，其余取远端。
+///
+/// 远端 `data` 解不开（密钥不一致且未导入 / 旧明文异常）时**原样返回远端行**，
+/// 宁可覆盖也不丢这一行；本地没有同 id 账号时同样原样返回（纯新增）。
+fn merge_account_row(row: &Map<String, Value>, local: &BTreeMap<String, LocalAccount>) -> Result<Map<String, Value>, String> {
+    let Some(id) = row.get("id").and_then(Value::as_str) else { return Ok(row.clone()); };
+    let Some(local_account) = local.get(id) else { return Ok(row.clone()); };
+    let Some(data_text) = row.get("data").and_then(Value::as_str) else { return Ok(row.clone()); };
+    let Some(mut remote_data) = decrypt_account_data(data_text) else { return Ok(row.clone()); };
+    if let (Some(remote_map), Some(local_map)) = (remote_data.as_object_mut(), local_account.data.as_object()) {
+        for key in LOCAL_PREFERENCE_FIELDS {
+            if let Some(value) = local_map.get(*key) {
+                remote_map.insert((*key).to_string(), value.clone());
+            }
+        }
+    }
+    let sealed = crypto::seal(remote_data.to_string().as_bytes(), SecretScope::Accounts)
+        .map_err(|error| format!("账号凭证重新加密失败（{error}）：为避免把凭证明文落库，恢复已中止"))?;
+    let mut merged = row.clone();
+    merged.insert("data".to_string(), Value::String(sealed));
+    merged.insert("priority".to_string(), local_account.priority.clone());
+    merged.insert("enabled".to_string(), local_account.enabled.clone());
+    Ok(merged)
 }
 
 fn insert_row(
@@ -540,6 +623,55 @@ mod tests {
         assert!(!is_synced_kv_key("panelTokens"));
         assert!(!is_synced_kv_key("cloudSync"));
         assert!(!is_synced_kv_key("backgroundTaskState"));
+    }
+
+    /// 恢复时同 id 账号以本地设置为准：余额查询、代理、UA、并发、备注名与本机启停/排序
+    /// 不被云端覆盖，凭证等其余字段仍取远端。
+    #[test]
+    fn merge_keeps_local_preferences_for_existing_account() {
+        let local = LocalAccount {
+            priority: json!(7),
+            enabled: json!(0),
+            data: json!({"id": "a", "usageQuery": {"interval": 5}, "proxy": {"source": "local"},
+                "userAgent": "local-ua", "maxConcurrent": 2, "name": "本地名", "accessToken": "local"}),
+        };
+        let mut local_map = BTreeMap::new();
+        local_map.insert("a".to_string(), local);
+        let remote_data = json!({"id": "a", "usageQuery": {"interval": 60}, "proxy": {"source": "remote"},
+            "userAgent": "remote-ua", "maxConcurrent": 8, "name": "远端名", "accessToken": "remote", "createdAt": 1});
+        let sealed = crypto::seal(remote_data.to_string().as_bytes(), SecretScope::Accounts).unwrap();
+        let row: Map<String, Value> = [
+            ("id".to_string(), json!("a")),
+            ("data".to_string(), json!(sealed)),
+            ("priority".to_string(), json!(1)),
+            ("enabled".to_string(), json!(1)),
+        ].into_iter().collect();
+        let merged = merge_account_row(&row, &local_map).unwrap();
+        let data = decrypt_account_data(merged["data"].as_str().unwrap()).unwrap();
+        assert_eq!(data["usageQuery"], json!({"interval": 5}), "本地余额查询设置优先");
+        assert_eq!(data["proxy"], json!({"source": "local"}), "本地代理优先");
+        assert_eq!(data["userAgent"], json!("local-ua"), "本地 User-Agent 优先");
+        assert_eq!(data["maxConcurrent"], json!(2), "本地并发上限优先");
+        assert_eq!(data["name"], json!("本地名"), "本地备注名优先");
+        assert_eq!(data["accessToken"], json!("remote"), "凭证取远端");
+        assert_eq!(merged["priority"], json!(7), "本地优先级优先");
+        assert_eq!(merged["enabled"], json!(0), "本地启用状态优先");
+    }
+
+    /// 本地没有同 id 账号时原样采用远端行（纯新增）。
+    #[test]
+    fn merge_adds_remote_only_account_unchanged() {
+        let remote_data = json!({"id": "new", "usageQuery": {"interval": 60}});
+        let sealed = crypto::seal(remote_data.to_string().as_bytes(), SecretScope::Accounts).unwrap();
+        let row: Map<String, Value> = [
+            ("id".to_string(), json!("new")),
+            ("data".to_string(), json!(sealed.clone())),
+            ("priority".to_string(), json!(3)),
+            ("enabled".to_string(), json!(1)),
+        ].into_iter().collect();
+        let merged = merge_account_row(&row, &BTreeMap::new()).unwrap();
+        assert_eq!(merged["data"], json!(sealed), "新增账号的密文原样写入");
+        assert_eq!(merged["priority"], json!(3));
     }
 
     #[test]
