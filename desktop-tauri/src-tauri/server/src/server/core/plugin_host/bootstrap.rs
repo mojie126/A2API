@@ -487,11 +487,10 @@ async fn start_pack_inner(
         }
     };
 
-    // 入口：WASM 包按固定 wasm 目标取，原生包按本机三元组取（本 fork 两者都支持）
+    // 入口：先按本机三元组取、取不到回退 WASM 目标（见 install::entry_for_target）
     let entry = manifest
         .as_ref()
-        .and_then(|manifest| install::entry_for_target(manifest, &super::wasm::manifest::TARGET)
-            .or_else(|| install::entry_for_target(manifest, &super::rpc::target_triple())))
+        .and_then(|manifest| install::entry_for_target(manifest, &super::rpc::target_triple()))
         .ok_or_else(|| "插件包没有适用于本机的入口二进制".to_string())?;
     let exe = dir.join(&entry);
     if !exe.exists() {

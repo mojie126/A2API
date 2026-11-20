@@ -20,9 +20,6 @@ impl Host {
     pub async fn ensure(self: &Arc<Self>) -> Result<Vec<proto::ProviderInfo>, String> {
         if super::runtime::admission_closed() { return Err("插件宿主全局关闭中，未开放新运行代次".into()); }
         if self.closing.load(Ordering::Acquire) { return Err("插件宿主已关闭，不能重新启动已回收的宿主".to_string()); }
-        if self.options.wasm.is_none() && !self.options.script {
-            return Err(super::support::LEGACY_REASON.to_string());
-        }
         if self.disabled.load(Ordering::Acquire) { return Err(self.failure_message()); }
         if self.ready() {
             return Ok(self.providers.lock().map(|providers| providers.clone()).unwrap_or_default());
@@ -96,7 +93,9 @@ impl Host {
 
         if let Some(attempt) = &self.options.startup { attempt.phase(super::startup::Phase::Starting); }
         if self.options.wasm.is_some() { return self.start_wasm().await; }
-        if !self.options.script { return Err(super::support::LEGACY_REASON.to_string()); }
+        // 其余形态都走子进程启动（原生二进制与脚本插件共用同一条命令构造，
+        // 差别只在 script 的进程组与后续协议形态）—— 本 fork 保留原生插件，
+        // 不再把非 script 的包判为「已停止支持」
         if let Some(old) = self.current_run() {
             {
                 let _state = self.lifecycle.lock().unwrap_or_else(|error| error.into_inner());

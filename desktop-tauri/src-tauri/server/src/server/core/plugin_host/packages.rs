@@ -58,7 +58,8 @@ pub fn prepare(
         if manifest.id == super::script::HOST_ID || super::script::is_package(&manifest.id) {
             return Err("该插件标识保留给脚本运行环境，不能安装为原生插件".to_string());
         }
-        let is_wasm = extracted.validate(&staging, &manifest)?;
+        // validate 返回是否 WASM 包；本 fork 两者都接受，只取副作用（校验）
+        let _is_wasm = extracted.validate(&staging, &manifest)?;
         if manifest.id.is_empty() || manifest.id.len() > 128
             || !manifest
                 .id
@@ -92,7 +93,6 @@ pub fn prepare(
         if require_signed && signature != SignatureState::Verified {
             return Err("此下载方式只接受通过可信签名校验的插件包；未签名包请从原来源下载后手动安装".to_string());
         }
-        if !is_wasm { return Err(super::support::LEGACY_REASON.to_string()); }
         let artifact = provenance::VerifiedArtifact::from_prepared(extracted, &manifest, &entry, &target, signature, &staging)?;
         Ok(PreparedPack {
             staging: staging.clone(),

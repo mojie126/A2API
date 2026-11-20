@@ -204,9 +204,7 @@ pub fn start_cached(
     if target != super::host_target() && target != super::wasm::manifest::TARGET {
         return Err("只能安装当前网关平台的插件包".to_string());
     }
-    if platform["target"] != super::wasm::manifest::TARGET {
-        return Err(super::support::LEGACY_REASON.to_string());
-    }
+    // 本 fork 接受原生目标与 WASM 目标两种资产（见 support.rs 模块头）
     let asset = update::PackAsset {
         version: version.to_string(),
         name: update::asset_name(id, version, platform["target"].as_str().unwrap_or(target)),

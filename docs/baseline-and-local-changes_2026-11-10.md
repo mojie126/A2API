@@ -437,7 +437,8 @@
 
 保留本 fork 原生插件体系（不跟官方的 WASM-only 转向）：
 
-- 官方 beta.2 起网关只接受 WASM 插件包，非 WASM 包拒装并标记「旧原生插件已停止支持」。本 fork 的插件仓库仍以原生插件为主流程，因此 `plugin_host/support.rs` 改为：`require_wasm` 恒放行、`installed_state` 恒返回 Supported、`legacy_reason` 恒为 None；`bootstrap.rs` 的入口选择先取 WASM 目标、取不到再回退本机三元组，原生二进制照常启动
+- 官方 beta.2 起网关只接受 WASM 插件包，非 WASM 包拒装并标记「旧原生插件已停止支持」。本 fork 的插件仓库仍以原生插件为主流程，因此 `plugin_host/support.rs` 改为：`require_wasm` 恒放行、`installed_state` 恒返回 Supported、`legacy_reason` 恒为 None；`bootstrap.rs` 的入口选择先取本机三元组、取不到再回退 WASM 目标，原生二进制照常启动
+- **安装路径的同一条约束（2026-11-20 补修）**：`install::entry_for_target` 上游只认 WASM 目标并忽略传入的平台，原生包因此报「插件包没有为当前平台（x86_64-pc-windows-msvc）提供入口」而无法安装（界面显示「无法安装」）。改为先按传入目标取、取不到才回退 WASM 目标；`packages.rs` 的 `if !is_wasm { LEGACY_REASON }`、`operations.rs` 的 `platform["target"] != WASM` 校验、`lifecycle.rs` 的「非 script 即停止支持」两处拦截一并放开，原生包的安装、启用与子进程启动恢复可用；新增 `entry_for_target_accepts_native_and_wasm` 回归测试钉住顺序
 - 插件更新与下载：官方改走官网（`agent2api.dev`），本 fork 在官网通道之外保留 GitHub Releases 兜底 —— `read_index_result`、`query_releases`、`validate_release_urls`、`download` 四处都接受 GitHub 来源；`INDEX_REPO = Agent2plugin/Agent2plugin`、`FALLBACK_REPO = Agent2Builder/agent2api-providers-releases`
 - 插件商店浏览与一键更新仍依赖官网 `/catalog`，fork 环境无官方目录时这部分为空，本地插件通过「安装插件包」（zip）安装，不受影响
 

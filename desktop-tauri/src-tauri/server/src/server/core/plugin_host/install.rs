@@ -438,8 +438,14 @@ pub fn validate_manifest(manifest: &proto::PackManifest, host_protocol: u32) -> 
 }
 
 /// 为当前目标挑一个入口。
-pub fn entry_for_target(manifest: &proto::PackManifest, _target: &str) -> Option<String> {
-    manifest.entry.get(super::wasm::manifest::TARGET).cloned()
+///
+/// 官方 beta.2 起只认 WASM 目标（忽略传入的 target），非 WASM 包一律拒装、
+/// 报「插件包没有为当前平台（<三元组>）提供入口」。本 fork 保留原生插件，
+/// 因此先按本机三元组取入口，取不到再回退 WASM 目标 —— 原生包与 WASM 包
+/// 都能装上（见 `support.rs` 模块头）。
+pub fn entry_for_target(manifest: &proto::PackManifest, target: &str) -> Option<String> {
+    manifest.entry.get(target).cloned()
+        .or_else(|| manifest.entry.get(super::wasm::manifest::TARGET).cloned())
 }
 
 /// 读一个版本目录里的 `pack.json`。
@@ -639,6 +645,31 @@ mod tests {
             homepage: None,
             signature: None,
         }
+    }
+
+    /// 原生插件包只有本机三元组的入口键。上游 beta.2 的 `entry_for_target` 只认
+    /// WASM 目标，导致这类包报「没有为当前平台提供入口」、装不上；本 fork 两者
+    /// 都支持，这里钉住「按传入目标取、取不到才回退 WASM」这条顺序。
+    #[test]
+    fn entry_for_target_accepts_native_and_wasm() {
+        let native = manifest(1);
+        assert_eq!(
+            entry_for_target(&native, "x86_64-pc-windows-msvc").as_deref(),
+            Some("bin/x.exe"),
+            "原生包必须按本机三元组取到入口"
+        );
+        assert_eq!(entry_for_target(&native, "aarch64-apple-darwin"), None,
+            "包里没有该平台时不应凭空回退成 WASM 入口");
+
+        let mut wasm = manifest(1);
+        wasm.entry = BTreeMap::from([(
+            super::super::wasm::manifest::TARGET.to_string(), "plugin.wasm".to_string(),
+        )]);
+        assert_eq!(
+            entry_for_target(&wasm, "x86_64-pc-windows-msvc").as_deref(),
+            Some("plugin.wasm"),
+            "WASM 包在没有本机三元组入口时按 WASM 目标回退"
+        );
     }
 
     #[test]
