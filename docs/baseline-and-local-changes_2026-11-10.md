@@ -451,6 +451,22 @@
 - 验证：服务端 `cargo check` 与 `cargo test` 通过（469 通过 / 11 忽略），前端岛与手机端类型检查与构建通过，`scripts/build-desktop.ps1` 完整构建成功
 
 
+### 2026-11-20 补记（同步官方 `859b00f3` 的容量、Cline 与登录取消）
+
+官方 `859b00f3`（「接入 CDN 分发源、移除查询故障处理与 Cline Free 续期限制」）按取舍分批手动合并，本轮只落容量准入细化与 Cline Free 相关移除：
+
+- 容量准入：`runtime_capacity` 新增 `RejectReason` 八类原因（内存紧张 / CPU 压力 / 并发上限 / 提供商上限 / 队列条数 / 队列内存 / 插件槽位 / 排队超时）、`RejectCounts` 计数与 `CapacityRejection` 诊断快照；`acquire` 改名 `acquire_detailed` 并返回 `AcquireError::{Cancelled, Rejected}`，取消返回 499，拒绝返回 503 且带 `reason` 与 `Retry-After`；`runtime_capacity::snapshot()` 增加 `rejectedReasons`
+- 错误体：`GatewayError` 新增 `reason` 字段（`with_reason` / `with_optional_reason`），随 `retry_after` 一起进入 `error` 对象；`rpc_error` 的 `plugin_busy` 改用 `classify_busy_message` 还原可信原因（含新增的 `account_lock`）
+- 拒绝日志：网关准入、插件容量排队、插件执行槽位、余额查询排队与账号锁等待超时都补一条英文 `warn` 日志，含提供商、方法、等待时长与抑制原因
+- Cline Free：删除 `accounts_credentials`、`plugin_cline_free_enrollment` 接口，`cline_credentials` / `cline_free_enrollment` / `cline_free_input` / `cline_free_refresh` 存储与 SQL 模块，WASM 主机的登记与续期入口，`db` 侧槽表与 `credential_epoch` 的登记来源捕获，`AccountQueryRecovery` 与 `accounts-usage-recovery` 等界面恢复入口，以及 `accounts-store` 的 `pane` 字段与设置弹窗的 `initialPane`
+- Cline 本机续期解析改为 `desktop_credentials/refresh/cline.rs`，只服务本机登录态续期
+- Trae 授权源：`managed_policy::TRAE_AUTHORIZATION_ORIGIN` 改为 `https://www.trae.cn`
+- 未跟进：CDN 分发源（软件本体与插件都继续走官网与 GitHub Releases 兜底），插件目录改读 CDN
+- 登录取消：`LoginTaskState` 新增 `request_id`，登录启动前登记待取消请求，取消时既能中止尚未返回的插件登录调用，也能按请求标识取消；`LoginService` 新增 `register_pending` / `cancel_pending` 与按请求标识查找任务
+- 取消链路：`Host::call_coded_with_cancel`、`RpcAdapter::call_with_cancel` 与 `build_login_flow_with_options_cancellable` 把取消令牌送到插件 RPC；`LoginCancel` 与 `PendingLoginControl` 挂在 `AppState`，壳侧启动登录时生成请求标识并在取消时同时中止本地等待与后端调用；网页端与手机端在流程 id 返回前也能取消
+- 版本：`3.5.0-beta.3` → `3.5.0-beta.4`（六处版本号与手机端锁文件）
+- ZCode 客户端版本号自动对齐：新增 `core/zcode_version_probe.rs`，在签到目标包含 `zcode` / `zcode-intl` 时请求 `https://zcode.z.ai/cn/changelog` 解析首条版本，比当前设置新才写回 `appVersion`；失败静默，不影响签到。版本号只用于探测/领取与客户端身份头，不改变推理套餐池
+
 ### 2026-11-19 补记（更新检查可彻底关闭）
 
 - 用户要求允许彻底关闭更新检查：两个通道都关时不再报「至少需要关注正式版或 beta 版中的一个通道」

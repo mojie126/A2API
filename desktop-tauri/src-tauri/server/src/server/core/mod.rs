@@ -149,3 +149,4 @@ pub(crate) mod user_agent;
 pub mod usage_query;
 pub mod usage_records;
 pub mod warp;
+pub(crate) mod zcode_version_probe;

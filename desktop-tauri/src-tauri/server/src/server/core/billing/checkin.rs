@@ -630,6 +630,10 @@ pub(crate) async fn run_checkin_selected(
             .is_some_and(|id| selected.iter().any(|selected| selected == id)));
         skipped = selected.len().saturating_sub(targets.len());
     }
+    // 签到是低频触发点：顺带把 ZCode 客户端版本号对齐官网最新版（失败不影响签到）。
+    if targets.iter().any(|account| matches!(provider_of(account), "zcode" | "zcode-intl")) {
+        crate::server::core::zcode_version_probe::refresh().await;
+    }
     // 「这次是用户在面板上点的吗」——只有 CodeArts 用得上（它的福利是写请求，
     // 有两道本地限流闸）。单账号 single 与批量 manual 都是点击触发；
     // schedule / startup 是无人值守，必须受闸。见 `checkin_for` 的说明。
