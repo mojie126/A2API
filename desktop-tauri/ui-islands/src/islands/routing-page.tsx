@@ -209,7 +209,12 @@ export function RoutingPage() {
     return () => window.removeEventListener('wb:routing-errors-open', open)
   }, [openErrors])
   const onErrorsSaved = React.useCallback(() => { refreshRouting() }, [refreshRouting])
-  const rail = <RoutingRail editor={pageEditor} groups={groups} workspace={workspace} onModel={openScope} onGroup={id => { if (!busyRef.current) { setErrorsOpen(false); groups.select(id) } }}
+  // 渲染链以 specialKey 优先于路由组与模型路由：点左栏的模型 / 路由组时必须先
+  // 清掉它，否则选中态变了面板却仍停在特殊请求路由上（曾修复过一次，合并上游
+  // 时 onGroup / onModel 的清理被覆盖，这里补回）
+  const rail = <RoutingRail editor={pageEditor} groups={groups} workspace={workspace}
+    onModel={id => { if (!busyRef.current) { setErrorsOpen(false); setSpecialKey(null); openScope(id) } }}
+    onGroup={id => { if (!busyRef.current) { setErrorsOpen(false); setSpecialKey(null); groups.select(id) } }}
     errors={errorsOpen} errorsDirty={errorsDirty} onErrors={() => openErrors()}
     special={specialKey} onSpecial={key => { if (!busyRef.current) { setErrorsOpen(false); setSpecialKey(key) } }}
     onAdd={() => setModal({ kind: 'create' })} />

@@ -106,6 +106,17 @@ const GRID_GLYPH = (
   </svg>
 )
 
+/** 左栏「待获取」标记：用一只小时钟代替文字徽章。
+    徽章是定宽文字块，会把本来就长的提供商名挤成省略号；图标只占 12px，
+    名称能多显示好几个字，具体含义交给条目的 title 说明。 */
+const PENDING_GLYPH = (
+  <svg viewBox='0 0 24 24' width='12' height='12' aria-hidden='true' className='rail-pending'>
+    <g fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+      <circle cx='12' cy='12' r='8.5' /><path d='M12 7.5V12l3 1.8' />
+    </g>
+  </svg>
+)
+
 /** 左栏 / 标题共用的头像节点（glyph 传 ReactNode 时直接渲染，如「全部」的网格）。
     有真实图标（内置家 / 带模板标识的自定义家）用 <img>（.img 形态，中性底），
     否则回落色相 monogram；两颗「全部」（内置 / 自定义组各自的聚合哨兵）都不是一家，
@@ -321,7 +332,9 @@ function ModelsPage() {
             <NavItem key={key} active={provider === key} data-provider={key}
               title={entry.n ? entry.label : t('{provider}：模型清单为空，等待获取', { provider: entry.label })}
               count={entry.n} icon={<ProviderAvatar id={key} label={entry.label} />} className='shadow-none'
-              trailing={entry.n === 0 ? <Badge variant='outline'>{t('待获取')}</Badge> : undefined}
+              trailing={entry.n === 0
+                ? <span className='rail-pending-wrap' title={t('待获取')} aria-label={t('待获取')}>{PENDING_GLYPH}</span>
+                : undefined}
               onClick={() => selectProvider(key)}>{entry.label}</NavItem>
           ))}
           {(!providerKeyword || shownCustoms.length > 0) && <div className='rail-label'>{t('自定义提供商')}</div>}
