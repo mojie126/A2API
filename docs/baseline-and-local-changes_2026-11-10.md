@@ -21,7 +21,7 @@
   - 2026-11-09（`a61a61ab`）：插件改用无 WASI 的 Wasm 沙箱（每次调用独立实例），AtomCode / OpenCode 插件目录与 GitHub 固定提交、本地路径安装，Agent 客户端多配置改版，面板品牌自定义，Turnstile 登录人机验证，网络访问说明改版，原生协议请求响应直通与标题请求单独路由，用量查询任务、代理链与系统代理、模型最近使用，Rust 测试工作流（`rust-tests.yml`）与 `scripts/cargo-test.mjs`，Docker 构建改 `--locked`，前端组件拆分 `ui-shared` / `ui-kit`，手机端同步品牌与插件包设置，六语文案与六份安装文档更新
   - 2026-11-09（`d169b889`）：官方回收电脑端 Codex 对话与官方终端共享功能（完整实现保留在官方本地备份分支），保留普通模型对话与其他 Codex 功能，同步桌面、网页与手机端入口及前端产物
   - 2026-11-10（`aba58858`）：官方发布 beta 预发布版 `v3.5.0-beta.1`，六处版本号升至 `3.5.0-beta.1`，官方以「原地替换条目」方式修复 `toml_editing.rs` 行上注释丢失缺陷
-- 停在 `aba58858`（beta.1）：此后官方 `v3.5.0-beta.2`（`0affd3af`，1175 个文件）与 `v3.5.0-beta.3`（`cd0411bf` 及其前 8 个提交）**未合并进 develop**，跟进现状、待办分类与不跟进项见 `官方beta跟进清单_2026-11-19.md`
+- 2026-11-20（`0affd3af`、`cd0411bf` 等 10 个提交，`5dc8f042` 合并）：官方 `v3.5.0-beta.2` 与 `v3.5.0-beta.3` 增量全部合入 develop（版本号 `3.5.0-beta.3`）。核心是「提供商全面转独立 WASM 插件、软件与插件改由官网检查更新、统一错误处理设置、运行容量管理、系统提示词规则、网页工具调用模拟、账号列表按需分页与实时推送、插件批量管理与本机客户端启动、凭据版本化、订阅接入、广告位」。本 fork 保留原生插件体系，具体取舍见下节「2026-11-20 补记」
 
 ## 本地改动全史
 
@@ -430,6 +430,39 @@
 - 面板提供商图标补充 `deepaicode` 与 `codar`：`ui-shared/provider-icons.ts` 增加映射，资源放在 `ui/assets/providers/`（科搭取自官方插件资源，DeepAI 使用参考仓库图标），桌面前端产物已重建
 - 报表 Top 账号悬停提示：超过 32 字符的账号标识单独成行，气泡支持任意断行并把最大宽度从 320px 放宽到 480px，长 ID 不再被裁掉
 - 验证：服务端编译通过
+
+### 2026-11-20 补记（同步官方 beta.2 与 beta.3）
+
+官方 `v3.5.0-beta.2`（`0affd3af`，1175 个文件）与其后 9 个提交（截至 `cd0411bf`）全部合入 develop。本轮冲突集中在 i18n 源与产物、前端产物与若干共享文件（账号页、访问路由、代理列、插件宿主、上游转发链），处理原则是「本地增强与官方新功能都保留」，逐项如下。
+
+保留本 fork 原生插件体系（不跟官方的 WASM-only 转向）：
+
+- 官方 beta.2 起网关只接受 WASM 插件包，非 WASM 包拒装并标记「旧原生插件已停止支持」。本 fork 的插件仓库仍以原生插件为主流程，因此 `plugin_host/support.rs` 改为：`require_wasm` 恒放行、`installed_state` 恒返回 Supported、`legacy_reason` 恒为 None；`bootstrap.rs` 的入口选择先取 WASM 目标、取不到再回退本机三元组，原生二进制照常启动
+- 插件更新与下载：官方改走官网（`agent2api.dev`），本 fork 在官网通道之外保留 GitHub Releases 兜底 —— `read_index_result`、`query_releases`、`validate_release_urls`、`download` 四处都接受 GitHub 来源；`INDEX_REPO = Agent2plugin/Agent2plugin`、`FALLBACK_REPO = Agent2Builder/agent2api-providers-releases`
+- 插件商店浏览与一键更新仍依赖官网 `/catalog`，fork 环境无官方目录时这部分为空，本地插件通过「安装插件包」（zip）安装，不受影响
+
+修复合并引入的回归：
+
+- 组内并发限制被上游新的容量准入绕开：`account_admission::select` 与 `all_busy` 原只读账号自身 `maxConcurrent`，改为读 `routing::concurrency_limit_of`（含路由组的 `routingConcurrencyCap` 分配结果），恢复本地「组内并发设置」
+- 数据库 schema：本地 v30（客户端出入站身份三列）、v31（下游协议列）、v32（出口方式与 IP）保留，官方 v30（用量诊断列）顺延为 v33，`SCHEMA_VERSION = 33`
+- `update_inner` 改用 `plugin_task_grants::write_snapshot()`（fail-closed，未初始化时拒绝写入）后，依赖「进程内改配置」的测试需先初始化配置：`config::init(None)` 补到 `auto_continue_tests::hold_config` 与 `http::tests::gateway_cors_cases`
+- 统一错误处理策略取代逐适配器的 `retry_advice` 后，重试测试按新策略改写（503 属 Transient 会重发、409 属「其他错误」不重发、「不确定」提示走 telemetry notice）
+
+保留的本地优化（合并后复核仍在）：
+
+- WARP 出口池与直连优先（`core/warp`、`provider_loop` 的 `warp_fallback`/`warp_exit`/`zcode_direct_in_flight`）、网络代理页「代理列表 / WARP 设备」分页
+- 路由组并发（`core/routing_concurrency`，经 `route_context` 应用）
+- 思考档位覆盖（`core/model_rules`）、客户端识别（`config/client_identification`）
+- 彻底关闭更新检查（`config/update_policy`，两通道都关时不联网）
+- 云同步移除限额表 + 30 天修剪（`limiter::prune_history`）
+- 弹窗性能优化（`ui-kit/src/lib/modal-activity.ts`：遮罩去模糊、轮询暂停、低配降级）
+- 报表悬停宽度、提供商图标、特殊请求路由跨页刷新、商汤短信登录等前端改动
+
+其它：
+
+- `tauri-build` 升级到 2.7.4（合并时 Cargo.lock 被上游旧版覆盖导致 `os error 3`，已恢复）
+- 收窄三处未使用的 `pub(crate) use` 重导出（codearts_slot、kiro、checkin_call 各一处），消除合并带入的 unused import 告警
+- 验证：服务端 `cargo check` 与 `cargo test` 通过（466 通过 / 11 忽略），前端岛与手机端类型检查与构建通过，`scripts/build-desktop.ps1` 完整构建成功
 
 ### 2026-11-19 补记（更新检查可彻底关闭）
 
