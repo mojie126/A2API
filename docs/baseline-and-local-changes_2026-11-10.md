@@ -448,15 +448,35 @@
 - `update_inner` 改用 `plugin_task_grants::write_snapshot()`（fail-closed，未初始化时拒绝写入）后，依赖「进程内改配置」的测试需先初始化配置：`config::init(None)` 补到 `auto_continue_tests::hold_config` 与 `http::tests::gateway_cors_cases`
 - 统一错误处理策略取代逐适配器的 `retry_advice` 后，重试测试按新策略改写（503 属 Transient 会重发、409 属「其他错误」不重发、「不确定」提示走 telemetry notice）
 
-保留的本地优化（合并后复核仍在）：
+保留的本地优化（2026-11-20 逐项核对「本地改动全史」后确认仍在，按类别列出）：
 
-- WARP 出口池与直连优先（`core/warp`、`provider_loop` 的 `warp_fallback`/`warp_exit`/`zcode_direct_in_flight`）、网络代理页「代理列表 / WARP 设备」分页
-- 路由组并发（`core/routing_concurrency`，经 `route_context` 应用）
-- 思考档位覆盖（`core/model_rules`）、客户端识别（`config/client_identification`）
-- 彻底关闭更新检查（`config/update_policy`，两通道都关时不联网）
-- 云同步移除限额表 + 30 天修剪（`limiter::prune_history`）
-- 弹窗性能优化（`ui-kit/src/lib/modal-activity.ts`：遮罩去模糊、轮询暂停、低配降级）
-- 报表悬停宽度、提供商图标、特殊请求路由跨页刷新、商汤短信登录等前端改动
+后端 / 网关：
+
+- 出口与代理：ZCode 内建 WARP 出口池（`core/warp`：boringtun 隧道、smoltcp 用户态 TCP/IP、本地 SOCKS5、多出口轮询）、ZCode 直连优先与 429 换出口（`provider_loop` 的 `warp_fallback`/`warp_exit`/`zcode_direct_in_flight`/`exit_rotations`）、账号代理引用 WARP 设备、更新出网复用同一出口
+- 选路：路由组内并发（`core/routing_concurrency`，经 `route_context` 应用）、容量准入与全忙判定读 `concurrency_limit_of`
+- 模型：思考档位覆盖（`core/model_rules` 的 `reasoningLevels`）、models.dev 身份绑定与代理选择（`core/model_meta`）、模型目录更新的「启用且有账号」口径
+- 客户端识别：供应商归属规则与默认归属客户端、自定义头匹配规则、识别顺序说明（`config/client_identification` + `core/client/catalog.rs`）
+- 图片兼容 / 辅助识图：`rules` 权威形状（`assist`/`reroute` 降级为投影，删光规则即空数组）、逐规则 `unknownCapability`、默认识图模型、`provider_serves_model` 判据、`skipped` 判定结果落请求日志
+- 特殊请求路由：确认即保存、修订号冲突修复、`refreshView` 跨页刷新、切路由组清 `specialKey`
+- 更新检查：两通道都关即彻底关闭（`config/update_policy` 的 `enabled()`/`none`，`core/update/check.rs` 不联网并返回 `disabled`）
+- 云同步：`account_limiter_events` 移出同步范围、30 天修剪（`limiter::prune_history`）、WebDAV 连接池复用与连接类失败重试、按实质变化上传
+- 长期运行开销（11-06 `b042ddfd`）：调试报文限量淘汰最旧、大请求及时释放原始字节、终态与限额同事务、在途状态每秒至多一次写入、日志每 64 条与请求统计每 128 次或 60 秒批量维护、SQLite 检查点 10000 页与 `auto_vacuum=INCREMENTAL`
+- 调试采集：三档内存预算（`debugBudget`）、独立线程批量事务写入、正文头尾截断、上下游正文指纹去重、`incremental_vacuum`
+- 凭证与维护：长期 Cookie 账号刷新不误报（`refresh_advanced`）、账号更新日志显式 info 级别、维护记录清理接口（`POST /api/maintenance/records/clear`）、维护保留天数与日志上限配置化
+- 数据库 schema：本地 v30（客户端出入站身份三列）、v31（下游协议列）、v32（出口方式与 IP）保留，官方 v30 顺延 v33
+- 提供商：百度搭子（dumate）、商汤日日新手机号验证码登录与滑块求解、果办只读客户端状态模拟
+- 插件宿主：原生插件保留（`support.rs` 恒 Supported、`bootstrap.rs` 回退本机三元组）、插件目录 GitHub 兜底（`INDEX_REPO`/`FALLBACK_REPO`）、脚本插件 Bun 运行时一键清理、插件目录清单解析加固与错误详情弹窗、BOM 剥离
+
+前端：
+
+- 弹窗性能：遮罩去全屏模糊、入场出场改 transition、弹窗打开期间暂停轮询、低配设备降级（`ui-kit/src/lib/modal-activity.ts`）
+- 路由画布：在途请求高亮、落点横条裁剪修复、配置视图 3 秒轮询
+- 面板：图片兼容与客户端识别分组折叠、图片兼容下拉改为 `SearchSelect` 与 `w-max` 宽度、维护记录清理按钮、侧栏网关状态显示监听地址
+- 外链与提示：`on_new_window` 转交系统浏览器、动态登录指引链接可点击、ZCode 领取验证提示移到侧栏底部、推理过程自动折叠
+- 报表：Top 账号悬停提示长标识换行、气泡最大宽度 480px
+- 提供商图标：dumate、deepaicode、codar 等主面板图标
+- 商汤登录：滑块独立弹窗、添加账号与账号设置统一排版
+- 其它：整库备份「包含日志与调试报文」开关跨会话记忆、手机端图片兼容入口改指向桌面端辅助识图
 
 其它：
 
