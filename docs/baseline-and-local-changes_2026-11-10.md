@@ -462,6 +462,7 @@
 
 - `tauri-build` 升级到 2.7.4（合并时 Cargo.lock 被上游旧版覆盖导致 `os error 3`，已恢复）
 - 收窄三处未使用的 `pub(crate) use` 重导出（codearts_slot、kiro、checkin_call 各一处），消除合并带入的 unused import 告警
+- **WorkBuddy 对话消息条数上限从 512 放宽到 2048**（`plugin_host/wasm/conversation/workbuddy_http.rs`，新增 `MAX_MESSAGES` 常量）：官方 beta.2 起 WorkBuddy 国内对话走 WASM 插件的固定投递路线，原实现把消息条数卡在 512，超限返回 `bad_params` → 网关 400，而长会话很容易超过（实测 514 条即失败，与正文大小、字节数、节点数无关），现象是「没有任何提示的 400」。选 2048 是因为它覆盖实测最大规模（967 条），又仍在两道更早生效的护栏之内（`MAX_BODY` 8 MiB 约 2700 条到顶、`MAX_NODES` 65536 约 8000 条到顶）。**这是本地补丁，上游若自行放宽应撤掉回到上游行为**；上游 `workbuddy_http.rs` 同一行有 `rows.len() <= 512`，下次同步会冲突，手工改回 `MAX_MESSAGES` 即可
 - 验证：服务端 `cargo check` 与 `cargo test` 通过（466 通过 / 11 忽略），前端岛与手机端类型检查与构建通过，`scripts/build-desktop.ps1` 完整构建成功
 
 ### 2026-11-19 补记（更新检查可彻底关闭）

@@ -33,6 +33,19 @@ const MAX_BODY: usize = 8 * 1024 * 1024;
 const MAX_ENCODED: usize = ((MAX_BODY + 2) / 3) * 4;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_NODES: usize = 65_536;
+/// 消息条数上限。
+///
+/// 官方 beta.2 起 WorkBuddy 国内对话走 WASM 插件的这条固定投递路线，原实现
+/// 把条数卡在 512，超限时返回 `bad_params` → 网关 400。而长会话很容易超过这个
+/// 数（实测修复前 514 条即失败，与内容长度、字节数、节点数都无关），表现为
+/// 「没有任何提示的 400」。
+///
+/// 放到 2048 而非无限：覆盖实测观察到的最大规模（967 条），并仍落在两道更早
+/// 生效的护栏之内 —— 请求体 `MAX_BODY` 8 MiB（约 2700 条到顶）与 `MAX_NODES`
+/// 65536（约 8000 条到顶），2048 不会先撞上它们，也不是无限放行。
+///
+/// 上游若后续自行放宽，应撤掉这里回到上游行为（见 docs 的 2026-11-20 补记）。
+const MAX_MESSAGES: usize = 2048;
 
 struct Binding {
     signal: Arc<Signal>,
@@ -320,7 +333,7 @@ fn material(params: &Value, url: String) -> Result<Material, proto::WireError> {
         .map_err(|_| invalid())?;
     let mut nodes = 0;
     shape(&value, 0, &mut nodes)?;
-    if value["stream"] != true || !value["messages"].as_array().is_some_and(|rows| !rows.is_empty() && rows.len() <= 512)
+    if value["stream"] != true || !value["messages"].as_array().is_some_and(|rows| !rows.is_empty() && rows.len() <= MAX_MESSAGES)
         || !value["model"].as_str().is_some_and(|model| !model.trim().is_empty() && model.len() <= 1024 && !model.chars().any(char::is_control)) {
         return Err(invalid());
     }
