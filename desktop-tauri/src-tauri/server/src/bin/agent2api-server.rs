@@ -199,6 +199,9 @@ fn exit_code(result: Result<(), String>) -> ExitCode {
     }
 }
 
+/// 插件调用链的 async 状态机偏大，工作线程栈取 8 MiB（默认 2 MiB 在 GNU 构建下会溢出）
+const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 /// 运行时在任何bootstrap之前建立。先等库侧真实Result，再关闭运行时，绝不倒序。
 fn run_gateway(
     launch: Launch,
@@ -206,7 +209,12 @@ fn run_gateway(
     console_signals: bool,
     mut report: impl FnMut(GatewayEvent) -> Result<(), String>,
 ) -> Result<(), String> {
+    // 工作线程栈显式放大到 8 MiB：插件调用的 async 状态机叠加了多层作用域包装
+    // （账号出口、余额队列、容量准入等），默认 2 MiB 在 windows-gnu 下会栈溢出
+    // （`thread 'tokio-rt-worker' has overflowed its stack`，进程直接闪退）。
+    // 上游在 MSVC 上默认栈更大，GNU 构建复现更明显。
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(WORKER_STACK_BYTES)
         .enable_all()
         .build()
         .map_err(|error| format!("创建 Tokio 运行时失败: {error}"))?;
