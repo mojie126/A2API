@@ -433,59 +433,23 @@
 
 ### 2026-11-20 补记（同步官方 beta.2 与 beta.3）
 
-官方 `v3.5.0-beta.2`（`0affd3af`，1175 个文件）与其后 9 个提交（截至 `cd0411bf`）全部合入 develop。本轮冲突集中在 i18n 源与产物、前端产物与若干共享文件（账号页、访问路由、代理列、插件宿主、上游转发链），处理原则是「本地增强与官方新功能都保留」，逐项如下。
+官方 `v3.5.0-beta.2`（`0affd3af`，1175 个文件）与其后 9 个提交（截至 `cd0411bf`）全部合入 develop，版本号 `3.5.0-beta.3`。核心是提供商全面转 WASM、官网更新通道、统一错误处理、运行容量、系统提示词、账号分页与实时推送、插件批量管理、凭据版本化、订阅接入、广告位等；本 fork 保留原生插件体系，并保留全部历史本地优化。
 
-保留本 fork 原生插件体系（不跟官方的 WASM-only 转向）：
+本轮同步中暴露并修复的问题（闪退、原生插件安装失败、特殊路由不跳转、派生快照不重建、登录指引链接失效、云同步覆盖本地设置、组内并发被绕开、无需续期账号报错、科搭提前续期被拒、WorkBuddy 长对话 400 等）逐条记在 `同步beta问题记录_2026-11-20.md`；同步一律手动逐行合并，禁止 `git merge` / `git cherry-pick`。
 
-- 官方 beta.2 起网关只接受 WASM 插件包，非 WASM 包拒装并标记「旧原生插件已停止支持」。本 fork 的插件仓库仍以原生插件为主流程，因此 `plugin_host/support.rs` 改为：`require_wasm` 恒放行、`installed_state` 恒返回 Supported、`legacy_reason` 恒为 None；`bootstrap.rs` 的入口选择先取本机三元组、取不到再回退 WASM 目标，原生二进制照常启动
-- **安装路径的同一条约束（2026-11-20 补修）**：`install::entry_for_target` 上游只认 WASM 目标并忽略传入的平台，原生包因此报「插件包没有为当前平台（x86_64-pc-windows-msvc）提供入口」而无法安装（界面显示「无法安装」）。改为先按传入目标取、取不到才回退 WASM 目标；`packages.rs` 的 `if !is_wasm { LEGACY_REASON }`、`operations.rs` 的 `platform["target"] != WASM` 校验、`lifecycle.rs` 的「非 script 即停止支持」两处拦截一并放开，原生包的安装、启用与子进程启动恢复可用；新增 `entry_for_target_accepts_native_and_wasm` 回归测试钉住顺序
-- 插件更新与下载：官方改走官网（`agent2api.dev`），本 fork 在官网通道之外保留 GitHub Releases 兜底 —— `read_index_result`、`query_releases`、`validate_release_urls`、`download` 四处都接受 GitHub 来源；`INDEX_REPO = Agent2plugin/Agent2plugin`、`FALLBACK_REPO = Agent2Builder/agent2api-providers-releases`
-- 插件商店浏览与一键更新仍依赖官网 `/catalog`，fork 环境无官方目录时这部分为空，本地插件通过「安装插件包」（zip）安装，不受影响
+以下为需要在本文件长期保留的取舍与常驻变化：
 
-修复合并引入的回归：
-
-- 组内并发限制被上游新的容量准入绕开：`account_admission::select` 与 `all_busy` 原只读账号自身 `maxConcurrent`，改为读 `routing::concurrency_limit_of`（含路由组的 `routingConcurrencyCap` 分配结果），恢复本地「组内并发设置」
+- 原生插件体系：`plugin_host/support.rs` 的 `require_wasm` 恒放行、`installed_state` 恒 Supported、`legacy_reason` 恒 None；`install::entry_for_target` 先按传入平台取、取不到回退 WASM 目标；`packages.rs` / `operations.rs` / `lifecycle.rs` 的 WASM-only 拦截一并放开 —— 原生包与 WASM 包都可安装、启用与运行
+- 插件更新与下载：官网（`agent2api.dev`）之外保留 GitHub Releases 兜底（`INDEX_REPO` / `FALLBACK_REPO`），本地插件仓库可用；商店浏览与一键更新仍依赖官网 `/catalog`，fork 环境为空时用「安装插件包」zip
 - 数据库 schema：本地 v30（客户端出入站身份三列）、v31（下游协议列）、v32（出口方式与 IP）保留，官方 v30（用量诊断列）顺延为 v33，`SCHEMA_VERSION = 33`
-- `update_inner` 改用 `plugin_task_grants::write_snapshot()`（fail-closed，未初始化时拒绝写入）后，依赖「进程内改配置」的测试需先初始化配置：`config::init(None)` 补到 `auto_continue_tests::hold_config` 与 `http::tests::gateway_cors_cases`
-- 统一错误处理策略取代逐适配器的 `retry_advice` 后，重试测试按新策略改写（503 属 Transient 会重发、409 属「其他错误」不重发、「不确定」提示走 telemetry notice）
+- 组内并发：容量准入 `account_admission::select` 与 `all_busy` 读 `routing::concurrency_limit_of`（含 `routingConcurrencyCap` 分配结果）
+- 配置更新 `update_inner` 对六类配置键逐项重建派生快照（model_rules / routing_profiles / compact_routes / title_routes / client_identification / vision_compat）
+- 更新检查：两通道都关即彻底关闭（不联网、手动检查提示已关闭、强制更新不受影响）
+- 云同步恢复：同 id 账号按字段合并，本地偏好字段（usageQuery / proxy / userAgent / maxConcurrent / name）与 enabled / priority 优先，凭证等取远端
+- 工作流版本校验：协议库 tag 改为「在远端存在」，协议库最高到 `v3.5.0-beta.2`
+- `tauri-build` 2.7.4；三处未使用的 `pub(crate) use` 重导出收窄
+- 验证：服务端 `cargo check` 与 `cargo test` 通过（469 通过 / 11 忽略），前端岛与手机端类型检查与构建通过，`scripts/build-desktop.ps1` 完整构建成功
 
-保留的本地优化（2026-11-20 逐项核对「本地改动全史」后确认仍在，按类别列出）：
-
-后端 / 网关：
-
-- 出口与代理：ZCode 内建 WARP 出口池（`core/warp`：boringtun 隧道、smoltcp 用户态 TCP/IP、本地 SOCKS5、多出口轮询）、ZCode 直连优先与 429 换出口（`provider_loop` 的 `warp_fallback`/`warp_exit`/`zcode_direct_in_flight`/`exit_rotations`）、账号代理引用 WARP 设备、更新出网复用同一出口
-- 选路：路由组内并发（`core/routing_concurrency`，经 `route_context` 应用）、容量准入与全忙判定读 `concurrency_limit_of`
-- 模型：思考档位覆盖（`core/model_rules` 的 `reasoningLevels`）、models.dev 身份绑定与代理选择（`core/model_meta`）、模型目录更新的「启用且有账号」口径
-- 客户端识别：供应商归属规则与默认归属客户端、自定义头匹配规则、识别顺序说明（`config/client_identification` + `core/client/catalog.rs`）
-- 图片兼容 / 辅助识图：`rules` 权威形状（`assist`/`reroute` 降级为投影，删光规则即空数组）、逐规则 `unknownCapability`、默认识图模型、`provider_serves_model` 判据、`skipped` 判定结果落请求日志
-- 特殊请求路由：确认即保存、修订号冲突修复、`refreshView` 跨页刷新、切路由组清 `specialKey`
-- 更新检查：两通道都关即彻底关闭（`config/update_policy` 的 `enabled()`/`none`，`core/update/check.rs` 不联网并返回 `disabled`）
-- 云同步：`account_limiter_events` 移出同步范围、30 天修剪（`limiter::prune_history`）、WebDAV 连接池复用与连接类失败重试、按实质变化上传
-- 长期运行开销（11-06 `b042ddfd`）：调试报文限量淘汰最旧、大请求及时释放原始字节、终态与限额同事务、在途状态每秒至多一次写入、日志每 64 条与请求统计每 128 次或 60 秒批量维护、SQLite 检查点 10000 页与 `auto_vacuum=INCREMENTAL`
-- 调试采集：三档内存预算（`debugBudget`）、独立线程批量事务写入、正文头尾截断、上下游正文指纹去重、`incremental_vacuum`
-- 凭证与维护：长期 Cookie 账号刷新不误报（`refresh_advanced`）、账号更新日志显式 info 级别、维护记录清理接口（`POST /api/maintenance/records/clear`）、维护保留天数与日志上限配置化
-- 数据库 schema：本地 v30（客户端出入站身份三列）、v31（下游协议列）、v32（出口方式与 IP）保留，官方 v30 顺延 v33
-- 提供商：百度搭子（dumate）、商汤日日新手机号验证码登录与滑块求解、果办只读客户端状态模拟
-- 插件宿主：原生插件保留（`support.rs` 恒 Supported、`bootstrap.rs` 回退本机三元组）、插件目录 GitHub 兜底（`INDEX_REPO`/`FALLBACK_REPO`）、脚本插件 Bun 运行时一键清理、插件目录清单解析加固与错误详情弹窗、BOM 剥离
-
-前端：
-
-- 弹窗性能：遮罩去全屏模糊、入场出场改 transition、弹窗打开期间暂停轮询、低配设备降级（`ui-kit/src/lib/modal-activity.ts`）
-- 路由画布：在途请求高亮、落点横条裁剪修复、配置视图 3 秒轮询
-- 面板：图片兼容与客户端识别分组折叠、图片兼容下拉改为 `SearchSelect` 与 `w-max` 宽度、维护记录清理按钮、侧栏网关状态显示监听地址
-- 外链与提示：`on_new_window` 转交系统浏览器、动态登录指引链接可点击、ZCode 领取验证提示移到侧栏底部、推理过程自动折叠
-- 报表：Top 账号悬停提示长标识换行、气泡最大宽度 480px
-- 提供商图标：dumate、deepaicode、codar 等主面板图标
-- 商汤登录：滑块独立弹窗、添加账号与账号设置统一排版
-- 其它：整库备份「包含日志与调试报文」开关跨会话记忆、手机端图片兼容入口改指向桌面端辅助识图
-
-其它：
-
-- `tauri-build` 升级到 2.7.4（合并时 Cargo.lock 被上游旧版覆盖导致 `os error 3`，已恢复）
-- 收窄三处未使用的 `pub(crate) use` 重导出（codearts_slot、kiro、checkin_call 各一处），消除合并带入的 unused import 告警
-- 无需续期的账号手动刷新不再报错：凭证不会过期的家（静态 API Key，如 DeepAI Code）按「无需续期」成功返回；确实会过期却没有续期手段的家仍如实报错，提示重新登录
-- **WorkBuddy 对话消息条数上限从 512 放宽到 2048**（`plugin_host/wasm/conversation/workbuddy_http.rs`，新增 `MAX_MESSAGES` 常量）：官方 beta.2 起 WorkBuddy 国内对话走 WASM 插件的固定投递路线，原实现把消息条数卡在 512，超限返回 `bad_params` → 网关 400，而长会话很容易超过（实测 514 条即失败，与正文大小、字节数、节点数无关），现象是「没有任何提示的 400」。选 2048 是因为它覆盖实测最大规模（967 条），又仍在两道更早生效的护栏之内（`MAX_BODY` 8 MiB 约 2700 条到顶、`MAX_NODES` 65536 约 8000 条到顶）。**这是本地补丁，上游若自行放宽应撤掉回到上游行为**；上游 `workbuddy_http.rs` 同一行有 `rows.len() <= 512`，下次同步会冲突，手工改回 `MAX_MESSAGES` 即可
-- 验证：服务端 `cargo check` 与 `cargo test` 通过（466 通过 / 11 忽略），前端岛与手机端类型检查与构建通过，`scripts/build-desktop.ps1` 完整构建成功
 
 ### 2026-11-19 补记（更新检查可彻底关闭）
 
