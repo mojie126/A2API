@@ -566,6 +566,12 @@ pub async fn refresh_single(
             }
         }
         if providers::is_executable_provider(adapter.provider_id()) && !adapter.supports_refresh() {
+            // 凭证根本不会过期的家（静态 API Key，如 DeepAI Code）没有可续期的东西：
+            // 按「无需续期」成功返回，不把「本来就不需要」记成一次失败。
+            // 确实会过期却没有续期手段的家，仍如实报错，提示用户重新登录。
+            if !adapter.credentials_expiring_async(store, id).await {
+                return Ok(String::new());
+            }
             return Err(GatewayError::bad_request(format!(
                 "{} 当前未接入 Token 续期，请重新登录或在账号设置中更新凭证。", adapter.label(),
             )).with_code("credential_refresh_unsupported"));
