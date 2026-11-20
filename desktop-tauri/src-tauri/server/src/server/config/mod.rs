@@ -1356,9 +1356,21 @@ where
     // CONFIG 克隆门已释放；本门撤销完成后才允许存储或新的配置发布。
     model_key_source::before_change(&previous, &next);
     plugin_task_grants::before_change(&previous.raw, &next.raw);
-    if previous.raw().get(crate::server::core::model_rules::KEY_MODEL_RULES)
-        != next.raw().get(crate::server::core::model_rules::KEY_MODEL_RULES) {
-        next.model_rules = std::sync::Arc::new(crate::server::core::model_rules::ModelRules::from_raw(&next.raw));
+    // 重建各类派生快照。上游只重建 model_rules，本 fork 另需 title_routes、
+    // routing_profiles、compact_routes、client_identification、vision_compat ——
+    // 否则这些配置保存成功后内存快照仍是旧值，界面刷新会回退、再次保存撞修订号
+    // 冲突（见 baseline 文档 2026-11-10「标题生成规则确认即保存后的修订号冲突修复」）。
+    for key in [
+        crate::server::core::model_rules::KEY_MODEL_RULES,
+        KEY_ROUTING_PROFILES,
+        compact_routes::KEY_COMPACT_ROUTES,
+        title_routes::KEY_TITLE_ROUTES,
+        client_identification::KEY_CLIENT_IDENTIFICATION,
+        vision_compat::KEY_VISION_COMPAT,
+    ] {
+        if previous.raw().get(key) != next.raw().get(key) {
+            mutations::refresh_derived(&mut next, key);
+        }
     }
     let saved = save_raw(&next.raw);
     // 先算改动后的指纹再交出所有权：`next` 要移进内存快照

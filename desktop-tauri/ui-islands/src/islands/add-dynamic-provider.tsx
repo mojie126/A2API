@@ -28,7 +28,7 @@ import { loginDiagnosticOf, type LoginDiagnostic } from '../../../ui-shared/plug
 import { usePluginPrompts } from './add-account-plugin-prompts'
 
 import {
-  loginText, mergeLoginInstructions, parseCallbackInput, parseMethods, pluginBrowserInstructions, readInputs,
+  instructionParts, loginText, mergeLoginInstructions, parseCallbackInput, parseMethods, pluginBrowserInstructions, readInputs,
   type MethodsState,
 } from './add-account-dynamic-fields'
 
@@ -604,7 +604,13 @@ export function DynamicProviderBlock({
         await owned.bridge.openReleasePage(url)
       } : openExternal}
       managed={managed} request={interactionRequest} /> : null}
-    {method && methodsState.phase !== 'loading' && instructions ? <p className='plugin-login-instructions'>{instructions}</p> : null}
+    {method && methodsState.phase !== 'loading' && instructions ? <p className='plugin-login-instructions'>
+      {instructionParts(instructions).map((part, index) => typeof part === 'string'
+        ? <React.Fragment key={index}>{part}</React.Fragment>
+        : <a key={index} className='text-primary underline underline-offset-2' href={part.href}
+          target='_blank' rel='noreferrer'
+          onClick={event => { event.preventDefault(); void openExternal(part.href) }}>{part.href}</a>)}
+    </p> : null}
     {progress.userCode ? <p className='plugin-login-local-scope'>{t('设备授权码：{code}', { code: progress.userCode })}</p> : null}
 
     {method && methodsState.phase !== 'loading' ? <section className='plugin-login-content'>
