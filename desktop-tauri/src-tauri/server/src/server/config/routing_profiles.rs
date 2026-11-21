@@ -104,7 +104,18 @@ pub(crate) fn from_raw(raw: &Map<String, Value>) -> Arc<RoutingProfiles> {
     };
     profiles.global = object.get("global")
         .and_then(|value| serde_json::from_value::<RoutingProfile>(value.clone()).ok())
-        .filter(|profile| validate_shape(profile).is_ok());
+        .filter(|profile| validate_shape(profile).is_ok())
+        // 旧版全局 selected 名单（历史快照，无法区分主动移除与后来新增）只保留
+        // 启动时已登记的家：名单外的新提供商自动纳入，不再被旧名单静默排除。
+        // 模型独立配置是用户显式创建的，不受此处理影响。
+        .map(|mut profile| {
+            if profile.provider_scope.is_none() {
+                let known: HashSet<_> = profile.providers.iter().chain(profile.disabled_providers.iter()).cloned().collect();
+                profile.providers.extend(crate::server::core::providers::executable_provider_ids()
+                    .into_iter().filter(|id| !known.contains(id)));
+            }
+            profile
+        });
     if let Some(models) = object.get("models").and_then(Value::as_object) {
         for (model, value) in models.iter().take(MAX_ROUTING_MODELS) {
             let Ok(model) = normalize_model(model) else { continue };

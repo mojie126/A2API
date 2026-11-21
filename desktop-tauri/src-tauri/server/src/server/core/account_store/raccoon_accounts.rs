@@ -6,7 +6,7 @@
 //! ```text
 //!   凭证解析 / JWT / 桌面端 auth.json   plugins/raccoon/credentials.rs + jwt.rs
 //!   添加账号（手动 / 文件 / 桌面端导入）  plugins/raccoon 的 account.normalize
-//!   token 续期 + 比较-再写               plugins/raccoon 的 refresh + store.save
+//!   登录态重读（上游已无续期接口）        plugins/raccoon 的 refresh
 //!   网页登录 / 回调换码                  plugins/raccoon/oauth.rs + login.callback
 //!   目录 / 余额 / 签到 / 新手任务        plugins/raccoon/{models,balance,onboarding}.rs
 //! ```

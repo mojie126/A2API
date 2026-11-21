@@ -142,6 +142,14 @@ pub struct LoginTaskHandle {
     ticket: u64,
 }
 
+impl LoginTaskHandle {
+    /// 登录任务选定的出口（`None` = 登录弹窗未选代理；轮询与回调换码
+    /// 据此把出口绑定到插件的登录链路）。
+    pub(crate) fn login_proxy(&self) -> Option<&LoginProxySelection> {
+        self.context.as_ref().and_then(|context| context.proxy.as_ref())
+    }
+}
+
 /// 手工提交网页登录回调后的结果。
 ///
 /// `ContinueTo` 留给「一次回调不够、还要再跳一跳」的协议（远程网页端不能依赖
@@ -803,7 +811,11 @@ impl LoginService {
             let callback = agent2api_provider_protocol::LoginCallback {
                 flow: state.to_string(), code, url: callback_url.to_string(),
             };
-            let result = adapter.login_callback_result_async(&self.store, callback).await;
+            // 回调换码绑定登录任务的出口（通用能力）：换码请求、换码后的资料
+            // 读取全部沿用登录弹窗选定的代理或 WARP 设备
+            let result = crate::server::api::session::login_proxy_scope(
+                &handle, &task.provider, adapter.login_callback_result_async(&self.store, callback),
+            ).await;
             // 取消 / 另一 consumer 完成于 await 期间，不接受迟到的回调结果。
             let current = handle.snapshot();
             if current.canceled { return Err(GatewayError::bad_request("登录已取消")); }
@@ -881,8 +893,11 @@ impl LoginService {
             }
         }
         if let Some(adapter) = plugin_adapter {
-            // 旧 String API 同样传完整 URL，且仍使用启动时的实例。
-            let result = adapter.exchange_login_code(&self.store, callback_url, state).await;
+            // 旧 String API 同样传完整 URL，且仍使用启动时的实例；换码出口与
+            // 新回调链路同一口径（登录弹窗选定的代理或 WARP 设备）
+            let result = crate::server::api::session::login_proxy_scope(
+                &handle, &task.provider, adapter.exchange_login_code(&self.store, callback_url, state),
+            ).await;
             let current = handle.snapshot();
             if current.canceled { return Err(GatewayError::bad_request("登录已取消")); }
             let outcome = match result {

@@ -739,6 +739,33 @@ async fn start_plugin_web_login(
     ok_json(response)
 }
 
+/// 把登录任务选定的出口绑定到一次插件登录调用（轮询 / 回调换码）。
+///
+/// `account` 传空串：登录时账号尚未落库，出口绑定的是**这次登录**而不是某个
+/// 账号；插件侧按 params 的 proxy 字段解析（SDK 的 `egress::for_request` 对
+/// 登录三方法同样生效）。显式直连（resolved 为 null）也要绑定 —— 覆盖
+/// 「账号记录里恰好留有旧出口」的情形，登录全程以弹窗选择为准。
+pub(crate) async fn login_proxy_scope<F: std::future::Future>(
+    handle: &crate::server::core::login::LoginTaskHandle,
+    provider: &str,
+    work: F,
+) -> F::Output {
+    let selection = handle.login_proxy();
+    let (proxy, direct) = match selection {
+        None => (None, false),
+        Some(selection) => {
+            let resolved = crate::server::core::proxies::ResolvedProxy::from_json(&selection.resolved)
+                .ok().flatten();
+            match resolved {
+                Some(proxy) => (Some(proxy), false),
+                // null（显式直连）或解析失败：direct 标记让插件侧不回落账号旧出口
+                None => (None, true),
+            }
+        }
+    };
+    crate::server::core::plugin_host::account_egress::scope_selection(provider, "", proxy, direct, work).await
+}
+
 /// 轮询型插件登录的后台任务。
 ///
 /// ── 为什么不在请求里等 ──────────────────────────────────────
@@ -782,7 +809,10 @@ pub(crate) fn spawn_plugin_login_poll(
                 crate::server::core::login::fail_plugin_login(&handle, "登录任务未绑定执行体，请重新发起");
                 return;
             };
-            let poll = adapter.login_poll_async(&flow).await;
+            // 登录任务选定的出口绑定到本次轮询：插件的换码、资料读取与后续登录
+            // 请求全部沿用登录弹窗选定的代理或 WARP 设备（通用能力，与
+            // login.start 的 payload.proxy 同源）。
+            let poll = login_proxy_scope(&handle, &provider, adapter.login_poll_async(&flow)).await;
             // 请求在 await 中被取消或由回调落定：迟到的 Done 不得再落库。
             let task = handle.snapshot();
             if task.canceled || task.done { return; }
