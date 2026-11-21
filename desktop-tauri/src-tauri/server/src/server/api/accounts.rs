@@ -171,6 +171,11 @@ async fn add_plugin_account(
         // （见调用处），不能混进 account.normalize 的输入 —— 插件会把不认识的
         // 键当成凭证字段校验，报出的错误与「UA 填错了」毫无关系。
         if let Some(fields) = manual_payload.as_object_mut() { fields.remove("userAgent"); }
+        // 动态登录方式提交的是 `{methodIndex, inputs:{…}}`，而各家的手工归一仍按
+        // 顶层字段读取（token / accessToken / apiKey / cookie…）。这里把 inputs
+        // 摊平到顶层，原生插件不必为每个家各改一份读法；`inputs` 本身保留，
+        // 已经按新形状解析的家不受影响。
+        flatten_login_inputs(&mut manual_payload);
         if crate::server::core::providers::is_scoped_runtime_provider(provider) {
             if let Some(fields) = manual_payload.as_object_mut() {
                 if fields.get("methodIndex").is_some() {
@@ -1731,5 +1736,64 @@ pub fn delete_account(state: &ServerState, id: &str) -> Response {
             ok_json(json!({ "list": state.store().list_visible_accounts() }))
         }
         Err(error) => store_error(error),
+    }
+}
+
+/// 把动态登录方式提交的 `inputs` 摊平到载荷顶层（`inputs` 本身保留）。
+///
+/// 各家的手工归一只读顶层字段是既有合同，新界面提交的是
+/// `{methodIndex, inputs}` —— 摊平后两种形状等价，顶层已有的同名键不改写。
+fn flatten_login_inputs(payload: &mut Value) {
+    let Some(fields) = payload.as_object_mut() else { return };
+    if !fields.contains_key("methodIndex") { return }
+    let inputs = fields
+        .get("inputs")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (key, value) in inputs {
+        fields.entry(key).or_insert(value);
+    }
+}
+
+#[cfg(test)]
+mod login_input_tests {
+    use serde_json::json;
+
+    use super::flatten_login_inputs;
+
+    /// 动态登录方式的字段要能在顶层被旧归一读到
+    #[test]
+    fn dynamic_inputs_are_flattened() {
+        let mut payload = json!({
+            "methodIndex": 1,
+            "inputs": { "accessToken": "a", "refreshToken": "b" },
+        });
+        flatten_login_inputs(&mut payload);
+        assert_eq!(payload["accessToken"], json!("a"));
+        assert_eq!(payload["refreshToken"], json!("b"));
+        // `inputs` 保留给已经按新形状解析的家
+        assert_eq!(payload["inputs"]["accessToken"], json!("a"));
+    }
+
+    /// 旧表单（没有 methodIndex）原样透传
+    #[test]
+    fn legacy_payload_is_untouched() {
+        let mut payload = json!({ "token": "x", "inputs": { "token": "y" } });
+        flatten_login_inputs(&mut payload);
+        assert_eq!(payload["token"], json!("x"));
+    }
+
+    /// 顶层已有同名键时不覆盖
+    #[test]
+    fn existing_top_level_keys_win() {
+        let mut payload = json!({
+            "methodIndex": 0,
+            "name": "表单名",
+            "inputs": { "name": "输入名", "apiKey": "k" },
+        });
+        flatten_login_inputs(&mut payload);
+        assert_eq!(payload["name"], json!("表单名"));
+        assert_eq!(payload["apiKey"], json!("k"));
     }
 }

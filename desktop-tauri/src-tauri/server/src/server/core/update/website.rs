@@ -69,7 +69,7 @@ pub async fn request(
         else if download_url(value) { download_url }
         else { trusted_url };
     let mut last_error = "无法连接官网更新服务".to_string();
-    for (_, proxy) in client::resolve_egress_candidates().map_err(UpdateError::new)? {
+    for (_, proxy) in client::resolve_egress_candidates().await.map_err(UpdateError::new)? {
         let http = egress::resolved_client(proxy.as_ref(), false, "", &[]).map_err(UpdateError::new)?;
         let attempt = async {
             let mut target = url::Url::parse(value).map_err(|_| UpdateError::new("官网更新地址无效"))?;

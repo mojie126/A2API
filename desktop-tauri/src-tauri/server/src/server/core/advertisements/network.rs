@@ -7,7 +7,7 @@ pub async fn request(url: &str) -> Result<reqwest::Response, String> {
     if !url.starts_with(&format!("{WEBSITE_ORIGIN}/")) {
         return Err("广告请求地址无效".into());
     }
-    let candidates = update::client::resolve_egress_candidates()?;
+    let candidates = update::client::resolve_egress_candidates().await?;
     for (_, proxy) in candidates {
         let client = egress::resolved_client(proxy.as_ref(), false, "", &[])?;
         let response = client

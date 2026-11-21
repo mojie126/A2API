@@ -278,21 +278,36 @@ function PluginsPage(): React.ReactElement {
   const recommendedMatches = missingScripts.filter(item => matchesRecommendedPlugin(item, search, t))
   const filteredScripts = searchedScripts.filter(pack => matchesScriptPublisher(pack, scriptPublisher))
   const filteredRecommendations = recommendedMatches.filter(item => matchesScriptPublisher(item, scriptPublisher))
+  // 原生插件与 Wasm 插件分开分组：id 前缀最可靠（商店条目常拿不到 platforms），
+  // 已装包再叠加网关给出的 `wasm` 标记
+  const storeIsWasm = (item: StorePlugin) => item.id.startsWith('agent2api-wasm-')
+    || item.platforms.some(platform => platform.target === 'wasm32-unknown-unknown')
+  const packIsWasm = (pack: PackSummary) => pack.wasm === true || pack.id.startsWith('agent2api-wasm-')
   const nativeItems: PluginFilterItem[] = [
-    ...searchedPacks.map(pack => ({ installed: true, updatable: updatable(pack.id) })),
-    ...searchedStore.map(() => ({ installed: false, updatable: false })),
+    ...searchedPacks.filter(pack => !packIsWasm(pack)).map(pack => ({ installed: true, updatable: updatable(pack.id) })),
+    ...searchedStore.filter(item => !storeIsWasm(item)).map(() => ({ installed: false, updatable: false })),
+  ]
+  const wasmItems: PluginFilterItem[] = [
+    ...searchedPacks.filter(packIsWasm).map(pack => ({ installed: true, updatable: updatable(pack.id) })),
+    ...searchedStore.filter(storeIsWasm).map(() => ({ installed: false, updatable: false })),
   ]
   const magpieItems: PluginFilterItem[] = [
     ...filteredScripts.map(pack => ({ installed: true, updatable: scriptUpdate(scripts, pack.id) !== undefined })),
     ...filteredRecommendations.map(() => ({ installed: false, updatable: false })),
   ]
-  const itemsFor = (chosen: SourceFilter): PluginFilterItem[] => chosen === 'agent2' ? nativeItems
-    : chosen === 'magpie' ? magpieItems : [...nativeItems, ...magpieItems]
+  const itemsFor = (chosen: SourceFilter): PluginFilterItem[] => chosen === 'native' ? nativeItems
+    : chosen === 'wasm' ? wasmItems
+      : chosen === 'magpie' ? magpieItems : [...nativeItems, ...wasmItems, ...magpieItems]
   const countMatching = (chosen: SourceFilter, next: PluginStatusFilter) => itemsFor(chosen).filter(item => matchesPluginStatus(item, next)).length
-  const showNative = source !== 'magpie'
-  const showScripts = source !== 'agent2'
+  const showNative = source === 'all' || source === 'native'
+  const showWasm = source === 'all' || source === 'wasm'
+  const showScripts = source === 'all' || source === 'magpie'
   const installedRows = searchedPacks.filter(pack => matchesPluginStatus({ installed: true, updatable: updatable(pack.id) }, status))
   const storeRows = searchedStore.filter(() => matchesPluginStatus({ installed: false, updatable: false }, status))
+  const nativeInstalled = installedRows.filter(pack => !packIsWasm(pack))
+  const wasmInstalled = installedRows.filter(pack => packIsWasm(pack))
+  const nativeStore = storeRows.filter(item => !storeIsWasm(item))
+  const wasmStore = storeRows.filter(storeIsWasm)
   const scriptRows = filteredScripts.filter(pack => matchesPluginStatus({ installed: true, updatable: scriptUpdate(scripts, pack.id) !== undefined }, status))
   const shownCount = countMatching(source, status)
   const hasAny = packs.length + storePlugins.length + scriptItems.length + missingScripts.length > 0
@@ -305,7 +320,8 @@ function PluginsPage(): React.ReactElement {
   const resolveIcon = (path: string) => `${gatewayBase.replace(/\/+$/, '')}${path}`
   const batchItems = pluginBatchItems(payload, t, resolveIcon)
   const shownKeys = [
-    ...(showNative ? [...installedRows.map(pack => packSelectionKey(pack.id)), ...storeRows.map(item => packSelectionKey(item.id))] : []),
+    ...(showNative ? [...nativeInstalled.map(pack => packSelectionKey(pack.id)), ...nativeStore.map(item => packSelectionKey(item.id))] : []),
+    ...(showWasm ? [...wasmInstalled.map(pack => packSelectionKey(pack.id)), ...wasmStore.map(item => packSelectionKey(item.id))] : []),
     ...(showScripts ? [...scriptRows.map(scriptSelectionKey), ...filteredRecommendations.filter(() => status === 'all' || status === 'missing').map(scriptSelectionKey)] : []),
   ]
   const pendingUpdates = applicablePluginItems(batchItems.filter(item => shownKeys.includes(item.key)), 'update')
@@ -321,6 +337,12 @@ function PluginsPage(): React.ReactElement {
     const keys = batchItems.filter(item => item.kind === kind && shownKeys.includes(item.key) && !item.active).map(item => item.key)
     changeSelection(keys, !keys.every(key => selected.has(key)))
   }
+  function toggleKeys(keys: string[]): void {
+    const usable = keys.filter(key => !batchItems.find(item => item.key === key)?.active)
+    changeSelection(usable, !usable.every(key => selected.has(key)))
+  }
+  const nativeKeys = [...nativeInstalled.map(pack => packSelectionKey(pack.id)), ...nativeStore.map(item => packSelectionKey(item.id))]
+  const wasmKeys = [...wasmInstalled.map(pack => packSelectionKey(pack.id)), ...wasmStore.map(item => packSelectionKey(item.id))]
   function confirmBatch(action: PluginBatchAction, items = batchItems.filter(item => selected.has(item.key))): void {
     const current = items.flatMap(item => { const row = item.required ? missing.required.find(row => row.key === item.key) || batchItems.find(row => row.key === item.key) : batchItems.find(row => row.key === item.key); return row ? [{ ...row, required: item.required }] : [] })
     const targets = applicablePluginItems(current, action)
@@ -349,6 +371,21 @@ function PluginsPage(): React.ReactElement {
     setDetailsPane(pane); setSettingsPackId(id)
   }
 
+  const installedCards = (rows: PackSummary[]) => rows.map(pack => {
+    const operation = operations.find(item => item.id === pack.id)
+    return <InstalledPluginCard key={pack.id} pack={pack} store={store.find(item => item.id === pack.id)}
+      host={host || null} update={updateOf(pack.id)} operation={operation} disabled={locked || operation?.active === true}
+      selection={selecting ? selectionFor(packSelectionKey(pack.id)) : undefined}
+      onEnabled={enabled => void mutation(`enable:${pack.id}`, '/api/plugins/enable', { id: pack.id, enabled })}
+      onSettings={() => openPackDetails(pack.id, 'settings')} onDetails={() => openPackDetails(pack.id, 'about')} />
+  })
+  const storeCards = (rows: StorePlugin[]) => rows.map(item => <StorePluginCard key={item.id} item={item} target={target}
+    operation={operations.find(operation => operation.id === item.id)} disabled={locked}
+    selection={selecting ? selectionFor(packSelectionKey(item.id)) : undefined}
+    onInstall={() => void start(item.id, false)} onDetails={() => setDetailsStore(item)}
+    onNotes={() => setNotes({ name: pluginName(item.id, item.name), version: item.version || '',
+      notes: item.notes, page: item.page, prerelease: item.prerelease })} />)
+
   return <>
     <div className='plugins-page-layout'>
       <div className='plugins-fixed-area'>
@@ -373,24 +410,20 @@ function PluginsPage(): React.ReactElement {
         {!fileInstall.open && fileInstall.results.length ? <div className='plugins-update-summary'><span>{fileInstall.running ? t('正在安装本地插件包…') : t('本地安装结果')}</span><Button variant='link' size='xs' onClick={() => fileInstall.setOpen(true)}>{t('查看详情')}</Button></div> : null}
       </div>
       <div ref={listRef} className='plugins-scroll-list'>
-      {showNative && (installedRows.length > 0 || storeRows.length > 0) ? <section className='@container/plugin-gallery min-w-0 shrink-0' aria-label={t('Agent2API 社区')}>
-        <PluginSectionHeading t={t} title={t('Agent2API 社区')} count={installedRows.length + storeRows.length}
-          hint={t('独立插件，来自项目插件仓库')} actions={selecting ? <Button variant='link' size='xs' disabled={locked} onClick={() => selectGroup('pack')}>{t('全选本组')}</Button> : null} />
+      {showNative && (nativeInstalled.length > 0 || nativeStore.length > 0) ? <section className='@container/plugin-gallery min-w-0 shrink-0' aria-label={t('原生插件')}>
+        <PluginSectionHeading t={t} title={t('原生插件')} count={nativeInstalled.length + nativeStore.length}
+          hint={t('独立进程运行，可使用本机能力')} actions={selecting ? <Button variant='link' size='xs' disabled={locked} onClick={() => toggleKeys(nativeKeys)}>{t('全选本组')}</Button> : null} />
         <div className={PLUGIN_GRID_CLASS}>
-          {installedRows.map(pack => {
-            const operation = operations.find(item => item.id === pack.id)
-            return <InstalledPluginCard key={pack.id} pack={pack} store={store.find(item => item.id === pack.id)}
-              host={host || null} update={updateOf(pack.id)} operation={operation} disabled={locked || operation?.active === true}
-              selection={selecting ? selectionFor(packSelectionKey(pack.id)) : undefined}
-              onEnabled={enabled => void mutation(`enable:${pack.id}`, '/api/plugins/enable', { id: pack.id, enabled })}
-              onSettings={() => openPackDetails(pack.id, 'settings')} onDetails={() => openPackDetails(pack.id, 'about')} />
-          })}
-          {storeRows.map(item => <StorePluginCard key={item.id} item={item} target={target}
-            operation={operations.find(operation => operation.id === item.id)} disabled={locked}
-            selection={selecting ? selectionFor(packSelectionKey(item.id)) : undefined}
-            onInstall={() => void start(item.id, false)} onDetails={() => setDetailsStore(item)}
-            onNotes={() => setNotes({ name: pluginName(item.id, item.name), version: item.version || '',
-              notes: item.notes, page: item.page, prerelease: item.prerelease })} />)}
+          {installedCards(nativeInstalled)}
+          {storeCards(nativeStore)}
+        </div>
+      </section> : null}
+      {showWasm && (wasmInstalled.length > 0 || wasmStore.length > 0) ? <section className='@container/plugin-gallery min-w-0 shrink-0' aria-label={t('Wasm 插件')}>
+        <PluginSectionHeading t={t} title={t('Wasm 插件')} count={wasmInstalled.length + wasmStore.length}
+          hint={t('沙箱内运行，权限以清单声明为准')} actions={selecting ? <Button variant='link' size='xs' disabled={locked} onClick={() => toggleKeys(wasmKeys)}>{t('全选本组')}</Button> : null} />
+        <div className={PLUGIN_GRID_CLASS}>
+          {installedCards(wasmInstalled)}
+          {storeCards(wasmStore)}
         </div>
       </section> : null}
       {!payload || (shownCount === 0 && !scripts?.operation.active && !scriptGalleryVisible) ? <Card className='shrink-0'><Empty>

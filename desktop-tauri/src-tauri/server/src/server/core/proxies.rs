@@ -654,20 +654,33 @@ pub fn describe_account_proxy(config: Option<&Value>) -> Value {
             "error": message,
             "config": config,
         }),
-        ProxyResolution::Resolved(proxy) => json!({
-            // source 用**账号里配的那个**（pool / clash / custom）：pool 引用
-            // 解析成功后底层是 clash / custom，但界面上要如实显示「引用了
-            // 代理池的某条」—— 前端据此在代理列上标出来。手工改坏的记录
-            // （source 缺失）才回落到解析结果的 source
-            "source": if source.is_empty() { proxy.source.clone() } else { source.clone() },
-            "protocol": proxy.protocol,
-            "host": proxy.host,
-            "port": proxy.port,
-            "label": proxy.label,
-            "nonDirect": proxy.non_direct,
-            "error": Value::Null,
-            "config": config,
-        }),
+        ProxyResolution::Resolved(proxy) => {
+            // WARP 设备重启后会重建，解析走「设备 id → 槽位」接回新设备；
+            // 这里把描述里的 id 同步成当前设备，前端下拉值才不会停在旧条目上
+            let current_config = if source == "warp" {
+                let device = config.get("deviceId").and_then(Value::as_str).unwrap_or("");
+                match crate::server::core::warp::pool::global().and_then(|pool| pool.find(device)) {
+                    Some(exit) if exit.id != device => json!({ "source": "warp", "deviceId": exit.id }),
+                    _ => config.clone(),
+                }
+            } else {
+                config.clone()
+            };
+            json!({
+                // source 用**账号里配的那个**（pool / clash / custom）：pool 引用
+                // 解析成功后底层是 clash / custom，但界面上要如实显示「引用了
+                // 代理池的某条」—— 前端据此在代理列上标出来。手工改坏的记录
+                // （source 缺失）才回落到解析结果的 source
+                "source": if source.is_empty() { proxy.source.clone() } else { source.clone() },
+                "protocol": proxy.protocol,
+                "host": proxy.host,
+                "port": proxy.port,
+                "label": proxy.label,
+                "nonDirect": proxy.non_direct,
+                "error": Value::Null,
+                "config": current_config,
+            })
+        }
     }
 }
 
@@ -699,4 +712,42 @@ fn describe_rotate_proxy(config: &Value) -> Value {
             "usable": summary.usable,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::normalize_account_proxy;
+
+    /// WARP 设备引用只存设备 id：端口由出口池在解析时给出，重建后地址会变
+    #[test]
+    fn warp_reference_keeps_only_device_id() {
+        let normalized = normalize_account_proxy(&json!({
+            "source": "warp",
+            "deviceId": "  dev-1  ",
+            "port": 1080,
+            "host": "127.0.0.1",
+        }))
+        .expect("归一应当成功")
+        .expect("非 null 输入应当产出配置");
+        assert_eq!(normalized, json!({ "source": "warp", "deviceId": "dev-1" }));
+    }
+
+    /// 缺少设备 id 必须报错，不能落一条解析不出地址的配置
+    #[test]
+    fn warp_reference_requires_device_id() {
+        assert!(normalize_account_proxy(&json!({ "source": "warp" })).is_err());
+        assert!(normalize_account_proxy(&json!({ "source": "warp", "deviceId": "   " })).is_err());
+    }
+
+    /// 更新出网线路（软件更新）用同一份归一：直连写 null，WARP 与代理池各保留 id
+    #[test]
+    fn update_egress_shapes_are_accepted() {
+        assert_eq!(normalize_account_proxy(&json!(null)).unwrap(), None);
+        assert_eq!(
+            normalize_account_proxy(&json!({ "source": "pool", "proxyId": "p1" })).unwrap(),
+            Some(json!({ "source": "pool", "proxyId": "p1" })),
+        );
+    }
 }

@@ -8,12 +8,20 @@ Agent2API 桌面端本地构建脚本（增量）。
   2. 页面岛         desktop-tauri/ui-islands → ui/islands/ui.js + ui.css + login.js
   3. 手机端 bundle  desktop-tauri/mobile     → ui/m/mobile.js + mobile.css
   4. Rust 程序      desktop-tauri/src-tauri  → 桌面壳与 headless 网关两个可执行文件
+  5. 插件仓库       ../Agent2Providers      → 插件包 zip 并部署到本地网关插件目录
+
+默认构建 Release：本地开发与交付只认 target/release 下的可执行文件，
+只有排查调试问题时才用 -DebugBuild。
 
 增量口径：
   · 第 1、2、3 步对比源码与产物的最新修改时间，产物更新就整步跳过；
   · 第 4 步对比 ui/ 的内容指纹（持久化在 target/ui-stamp.txt）：generate_context!
     在编译期把 ui/ 嵌进桌面壳二进制，指纹变化（前端产物有实质变化）时删除
     桌面壳的产物与 fingerprint 强制重编重嵌，其余依赖全部走缓存；
+  · 第 5 步固定按 Release 构建插件；pack.json 版本未变时只部署本地产物，
+    并保留本地网关插件目录里用户已有的启停状态；
+  · Cargo.lock 变化时按当前依赖版本清理 target 下旧版本或已移除的产物目录，
+    避免依赖升级后磁盘占用持续膨胀（-SkipDepCleanup 可跳过）。
   · 所有缓存放仓库本地：Rust 用 target/（见 src-tauri/.cargo/config.toml），
     Node 依赖用各包自带的 node_modules/，脚本不碰用户全局目录。
   · Rust 构建前自动停掉「从 target 目录启动」的运行中实例 —— 运行中的程序
@@ -24,17 +32,18 @@ Agent2API 桌面端本地构建脚本（增量）。
 非简体语言回落中文原文。
 
 .EXAMPLE
-powershell scripts/build-desktop.ps1                  # 增量构建可执行文件
-powershell scripts/build-desktop.ps1 -DebugBuild      # 调试档，编译更快，便于本机测试
+powershell scripts/build-desktop.ps1                  # 增量构建 Release 与插件包
+powershell scripts/build-desktop.ps1 -DebugBuild      # 调试档，仅排查问题时使用
 powershell scripts/build-desktop.ps1 -Test            # 构建后跑 cargo test
 powershell scripts/build-desktop.ps1 -FrontendOnly    # 只重建前端产物
+powershell scripts/build-desktop.ps1 -SkipPlugins     # 只构建网关，不动插件仓库
 powershell scripts/build-desktop.ps1 -ScanI18n        # 新增界面文案后先扫描词典键
 powershell scripts/build-desktop.ps1 -Force           # 忽略时间戳全部重建
 powershell scripts/build-desktop.ps1 -Bundle          # 追加 NSIS 安装包（需要 cargo tauri）
 #>
 [CmdletBinding()]
 param(
-  # 用调试档编译 Rust（编译快、带调试信息，适合本机测试）
+  # 用调试档编译 Rust（仅排查调试问题时使用，本地与交付一律 Release）
   [switch]$DebugBuild,
   # 只构建前端产物，不编译 Rust
   [switch]$FrontendOnly,
@@ -51,13 +60,20 @@ param(
   # 首次拉取 crates.io 依赖时如需走本地代理，传 http://127.0.0.1:7890
   [string]$Proxy = '',
   # mingw64 工具链目录（GNU 工具链链接时需要 dlltool 等工具）
-  [string]$MingwBin = 'D:\msys64\mingw64\bin'
+  [string]$MingwBin = 'D:\msys64\mingw64\bin',
+  # 跳过插件仓库的构建与部署（只编译网关时用）
+  [switch]$SkipPlugins,
+  # 插件仓库目录（默认取与本仓库同级的 Agent2Providers）
+  [string]$PluginsRepo = '',
+  # 跳过旧版本依赖产物清理（排查构建问题时用）
+  [switch]$SkipDepCleanup
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $desktop = Join-Path $repo 'desktop-tauri'
 $ui = Join-Path $desktop 'ui'
+if (-not $PluginsRepo) { $PluginsRepo = Join-Path (Split-Path -Parent $repo) 'Agent2Providers' }
 $profileName = if ($DebugBuild) { 'debug' } else { 'release' }
 $targetDir = Join-Path $repo 'target'
 $desktopExe = Join-Path $targetDir "$profileName\agent2api.exe"
@@ -97,6 +113,149 @@ function Invoke-Checked([string]$Step, [scriptblock]$Block) {
   if ($LASTEXITCODE -ne 0) {
     throw "$Step failed with exit code $LASTEXITCODE"
   }
+}
+
+# Cargo.lock 的包名 → 版本集合。锁文件按 [[package]] 分段，name 与 version 相邻
+function Get-LockVersions([string]$LockPath) {
+  $map = @{}
+  if (-not (Test-Path -LiteralPath $LockPath)) { return $map }
+  $current = $null
+  foreach ($line in Get-Content -LiteralPath $LockPath) {
+    if ($line -match '^name = "(.+)"$') { $current = $Matches[1]; continue }
+    if ($current -and $line -match '^version = "(.+)"$') {
+      if (-not $map.ContainsKey($current)) {
+        $map[$current] = [System.Collections.Generic.HashSet[string]]::new()
+      }
+      [void]$map[$current].Add($Matches[1])
+      $current = $null
+    }
+  }
+  $map
+}
+
+# 依赖升级后 cargo 不会删除旧版本留下的产物，target 会随版本迭代持续变大。
+# 这里按 Cargo.lock 的当前版本逐出「引用旧版本」或「已不在清单」的
+# build/<包>/<哈希> 目录；只删产物，不改源码、锁文件与运行数据
+function Remove-StaleDependencyArtifacts([string]$TargetDir, [string]$LockPath) {
+  $versions = Get-LockVersions $LockPath
+  if ($versions.Count -eq 0) { return }
+  $removed = 0
+  foreach ($profileName in @('debug', 'release')) {
+    $buildRoot = Join-Path $TargetDir "$profileName\build"
+    if (-not (Test-Path -LiteralPath $buildRoot)) { continue }
+    foreach ($packageDir in Get-ChildItem -LiteralPath $buildRoot -Directory -ErrorAction SilentlyContinue) {
+      $name = $packageDir.Name
+      # `_up_` 等非 crate 目录由构建工具生成，不参与依赖清理
+      if ($name.StartsWith('_')) { continue }
+      $wanted = $versions[$name]
+      if (-not $wanted) {
+        Remove-Item -LiteralPath $packageDir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        $removed += 1
+        continue
+      }
+      foreach ($hashDir in Get-ChildItem -LiteralPath $packageDir.FullName -Directory -ErrorAction SilentlyContinue) {
+        $dep = Get-ChildItem -LiteralPath $hashDir.FullName -Recurse -Filter '*.d' -File -ErrorAction SilentlyContinue |
+          Select-Object -First 1
+        if (-not $dep) { continue }
+        $first = Get-Content -LiteralPath $dep.FullName -TotalCount 1 -ErrorAction SilentlyContinue
+        if (-not $first) { continue }
+        # .d 首行是输出路径 + 依赖源码路径，源码目录名带 <包名>-<版本>；
+        # 版本必须是三段式语义版本，避免匹配到产物文件名里的哈希
+        $matched = [regex]::Match($first, "(?i)[\\/]$([regex]::Escape($name))-([0-9]+\.[0-9]+\.[0-9][^\\/\s:]*)[\\/]")
+        if (-not $matched.Success) { continue }
+        if (-not $wanted.Contains($matched.Groups[1].Value)) {
+          Remove-Item -LiteralPath $hashDir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+          $removed += 1
+        }
+      }
+    }
+  }
+  if ($removed -gt 0) { Write-Host "==> pruned $removed stale dependency artifact directories" }
+}
+
+# 锁文件变化才扫描，避免每次构建都遍历 target 下的全部依赖目录
+function Sync-DependencyArtifacts([string]$TargetDir, [string]$LockPath) {
+  if ($SkipDepCleanup -or -not (Test-Path -LiteralPath $LockPath)) { return }
+  $stamp = Join-Path $TargetDir 'dependency-stamp.txt'
+  $current = (Get-FileHash -Algorithm SHA256 -LiteralPath $LockPath).Hash
+  $last = ''
+  if (Test-Path -LiteralPath $stamp) { $last = (Get-Content -LiteralPath $stamp -Raw).Trim() }
+  if (-not $Force -and $current -eq $last) { return }
+  Write-Host '==> Cargo.lock changed, pruning stale dependency artifacts'
+  Remove-StaleDependencyArtifacts $TargetDir $LockPath
+  [IO.File]::WriteAllText($stamp, $current, [Text.UTF8Encoding]::new($false))
+}
+
+# 构建插件仓库并部署到本地网关插件目录，保留用户已有的启停状态
+function Install-PluginPack([string]$Repo) {
+  if (-not (Test-Path -LiteralPath (Join-Path $Repo 'pack.json'))) {
+    Write-Host "==> plugin repo not found, skipped: $Repo"
+    return
+  }
+  $manifest = Get-Content -LiteralPath (Join-Path $Repo 'pack.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  $target = 'x86_64-pc-windows-msvc'
+  $entry = $manifest.entry.$target
+  if (-not $entry) { throw "pack.json 没有为 $target 声明入口" }
+
+  Sync-DependencyArtifacts (Join-Path $Repo 'target') (Join-Path $Repo 'Cargo.lock')
+  Invoke-Checked 'plugin build (release)' {
+    Push-Location $Repo
+    try { cargo build --release -p agent2api-providers } finally { Pop-Location }
+  }
+  Invoke-Checked 'plugin pack' {
+    Push-Location $Repo
+    try { node scripts/pack.mjs --target $target --skip-build } finally { Pop-Location }
+  }
+
+  $zip = Join-Path $Repo "dist/$($manifest.id)-$($manifest.version)-$target.zip"
+  if (-not (Test-Path -LiteralPath $zip)) { throw "插件包未生成：$zip" }
+  $pluginsRoot = Join-Path $env:USERPROFILE '.agent2api\plugins'
+  $dest = Join-Path $pluginsRoot "$($manifest.id)\$($manifest.version)"
+  New-Item -ItemType Directory -Path $dest -Force | Out-Null
+  Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+
+  $registryPath = Join-Path $pluginsRoot 'plugins.json'
+  $registry = if (Test-Path -LiteralPath $registryPath) {
+    Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  } else {
+    [pscustomobject]@{ packs = @() }
+  }
+  $packs = @($registry.packs)
+  $previous = $packs | Where-Object { $_.id -eq $manifest.id } | Select-Object -First 1
+  $providers = [ordered]@{}
+  if ($previous -and $previous.providers) {
+    foreach ($item in $previous.providers.PSObject.Properties) { $providers[$item.Name] = $item.Value }
+  }
+  $declared = @()
+  foreach ($item in $manifest.providers) {
+    if (-not $providers.Contains($item.id)) { $providers[$item.id] = [bool]$item.default_enabled }
+    $declared += [pscustomobject]@{
+      id = $item.id; label = $item.label; order = $item.order; default_enabled = [bool]$item.default_enabled
+    }
+  }
+  $enabled = if ($previous) { [bool]$previous.enabled } else { $true }
+  $signed = if ($previous) { [bool]$previous.signed } else { $false }
+  $record = [pscustomobject]@{
+    id = $manifest.id
+    version = $manifest.version
+    enabled = $enabled
+    providers = [pscustomobject]$providers
+    entry = $entry
+    sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+    signed = $signed
+    installed_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    manifest_providers = $declared
+  }
+  $index = -1
+  for ($i = 0; $i -lt $packs.Count; $i++) { if ($packs[$i].id -eq $manifest.id) { $index = $i; break } }
+  if ($index -ge 0) { $packs[$index] = $record } else { $packs = @($packs) + $record }
+  $registry | Add-Member -NotePropertyName packs -NotePropertyValue @($packs) -Force
+  $temp = "$registryPath.tmp"
+  $json = $registry | ConvertTo-Json -Depth 32
+  [IO.File]::WriteAllText($temp, $json, [Text.UTF8Encoding]::new($false))
+  Move-Item -LiteralPath $temp -Destination $registryPath -Force
+  Write-Host "Plugin pack : $zip"
+  Write-Host "Installed   : $dest"
 }
 
 # 一组根目录下（跳过 node_modules）最新的文件修改时间
@@ -224,6 +383,7 @@ if (-not $FrontendOnly) {
     Remove-Item -Path (Join-Path $targetDir "$profileName\deps\workbuddy_proxy_desktop_lib*") -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path $targetDir "$profileName\.fingerprint\workbuddy_proxy_desktop_lib-*") -Recurse -Force -ErrorAction SilentlyContinue
   }
+  Sync-DependencyArtifacts $targetDir (Join-Path $desktop 'src-tauri\Cargo.lock')
   Invoke-Checked "cargo build ($profileName)" {
     Push-Location (Join-Path $desktop 'src-tauri')
     try {
@@ -260,6 +420,10 @@ if (-not $FrontendOnly) {
       Push-Location (Join-Path $desktop 'src-tauri')
       try { cargo tauri build } finally { Pop-Location }
     }
+  }
+
+  if (-not $SkipPlugins) {
+    Install-PluginPack $PluginsRepo
   }
 
   Write-Host ''

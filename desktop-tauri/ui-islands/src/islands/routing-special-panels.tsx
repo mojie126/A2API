@@ -25,6 +25,7 @@ import {
 import { t } from '../i18n'
 import { RouteIcon } from './routing-ui'
 import { SearchableSelect } from '../../../ui-shared/searchable-select'
+import { CascadeModelSelect, type CascadeModelOption } from '../../../ui-shared/cascade-select'
 import {
   modelKey, type CompactConfig, type CompactRoute, type CompactView, type SpecialEditor, type TitleConfig, type TitleRule,
   type TitleView, type VisionConfig, type VisionModelRef, type VisionRuleItem, type VisionTarget, type VisionView,
@@ -361,9 +362,16 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
   const [deleting, setDeleting] = React.useState(false)
   const [candidate, setCandidate] = React.useState('')
   const update = (patch: Partial<VisionRuleItem>) => setDraft(current => ({ ...current, ...patch }))
-  // 强制辅助识图允许选中本来能识图的模型，因此候选名单不能只看「不支持图片」的条目
-  const listChoices = view.models.filter(model => draft.mode === 'force' || model.capabilities?.supportsImages !== true)
-    .map(model => ({ value: visionKey(model), label: `${model.providerLabel || model.provider} · ${model.model}` }))
+  // 级联清单收全量模型：第二级固定分两组（仍不支持识图 / 支持识图），
+  // 支持识图那组在「辅助识图」与「整体接管」下置灰，只有「强制辅助识图」可选
+  const modelOptions = React.useMemo(() => view.models.map((model): CascadeModelOption => ({
+    key: visionKey(model),
+    provider: model.provider,
+    providerLabel: model.providerLabel || model.provider,
+    model: model.model,
+    name: model.name || '',
+    supportsImages: model.capabilities?.supportsImages ?? null,
+  })), [view.models])
   const targetChoices = view.models.filter(model => model.capabilities?.supportsImages === true)
     .map(model => ({ value: visionKey(model), label: `${model.providerLabel || model.provider} · ${model.model}`,
       searchText: `${model.name || ''} ${model.provider}` }))
@@ -390,12 +398,6 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
           {t('这条规则里的模型收到图片时按选定的方式处理；没被任何规则选中的模型一律原样放行。')}
         </p>
         <RuleSwitchRow enabled={draft.enabled} disabled={saving} onChange={enabled => update({ enabled })} />
-        <DlgField label={t('哪些模型用这种方式')}>
-          <MultiSelect className='w-full' value={draft.models.map(visionKey)} disabled={saving} portalContainer={popup}
-            options={listChoices} placeholder={t('选择一个或多个模型')} searchPlaceholder={t('搜索提供商或模型')}
-            aria-label={t('哪些模型用这种方式')}
-            onValueChange={keys => update({ models: keys.map(parseVisionKey).filter((ref): ref is VisionModelRef => ref !== null) })} />
-        </DlgField>
         <DlgField label={t('处理方式')} help={<>
           <p>{t('辅助识图：先让视觉模型把图片读成文字，再交回原模型回答。')}</p>
           <p>{t('整体接管：只有原模型看不了图片时，才把整次请求交给视觉模型回答。')}</p>
@@ -412,6 +414,15 @@ function VisionRuleDialog({ rule, view, saving, error, onClose, onSave, onDelete
               <SelectItem value='force'>{t('强制辅助识图')}</SelectItem>
             </SelectContent>
           </Select>
+        </DlgField>
+        <DlgField label={t('哪些模型用这种方式')} help={<>
+          <p>{t('先选提供商、再选该提供商下的模型，两级都可以搜索。')}</p>
+          <p>{t('模型按能否识图分成两组：仍不支持识图的组任何时候都能选；支持识图的组仅「强制辅助识图」可选。')}</p>
+        </>}>
+          <CascadeModelSelect className='w-full' value={draft.models.map(visionKey)} disabled={saving}
+            options={modelOptions} allowVisionCapable={draft.mode === 'force'}
+            aria-label={t('哪些模型用这种方式')}
+            onChange={keys => update({ models: keys.map(parseVisionKey).filter((ref): ref is VisionModelRef => ref !== null) })} />
         </DlgField>
         {draft.mode === 'assist' || draft.mode === 'force' ? <>
           <DlgField label={t('用哪只模型识图')}>

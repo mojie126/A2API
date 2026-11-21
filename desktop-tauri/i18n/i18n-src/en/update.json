@@ -68,6 +68,7 @@
   "取消下载": "Cancel download",
   "取消失败：{error}": "Failed to cancel: {error}",
   "可安装": "Ready to install",
+  "可选直连、代理池条目与 WARP 设备出口；WARP 设备随服务重启重建，重启后按同一出口自动接回": "Choose direct, a proxy pool entry, or a WARP device exit. WARP devices are rebuilt when the service restarts and are re-bound to the same exit automatically.",
   "启动失败": "Launch failed",
   "启动安装程序失败：{error}": "Failed to launch the installer: {error}",
   "在 QQ 里搜索群号即可加入。": "Search the group number in QQ to join.",

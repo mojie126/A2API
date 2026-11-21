@@ -25,6 +25,7 @@ export type PackSummary = {
   entryPresent: boolean
   protocol: number
   homepage?: string | null
+  wasm?: boolean
   icon?: string | null
   providers: PackProvider[]
   host?: HostState

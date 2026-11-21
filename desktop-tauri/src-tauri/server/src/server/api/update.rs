@@ -155,8 +155,24 @@ async fn dispatch(
         // 返回与账号代理**同一个描述形态**（label / config / error）：
         // 前端据此取 listenerUid 当下拉值、取 label 显示、取 error 标红 ——
         // 三件事账号页都已经有现成口径，形状对齐就不用第二套解析。
+        let configured = config::update_proxy();
+        // 线路引用 WARP 设备时，重启后设备还在重建：等这台设备就绪再描述，
+        // 否则界面会把刚保存好的线路显示成「不可用」
+        if configured.as_ref().and_then(|value| value.get("source")).and_then(Value::as_str) == Some("warp") {
+            let device = configured.as_ref()
+                .and_then(|value| value.get("deviceId"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let resolved = crate::server::core::warp::pool::global()
+                .and_then(|pool| pool.find(device))
+                .is_some();
+            // 对照表里有这台设备才值得等：未知 id 等多久都接不回来
+            if !resolved && crate::server::core::warp::settings::device_slot(device).is_some() {
+                let _ = crate::server::core::warp::pool::wait_device(device, std::time::Duration::from_secs(20)).await;
+            }
+        }
         return ok_json(json!({
-            "proxy": describe_account_proxy(config::update_proxy().as_ref()),
+            "proxy": describe_account_proxy(configured.as_ref()),
         }));
     }
 

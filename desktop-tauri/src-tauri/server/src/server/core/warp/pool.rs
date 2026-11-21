@@ -214,20 +214,25 @@ impl WarpPool {
 
     /// 按设备 id 取出口（账号代理引用指定设备时使用）
     ///
+    /// 设备会随重启重建、id 会变，所以找不到时按「设备 id → 出口槽位」的对照
+    /// 回落到同一槽位的新设备 —— 重启前保存的 `warp:<旧 id>` 因此不必重新选择
+    ///
     /// 与 `pick` / `pick_for` 不同，这里不计入使用统计：解析账号出口是
     /// 展示与出网准备，不代表一次真实的出口分配
     pub fn find(&self, id: &str) -> Option<WarpExit> {
         if id.is_empty() {
             return None;
         }
-        let Ok(slots) = self.exits.lock() else {
-            return None;
-        };
-        slots
-            .iter()
-            .flatten()
-            .find(|exit| exit.id == id)
-            .cloned()
+        // 先按当前设备找；持锁只在查表这一小段，槽位对照回落下会读库，
+        // 不能放在锁里
+        let direct = self.exits.lock().ok()
+            .and_then(|slots| slots.iter().flatten().find(|exit| exit.id == id).cloned());
+        if direct.is_some() {
+            return direct;
+        }
+        let slot = settings::device_slot(id)?;
+        self.exits.lock().ok()
+            .and_then(|slots| slots.get(slot).and_then(|entry| entry.clone()))
     }
 
     /// 该账号是否仍在 WARP 出口的临时绑定期内
@@ -354,6 +359,23 @@ pub fn global() -> Option<Arc<WarpPool>> {
     POOL.get().cloned()
 }
 
+/// 等到这台设备可用（池已发布并且该设备或它对应的槽位已建好），超时返回 false
+///
+/// 重启后保存的 `warp:<设备 id>` 引用必须等设备重建完才有意义：早于池就绪
+/// 去解析只会拿到「出口池尚未就绪」，而第一次检查更新正好落在这个窗口里
+pub async fn wait_device(id: &str, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if global().and_then(|pool| pool.find(id)).is_some() {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 /// 后台初始化出口池（只执行一次；失败按指数退避重试）
 pub fn spawn() {
     if POOL.get().is_some() {
@@ -450,7 +472,12 @@ async fn build_exit(registrar: &WarpRegistrar, index: usize) -> Result<WarpExit,
     let mut last_error = String::new();
     for attempt in 0..BUILD_RETRY {
         match build_tunnel(&registration, index).await {
-            Ok(exit) => return Ok(exit),
+            Ok(exit) => {
+                // 记下这台设备落在哪个槽位：重启后注册的是新设备、新 id，
+                // 重启前保存的 `warp:<旧 id>` 引用要靠它接回来
+                settings::remember_device(&exit.id, index);
+                return Ok(exit)
+            }
             Err(error) => {
                 last_error = error;
                 if attempt + 1 == BUILD_RETRY {

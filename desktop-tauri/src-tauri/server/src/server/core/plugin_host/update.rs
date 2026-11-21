@@ -8,7 +8,7 @@ pub(crate) use super::packages::MAX_PACK_BYTES;
 use crate::server::core::update::{compare_versions, is_prerelease_version, website, UpdateError};
 
 pub const INDEX_SOURCE: &str = website::PLUGIN_BASE;
-pub const FALLBACK_REPO: &str = "Agent2Builder/agent2api-providers-releases";
+pub const FALLBACK_REPO: &str = "mojie126/A2P";
 /// 本地插件仓库的索引仓库（本 fork 的插件目录托管在 GitHub），官网不可用时回退
 pub const INDEX_REPO: &str = "Agent2plugin/Agent2plugin";
 const QUERY_TIMEOUT_MS: u64 = 30_000;

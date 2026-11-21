@@ -505,6 +505,7 @@
   "当前账号凭证已更新": "",
   "当前钩子仅提供套餐与周期，未提供余额数值": "The current hook provides only plan and period information, not a numeric balance",
   "当前：{label}（Clash Verge 直接引用）；可在「网络代理」页同步端点后改选": "Current: {label} (direct Clash Verge reference). You can sync endpoints on the Network proxy page and select one instead.",
+  "当前：{label}（WARP 设备出口）；设备随服务重启重建，重启后按同一出口自动接回": "Current: {label} (WARP device exit); devices are rebuilt when the service restarts and are re-bound to the same exit automatically",
   "当前：{label}（未经过代理池 —— 可在「网络代理」页把出口同步进池后来这里改选）": "Current: {label} (not via the proxy pool — sync the exit into the pool on the Network proxy page to select it here)",
   "当前：{label}（未经过代理池 —— 可在「网络代理」页添加相同地址后来这里改选）": "Current: {label} (not using the proxy pool; add the same address on the Network proxy page, then select it here).",
   "当前：{label}（每条请求换一个出口）；「自定义代理…」打开完整设置": "Current: {label} (a different exit per request); \"Custom proxy…\" opens the full settings",

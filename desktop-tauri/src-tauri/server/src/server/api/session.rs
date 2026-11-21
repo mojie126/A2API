@@ -357,9 +357,14 @@ async fn read_login_methods(
             && crate::server::core::plugin_host::wasm::has_capability(adapter.provider_id(), "desktop.credentials.v1") {
             method.kind = LoginMethodType::Desktop;
         }
+        // `desktop.credentials.v1` 是 WASM 宿主读取本机凭据的受控能力；原生插件
+        // 自己读固定路径，不受这条约束限制 —— 它们的「本机导入」经网关转成
+        // `importDesktop`，由插件在 normalize 里完成
+        let wasm_needs_desktop_capability = crate::server::core::plugin_host::wasm::owns(adapter.provider_id())
+            && !crate::server::core::plugin_host::wasm::has_capability(adapter.provider_id(), "desktop.credentials.v1");
         if matches!(method.kind, LoginMethodType::Desktop) && (!method.local_only || method.browser_mode.as_deref() != Some("none")
             || method.manual_callback || !method.prompts.is_empty()
-            || !crate::server::core::plugin_host::wasm::has_capability(adapter.provider_id(), "desktop.credentials.v1")) {
+            || wasm_needs_desktop_capability) {
             return Err(GatewayError::with_status(502, "插件本机导入契约无效"));
         }
         if method.local_only && matches!(method.kind, LoginMethodType::Api) {

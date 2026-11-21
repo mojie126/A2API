@@ -65,6 +65,8 @@ type PopoverContentProps = Omit<PopoverPrimitive.Popup.Props, 'className'> & {
    * 传元素、ref 或返回元素的函数都行（Base UI 的 VirtualElement 也接受）。
    */
   anchor?: PopoverPrimitive.Positioner.Props['anchor']
+  /** 浮层挂载的容器；弹窗内传弹窗节点，避免浮层被当作外部点击 */
+  container?: HTMLElement | null
 }
 
 function PopoverContent({
@@ -75,11 +77,12 @@ function PopoverContent({
   alignOffset,
   collisionPadding = 8,
   anchor,
+  container,
   children,
   ...props
 }: PopoverContentProps) {
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={container ?? undefined}>
       <PopoverPrimitive.Positioner
         className='z-[35] outline-none'
         sideOffset={sideOffset}

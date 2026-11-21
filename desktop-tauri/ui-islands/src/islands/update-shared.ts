@@ -536,7 +536,7 @@ export function buildProxyPick(selection: ProxySelection, warp?: ProxyWarpOption
     title: broken
       ? t('当前线路不可用：{error}；请重新选择代理或切回直连', { error: String(proxy?.error || '') })
       : source === 'warp'
-        ? t('当前：{label}（WARP 设备出口）；设备随服务重启重建，届时需重新选择', { label })
+        ? t('当前：{label}（WARP 设备出口）；设备随服务重启重建，重启后按同一出口自动接回', { label })
         : t('检查更新与下载安装包使用所选线路；未选择代理时先直连，失败后尝试 Clash Verge 混合端口；指定代理不可用时不会自动改走直连。'),
   }
 }

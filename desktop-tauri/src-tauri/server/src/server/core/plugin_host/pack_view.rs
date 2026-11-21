@@ -57,6 +57,8 @@ pub struct PackSummary {
     pub protocol: u32,
     /// 包主页（可选）。
     pub homepage: Option<String>,
+    /// 这个包是否为 Wasm 插件（界面据此与原生插件分组展示）。
+    pub wasm: bool,
     /// 包图标（可选，`data:image/png;base64,…` 形态；没有则为 null）。
     ///
     /// ── 为什么内联成 data URI 而不是给一个 URL ─────────────────
@@ -270,6 +272,7 @@ pub fn list_packs() -> Vec<PackSummary> {
                 entry_present: dir.join(&pack.entry).exists(),
                 protocol,
                 homepage,
+                wasm: manifest.as_ref().is_some_and(super::wasm::manifest::is_wasm),
                 icon: pack_icon(&dir, manifest.as_ref()),
                 ui: Vec::new(),
             }

@@ -4,7 +4,7 @@ import { PluginPageTools } from './plugins-page-tools'
 import { t } from '../i18n'
 import type { PluginStatusFilter } from '../../../ui-shared/plugins-filters'
 
-export type PluginSourceFilter = 'all' | 'agent2' | 'magpie'
+export type PluginSourceFilter = 'all' | 'native' | 'wasm' | 'magpie'
 
 function FilterGroup<T extends string>({ label, options, value, onChange }: {
   label: string; options: ReadonlyArray<{ value: T; label: string; count: number }>; value: T; onChange(value: T): void
@@ -24,7 +24,8 @@ export function PluginPageToolbar({ source, status, search, count, selecting, lo
     <div className='plugins-toolbar-filters'>
       <FilterGroup label={t('来源')} value={source} onChange={onSource} options={[
         { value: 'all', label: t('全部'), count: count('all', status) },
-        { value: 'agent2', label: t('Agent2API 社区'), count: count('agent2', status) },
+        { value: 'native', label: t('原生插件'), count: count('native', status) },
+        { value: 'wasm', label: t('Wasm 插件'), count: count('wasm', status) },
         { value: 'magpie', label: t('Magpie 插件'), count: count('magpie', status) },
       ]} />
       <FilterGroup label={t('状态')} value={status} onChange={onStatus} options={[

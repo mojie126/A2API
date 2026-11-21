@@ -35,9 +35,10 @@
 
 ## 提交与本地测试注意事项
 
-- 本地测试网关改动：先跑 `scripts/build-desktop.ps1` 构建 Windows 桌面端（串联 i18n 词典、页面岛、手机端 bundle、Rust 四步，按产物时间增量跳过），产物为 `target\release\agent2api.exe`（桌面壳）与 `target\release\agent2api-server.exe`（headless 网关）
-- 本地开发一律构建 Release，不使用 `-DebugBuild` 生成 debug 产物：交付与验收只认 `target\release` 下的可执行文件
-- 插件仓库（Agent2Providers）有更新：先构建 Windows 插件包——`cargo build --release -p agent2api-providers` 后 `node scripts/pack.mjs --target x86_64-pc-windows-msvc --skip-build` 产出 `dist/*.zip`，再更新到本地网关的插件目录 `%USERPROFILE%\.agent2api\plugins\agent2api-providers`（保持 `pack.json`、`bin/`、`ui/`、`licenses/` 目录结构，`plugins.json` 为登记表），或经网关面板「提供商插件 → 安装插件包」安装 zip
+- 本地测试网关改动：先跑 `scripts/build-desktop.ps1` 构建 Windows 桌面端（串联 i18n 词典、页面岛、手机端 bundle、Rust、插件仓库五步，按产物时间增量跳过），产物为 `target\release\agent2api.exe`（桌面壳）与 `target\release\agent2api-server.exe`（headless 网关）
+- 本地开发一律构建 Release，不使用 `-DebugBuild` 生成 debug 产物：交付与验收只认 `target\release` 下的可执行文件，`-DebugBuild` 仅用于排查调试问题
+- 构建脚本默认构建并部署插件仓库（Agent2Providers）：固定按 Release 构建插件包，解压到本地网关插件目录 `%USERPROFILE%\.agent2api\plugins\agent2api-providers\<版本>`，并更新 `plugins.json` 登记（保留用户已有的启停状态）；只构建网关时用 `-SkipPlugins`
+- 构建脚本在 `Cargo.lock` 变化时按当前依赖版本清理 `target` 下旧版本或已移除的依赖产物目录，避免依赖升级后磁盘占用持续膨胀；排查构建问题时可用 `-SkipDepCleanup` 跳过
 - 推送 develop 触发 `performance-build` 构建时，注意发布步骤的校验包含「协议库 tag 与网关版本一致」——升级网关版本号时必须同步升级协议库 tag（官方已发布 tag 见 Agent2Providers 的 tags 页）
 
 ## 草稿发布维护

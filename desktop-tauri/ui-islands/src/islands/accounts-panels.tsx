@@ -206,16 +206,14 @@ export function GroupBandRow({ group, collapsed, colSpan, pageCount, virtualInde
   // 分页不参与 —— 见 groupBalanceOf 的说明。
   const filtered = getStore().groupTotalFiltered
   const members = filtered ? group.accounts : group.members
-  // 「值不值得画合计」看的是**整组**有几个账号（一个账号的组，合计与下面那行读数
-  // 逐字重复）；而**加哪些账号**看的是当前口径。两者不能合成一个判据：按筛选口径下
-  // 筛出唯一一行时，合计正是用户要的那个数（100），不能因为「可见只剩一行」就藏掉。
+  // 合计口径看当前筛选后的成员，组内只有一个账号时也照样画：组头读数回答的是
+  // 「这家还剩多少」（被筛掉、已停用的账号也计入），与下面那行「可用最低」不同
   // 窗口标签按当前语言重排（上游 beta.2 的周窗口本地化）。
-  const worthSumming = group.members.length > 1 && members.length > 0
   const balance = group.summary?.balance ? { ...group.summary.balance, ratio: group.summary.balance.ratio ? {
     ...group.summary.balance.ratio,
     windows: group.summary.balance.ratio.windows.map(row => ({ ...row, label: row.label.split(' · ').map(part =>
       part === 'daily' ? t('每日') : part === 'weekly' ? t('每周') : part === 'monthly' ? t('每月') : part === '5h' ? t('{n} 小时', { n: 5 }) : part).join(' · ') })),
-  } : null } : worthSumming && members.some(supportsUsage)
+  } : null } : members.length > 0 && members.some(supportsUsage)
     ? groupBalanceOf(members, filtered ? 'filtered' : 'group', now)
     : null
   /**
@@ -266,7 +264,7 @@ export function GroupBandRow({ group, collapsed, colSpan, pageCount, virtualInde
             limited: (group.summary?.limited ?? group.limited) > 0 ? t(' · 限流 {n}', { n: group.summary?.limited ?? group.limited }) : '',
           })}</span>
           {pageCount !== undefined ? <span className='grp-stat'>{t('本页 {n} 个', { n: pageCount })}</span> : null}
-          {balance && showBalance && (group.summary?.total ?? group.members.length) > 1 ? <GroupBalanceBadge balance={balance} /> : null}
+          {balance && showBalance ? <GroupBalanceBadge balance={balance} /> : null}
           {sortSummary ? (
             <Button size='default' variant='ghost' type='button' className='grp-sort-mark'
               title={t('当前排序规则：{rules}。点击调整', { rules: sortSummary })}
@@ -1475,7 +1473,7 @@ export function ProxyCell({ account }: { account: AccountRecord }) {
       : source === 'clash'
         ? t('当前：{label}（Clash Verge 直接引用）；可在「网络代理」页同步端点后改选', { label })
         : source === 'warp'
-          ? t('当前：{label}（WARP 设备出口）；设备随服务重启重建，届时需重新选择', { label })
+          ? t('当前：{label}（WARP 设备出口）；设备随服务重启重建，重启后按同一出口自动接回', { label })
           : source === 'custom'
             ? t('当前：{label}（未经过代理池 —— 可在「网络代理」页添加相同地址后来这里改选）', { label })
             : t('当前：{label}；选项来自「网络代理」页；「自定义代理…」打开完整设置', {
