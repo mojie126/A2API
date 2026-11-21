@@ -150,7 +150,7 @@ const JSON_CREDENTIAL_FILE: NonNullable<ProviderConfig['fileImport']> = {
 }
 
 const RACCOON: ProviderConfig = {
-  // raccoon_accounts::add_raccoon_account：token / access_token、refreshToken / refresh_token、name
+  // raccoon_accounts::add_raccoon_account：token / access_token、name
   provider: 'raccoon',
   label: '小浣熊',
   addButton: t('添加小浣熊账号'),
@@ -170,14 +170,13 @@ const RACCOON: ProviderConfig = {
     // 直接回网关，没有粘贴回调那一步
     webHint: WEB_LOGIN_HINT,
   },
-  manualTitle: t('粘贴 token / refreshToken'),
-  manualNoteHtml: t('refreshToken 可选，填了到期可自动续期；两者都能从<a href="#" class="raccoon-hint-link" data-raccoon-hint>小浣熊客户端登录态文件</a>里取到。'),
+  manualTitle: t('粘贴 token'),
+  manualNoteHtml: t('token 可从<a href="#" class="raccoon-hint-link" data-raccoon-hint>小浣熊客户端登录态文件</a>里取到。'),
   fields: [
     { key: 'name', label: t('备注名'), optional: true, placeholder: t('可选，留空则用凭证里的账号名') },
     { key: 'token', label: 'token', rows: 3, placeholder: t('粘贴 access_token（一长串 JWT）') },
-    { key: 'refreshToken', inputKey: 'refresh', label: 'refreshToken', rows: 2, optional: true, placeholder: t('可选') },
   ],
-  desktopNote: t('读本机客户端当前登录态，每次实时读取（删掉这条记录不影响客户端登录态）。客户端重新登录后点「刷新 Token」同步。'),
+  desktopNote: t('读本机客户端当前登录态，每次实时读取（删掉这条记录不影响客户端登录态）。客户端重新登录后，下次请求会自动读取最新登录态。'),
   // 「导入凭证文件」：客户端登录态是明文 JSON，前端读文本传 authFileContent。
   // 与上面 desktop 那条并排保留是刻意的 —— 一个是「实时读本机固定路径」，
   // 一个是「把用户手选的文件解析后落库」（文件可来自别的机器 / 备份）。
@@ -1262,6 +1261,6 @@ export const manualNoteOf = (config: ProviderConfig): { html?: string; text?: st
 export const addButtonTextOf = (config: ProviderConfig): string =>
   config.addButton || t('添加 {name} 账号', { name: config.label })
 
-/** 字段的 DOM id（inputKey 保留小浣熊既有的 refresh-input id，请求体键仍为 refreshToken） */
+/** 字段的 DOM id（`inputKey` 用于保留既有控件的 id 约定） */
 export const fieldIdOf = (config: ProviderConfig, field: FieldSpec): string =>
   `${config.provider}-${field.inputKey || field.key}-input`

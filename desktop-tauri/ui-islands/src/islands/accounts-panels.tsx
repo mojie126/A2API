@@ -1576,10 +1576,11 @@ export function MoreMenu({ account, atFront }: { account: AccountRecord; atFront
             onClick={() => { setOpen(false); openSettingsDialog(account.id) }}>
             {t('并发上限：{value}', { value: maxConcurrent > 0 ? maxConcurrent : t('不限') })}
           </Button>
-          <Button variant='ghost' size='sm' className={itemClass}
+          {/* 小浣熊已无续期接口，刷新令牌只会返回失败，菜单项直接不出现 */}
+          {providerOf(account) !== 'raccoon' ? <Button variant='ghost' size='sm' className={itemClass}
             onClick={() => { setOpen(false); shared().wbApp?.runAccountAction?.('refresh', account.id) }}>
             {t('刷新 Token')}
-          </Button>
+          </Button> : null}
           <Button variant='ghost' size='sm' className={itemClass}
             title={t('将这个账号及其登录凭证保存为单独的 JSON 文件')}
             onClick={() => { setOpen(false); void exportAccountFiles({ id: account.id }) }}>

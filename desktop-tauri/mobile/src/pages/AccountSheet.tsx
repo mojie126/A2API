@@ -459,7 +459,8 @@ export function AccountSheet({
           {usage.status ? <p className='text-xs text-subtle' role='status'>{usage.status}</p> : null}
           {usageRow?.stale ? <p className='text-xs text-subtle'>{t('历史余额，尚未按新配置验证')}</p> : null}
           {usage.pending ? <Button variant='outline' onClick={() => void usage.cancel()}>{t('取消查询')}</Button> : null}
-          <Button size='touch' variant='default'
+          {/* 小浣熊已无续期接口，刷新令牌只会返回失败，按钮直接不出现 */}
+          {account?.provider !== 'raccoon' ? <Button size='touch' variant='default'
             type='button'
             className='m-btn w-full'
             disabled={Boolean(busy) || !account}
@@ -467,7 +468,7 @@ export function AccountSheet({
           >
             <Icon name='refresh' />
             {busy === 'refresh' ? t('刷新中…') : t('刷新 Token')}
-          </Button>
+          </Button> : null}
           <div className='m-btn-row'>
             <Button size='touch' variant='outline'
               type='button'
