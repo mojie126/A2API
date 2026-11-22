@@ -58,9 +58,9 @@ function TimeoutField({ value, disabled, onCommit, t }: {
   const [text, setText] = useState<string | null>(null)
   const shown = text ?? String(value)
   const parsed = Number(shown)
-  const valid = Number.isInteger(parsed) && parsed >= 5 && parsed <= 120
+  const valid = Number.isInteger(parsed) && parsed >= 5 && parsed <= 600
   return <span className='flex items-center gap-2'>
-    <Input className={cn('w-20', !valid && 'border-destructive')} type='number' min={5} max={120} step={1}
+    <Input className={cn('w-20', !valid && 'border-destructive')} type='number' min={5} max={600} step={1}
       disabled={disabled} aria-label={t('兼容处理最长等待')} value={shown}
       onChange={event => setText(event.currentTarget.value)}
       onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}
@@ -244,7 +244,7 @@ export function VisionCompatibilityPanel({ api, t, active = true, scope = '' }: 
                   className='items-center max-[767px]:flex-col max-[767px]:items-stretch max-[767px]:gap-2' control={
                     <VisionReasoningSelect t={t} value={reasoning} disabled={busy} onValueChange={setReasoning} />
                   } />
-                <Row label={t('兼容处理最长等待')} tip={t('范围 5–120 秒，并受原请求时限约束。')} className='items-center max-[767px]:flex-col max-[767px]:items-stretch max-[767px]:gap-2' control={
+                <Row label={t('兼容处理最长等待')} tip={t('范围 5–600 秒，并受原请求时限约束。')} className='items-center max-[767px]:flex-col max-[767px]:items-stretch max-[767px]:gap-2' control={
                   <TimeoutField value={draft.timeoutSeconds} disabled={busy} t={t}
                     onCommit={timeoutSeconds => patch({ timeoutSeconds })} />
                 } />

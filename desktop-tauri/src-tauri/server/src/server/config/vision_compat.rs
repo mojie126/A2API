@@ -438,8 +438,8 @@ fn validate_model_list(label: &str, list: &[ModelRef]) -> Result<(), String> {
 }
 
 pub fn validate(settings: &VisionSettings) -> Result<(), String> {
-    if !(5..=120).contains(&settings.timeout_seconds) {
-        return Err("图片兼容最长等待必须在 5 到 120 秒之间".into());
+    if !(5..=600).contains(&settings.timeout_seconds) {
+        return Err("图片兼容最长等待必须在 5 到 600 秒之间".into());
     }
     // 规则列表（权威形状）：逐条查名单、目标，以及「启用了就得配全」。
     let listed: usize = settings.rules.iter().map(|rule| rule.models.len()).sum();

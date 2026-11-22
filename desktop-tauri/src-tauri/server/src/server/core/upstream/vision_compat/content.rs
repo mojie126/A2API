@@ -156,16 +156,17 @@ pub(super) fn replace(body: &Value, images: &[ImagePart], descriptions: &[String
     Ok(next)
 }
 
-pub(super) fn question(body: &Value, images: &[ImagePart]) -> Result<String, GatewayError> {
+/// 拼出交给识图模型的对话上下文：图片所在消息 + 全部 user / assistant 消息。
+///
+/// 不做条数与字节的人工截断 —— 上下文大小由所选识图模型自己的上下文窗口决定，
+/// 装不下时上游按它自己的限制报错，而不是这里先猜一个上限把对话砍掉。
+pub(super) fn question(body: &Value, _images: &[ImagePart]) -> Result<String, GatewayError> {
     let messages = body.get("messages").and_then(Value::as_array).ok_or_else(|| invalid("请求缺少消息"))?;
-    let mut indices: std::collections::BTreeSet<usize> = images.iter().map(|image| image.message).collect();
-    let recent: Vec<_> = messages.iter().enumerate()
-        .filter(|(_, message)| matches!(message.get("role").and_then(Value::as_str), Some("user" | "assistant")))
-        .map(|(index, _)| index).rev().take(6).collect();
-    indices.extend(recent);
     let mut result = String::new();
-    for index in indices {
-        let Some(message) = messages.get(index) else { continue; };
+    for message in messages {
+        if !matches!(message.get("role").and_then(Value::as_str), Some("user" | "assistant" | "system")) {
+            continue;
+        }
         let text = message.get("content").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| {
             message.get("content").and_then(Value::as_array).into_iter().flatten()
                 .filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
@@ -175,9 +176,6 @@ pub(super) fn question(body: &Value, images: &[ImagePart]) -> Result<String, Gat
         result.push_str(": ");
         result.push_str(&text);
         result.push('\n');
-    }
-    if result.len() > 128 * 1024 {
-        return Err(invalid("图片相关对话过长，无法完整交给辅助识图模型；请缩短相关消息"));
     }
     Ok(result)
 }

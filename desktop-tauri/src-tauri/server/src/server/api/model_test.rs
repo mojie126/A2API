@@ -427,6 +427,7 @@ fn translate_completion(
 ///   - `""` / `"follow"`：跟随账号自身配置（`None`）
 ///   - `"direct"` / `"none"`：本次强制直连（`Some(None)`）
 ///   - `"pool:<id>"` 或 `"<id>"`：解析代理池条目（`Some(Some(proxy))`）
+///   - `"warp:<deviceId>"`：解析 WARP 出口池设备（`Some(Some(proxy))`）
 fn parse_proxy_override(
     raw: &str,
 ) -> Result<(Option<Option<ResolvedProxy>>, Option<String>), String> {
@@ -436,6 +437,27 @@ fn parse_proxy_override(
     }
     if trimmed.eq_ignore_ascii_case("direct") || trimmed.eq_ignore_ascii_case("none") {
         return Ok((Some(None), Some("直连".to_string())));
+    }
+    if let Some(device_id) = trimmed.strip_prefix("warp:").map(str::trim).filter(|id| !id.is_empty()) {
+        let resolution = crate::server::core::proxies::resolve_account_proxy(
+            Some(&serde_json::json!({ "source": "warp", "deviceId": device_id })),
+        );
+        let resolved = match resolution {
+            Some(crate::server::core::proxies::ProxyResolution::Resolved(proxy)) => proxy,
+            Some(crate::server::core::proxies::ProxyResolution::Failed(reason)) => return Err(reason),
+            None => return Err("WARP 设备引用无效".to_string()),
+        };
+        // 展示标签带出口 IP（有辨识度）；探测未完成时退回设备 id
+        let egress = crate::server::core::warp::pool::global()
+            .and_then(|pool| pool.find(device_id))
+            .map(|exit| exit.egress_ip())
+            .unwrap_or_default();
+        let label = if egress.is_empty() {
+            format!("WARP · {device_id}")
+        } else {
+            format!("WARP（{egress}）")
+        };
+        return Ok((Some(Some(resolved)), Some(label)));
     }
     let proxy_id = trimmed.strip_prefix("pool:").unwrap_or(trimmed).trim();
     if proxy_id.is_empty() {

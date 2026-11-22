@@ -49,8 +49,9 @@ import {
   DEFAULT_PROVIDER_ID, byPriorityOrder, displayNameOf, isRateLimited, positionMap, providerFeatures,
 } from './accounts-domain'
 import {
-  POOL_VALUE_PREFIX, poolItemLabel, type AccountRecord, type PoolItem,
+  POOL_VALUE_PREFIX, WARP_VALUE_PREFIX, poolItemLabel, type AccountRecord, type PoolItem,
 } from './accounts-shared'
+import { warpExits, warpExitLabel, type WarpExitItem } from './accounts-warp-cache'
 import * as customSource from './models-custom-source'
 import type { ManageModel } from './models-custom-source'
 import { levels as reasoningLevels } from './models-reasoning'
@@ -82,7 +83,7 @@ type TestModelRequest = {
   stream?: boolean
   /** 本次测试使用的网关对话协议（chat_completions / responses / anthropic） */
   protocol?: string
-  /** 本次测试临时指定的出网节点（空 = 跟随账号配置，direct = 直连，pool:<id> = 代理池节点） */
+  /** 本次测试临时指定的出网节点（空 = 跟随账号配置，direct = 直连，pool:<id> = 代理池节点，warp:<id> = WARP 设备） */
   proxy?: string
   /** 前端生成的关联 id（请求日志那一行的 id，也是中止用的把手） */
   test_id?: string
@@ -249,6 +250,7 @@ export function ModelTestDialog({ target, onClose }: { target: ModelTestTarget; 
   const [proxy, setProxy] = React.useState('')
   const [pool, setPool] = React.useState<PoolItem[] | null>(null)
   const [poolError, setPoolError] = React.useState('')
+  const [warp, setWarp] = React.useState<WarpExitItem[] | null>(null)
   const [reasoning, setReasoning] = React.useState('')
   const [stream, setStream] = React.useState(true)
   const keyState = useModelApiKeys(async () => {
@@ -280,7 +282,7 @@ export function ModelTestDialog({ target, onClose }: { target: ModelTestTarget; 
   const running = slots.some(slot => slot.state === 'running')
   const now = useClock(running)
 
-  /** 打开弹窗时读取一次代理池列表（供「测试节点」下拉使用） */
+  /** 打开弹窗时读取一次代理池与 WARP 设备清单（供「测试节点」下拉使用） */
   React.useEffect(() => {
     let alive = true
     void (async () => {
@@ -300,6 +302,7 @@ export function ModelTestDialog({ target, onClose }: { target: ModelTestTarget; 
         setPoolError(errorMessage(error))
       }
     })()
+    void warpExits().then(items => { if (alive) setWarp(items) }).catch(() => { if (alive) setWarp([]) })
     return () => { alive = false }
   }, [])
 
@@ -448,6 +451,8 @@ export function ModelTestDialog({ target, onClose }: { target: ModelTestTarget; 
   const proxyItems: Array<{ value: string; label: string; disabled?: boolean }> = [
     { value: '', label: t('跟随账号配置') },
     { value: PROXY_DIRECT, label: t('直连（不使用代理）') },
+    // WARP 设备（出口池运行期注册；读不到清单时整组不出现）
+    ...(warp ?? []).map(item => ({ value: `${WARP_VALUE_PREFIX}${item.id}`, label: warpExitLabel(item) })),
     // 已禁用的池条目置灰：它不能代表一次可用的代理出口。
     ...(pool ?? []).map(item => ({
       value: `${POOL_VALUE_PREFIX}${item.id}`,

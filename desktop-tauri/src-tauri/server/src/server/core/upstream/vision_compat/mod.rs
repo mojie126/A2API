@@ -232,6 +232,9 @@ async fn dispatch(service: &UpstreamService, ctx: &ProviderContext<'_>, destinat
     next.native = None;
     next.routing = destination.routing.clone();
     next.vision = None;
+    // 识图与整体接管都把原图原样交给视觉模型，不再过会话图片压缩层
+    //（压缩会损图，且识图请求的费用由视觉模型自己的上下文与读数承担）
+    next.image_compress.enabled = false;
     next.direct_provider = Some(destination.target.provider.clone());
     next.direct_model = Some(destination.target.model.clone());
     next.compact_routed = if preserve_prompt { false } else { ctx.compact_routed };

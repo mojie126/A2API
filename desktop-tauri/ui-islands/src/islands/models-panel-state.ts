@@ -199,6 +199,21 @@ export const MODEL_STATE_OPTIONS: readonly SegmentedControlOption<string>[] = MO
 }))
 
 /**
+ * 倍率的**数值**（排序与显示共用；解析不出返回 null）。
+ *
+ * 倍率是各家上游用文本口径写进来的，存在两种写法：`x0.7 credits`（前缀形态）
+ * 与 `0.7x`（后缀形态，如科搭的 `rate_badge`），两种都要认。解析不出返回 null：
+ * 「上游没给」与「倍率是 0」是两件事，null 不按 0 参与排序（见 MODEL_SORTS）。
+ */
+export function rateOf(credits: unknown): number | null {
+  const text = String(credits || '')
+  // 前缀形态 x0.7 / 后缀形态 0.7x；前缀要防止吞进「ax0.7」这类杂文本，要求 x 左侧不是数字
+  const match = /(?:^|[^\d.])x\s*([\d.]+)|(?:^|[^\d.])([\d.]+)\s*x(?![\d.])/i.exec(text)
+  const value = Number(match?.[1] ?? match?.[2])
+  return Number.isFinite(value) ? value : null
+}
+
+/**
  * 排序档位（issue #161：按倍率排序，便于挑便宜的模型）。
  *
  * `default` 是「不做额外排序」—— 组内仍按后端清单原序（只把禁用的沉到组末尾，

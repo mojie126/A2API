@@ -11,14 +11,14 @@ import {
 } from './model-capability'
 import {
   bindingKeyOf, bindingsOf, enabledBindingConflicts, esc, formatTime, getSnapshot, levelOf, models,
-  openCapability, openMapping, rowKeyOf, runRowAction, same, shared, subscribe, visibilityOf,
+  openCapability, openMapping, rateOf, rowKeyOf, runRowAction, same, shared, subscribe, visibilityOf,
   writeBinding, writeRemoveMapping, writeRemoveModel, type Align, type ColumnView, type Binding,
 } from './models-panel-state'
 
 const cellClass = (base: string, align?: Align): string => (align ? `${base} ta-${align}` : base)
 const formatCredits = (credits: unknown): string => {
-  const match = /x\s*([\d.]+)/i.exec(String(credits || ''))
-  return match ? `${match[1]}x` : String(credits || '')
+  const value = rateOf(credits)
+  return value !== null ? `${value}x` : String(credits || '')
 }
 
 /* ─── 能力图标（「能力」列的四枚圆点）──────────────────────

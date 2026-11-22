@@ -64,6 +64,7 @@
   "代理设置响应异常": "Unexpected proxy settings response",
   "代理账号和密码不能超过 200 个字符": "Proxy usernames and passwords must not exceed 200 characters",
   "代理账号或密码的 URL 编码无效": "Invalid URL encoding in the proxy username or password",
+  "代理页视图": "",
   "以下行未能识别，已留在输入框中；修正后可再次解析。": "These lines could not be parsed and remain in the input. Correct them and parse again.",
   "使用情况": "Usage",
   "例如：我的机场": "e.g. My airport",

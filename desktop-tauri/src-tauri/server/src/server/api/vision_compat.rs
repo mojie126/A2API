@@ -129,13 +129,16 @@ struct SaveSettings {
 }
 
 fn validate_available(target: &VisionTarget) -> Result<(), GatewayError> {
-    let item = routing_groups::catalog_model(&target.provider, &target.model)
+    // 目标存的是对外名（可能是启用的映射别名）：先解析回上游真实 id，
+    // 再按原始目录核对 —— 与界面候选（special_route_models）同一套绑定口径
+    let wire = catalog::wire_target_for_provider(&target.model, &target.provider, None);
+    let item = routing_groups::catalog_model(&target.provider, &wire.model)
         .ok_or_else(|| GatewayError::bad_request("所选视觉模型已不在提供商目录中，请重新选择"))?;
     if capability::images_for_channel(&target.provider, &item) != Some(true) {
         return Err(GatewayError::bad_request("请选择已确认支持图片的视觉模型；能力未声明时请先在模型管理中确认"));
     }
-    // 目标存的是上游真实 id，可达性要承认「启用别名指向它」的路径
-    if !catalog::provider_serves_model(&target.provider, &target.model) {
+    // 可达性要承认「启用别名指向它」的路径
+    if !catalog::provider_serves_model(&target.provider, &wire.model) {
         return Err(GatewayError::bad_request("所选视觉模型尚未启用，请先在模型管理中启用"));
     }
     Ok(())

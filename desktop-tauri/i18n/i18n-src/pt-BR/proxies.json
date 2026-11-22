@@ -62,6 +62,7 @@
   "代理设置响应异常": "Resposta inesperada das configurações de proxy",
   "代理账号和密码不能超过 200 个字符": "O usuário e a senha do proxy não podem exceder 200 caracteres",
   "代理账号或密码的 URL 编码无效": "Codificação de URL inválida no usuário ou senha do proxy",
+  "代理页视图": "",
   "以下行未能识别，已留在输入框中；修正后可再次解析。": "As linhas abaixo não foram reconhecidas e continuam no campo. Corrija-as e analise novamente.",
   "使用情况": "Uso",
   "例如：我的机场": "ex.: Meu provedor",

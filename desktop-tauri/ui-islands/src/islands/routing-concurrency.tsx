@@ -12,13 +12,20 @@ export type ConcurrencySummary = {
   locked: boolean
   /** 默认或锁定的组内并发总数 */
   total: number
+  /** 组内是否存在有限并发账号（含不限账号时默认总数取有限账号上限之和） */
+  hasLimited: boolean
 }
 
-/** 按候选账号推导组内并发的默认总数（与后端 `routing_concurrency` 同一口径） */
+/**
+ * 按候选账号推导组内并发的默认总数（与后端 `routing_concurrency` 同一口径）：
+ * 全部有限取上限之和并锁定；含不限账号时取有限账号上限之和；全部不限取账号数
+ */
 export function concurrencySummary(accounts: AccountRecord[]): ConcurrencySummary {
   const caps = accounts.map(account => Number(account.maxConcurrent) || 0)
   const locked = caps.length > 0 && caps.every(cap => cap > 0)
-  return { locked, total: locked ? caps.reduce((sum, cap) => sum + cap, 0) : accounts.length }
+  const limitedSum = caps.reduce((sum, cap) => sum + cap, 0)
+  if (locked) return { locked, total: limitedSum, hasLimited: true }
+  return { locked, total: limitedSum > 0 ? limitedSum : accounts.length, hasLimited: limitedSum > 0 }
 }
 
 /**
@@ -57,7 +64,9 @@ export function RoutingConcurrencyFields({ accounts, enabled, total, strategy, d
         ? t('未启用时不限制组内总并发')
         : summary.locked
           ? t('账号均设置并发上限，总数固定为 {n}', { n: summary.total })
-          : t('默认为组内 {n} 个账号各分配 1 个并发', { n: accounts.length })}</small>
+          : summary.hasLimited
+            ? t('默认为有限并发账号的上限之和 {n}，无限并发账号不占并发上限', { n: summary.total })
+            : t('默认为组内 {n} 个账号各分配 1 个并发', { n: accounts.length })}</small>
     </div>
     <div className='routing-rule-field'>
       <Label>{t('并发策略')}</Label>

@@ -1,7 +1,15 @@
-/* 套餐池守卫只读概览；实际模型验证始终绑定用户点选的账号和配置。 */
+/* 套餐池守卫概览；实际模型验证始终绑定用户点选的账号和配置。
+ * 自动补货：上游要求验证码而库存为空（needsTokens）时，轮询循环自动对绑定
+ * 账号执行一次无痕验证并入池，不再依赖人工点「开始验证」；失败按指数退避，
+ * 成功或库存恢复即停。免码期（required=false）不铸，避免烧风控配额。 */
 (() => {
   const POLL_MS = 2500;
   const IDLE_POLL_MS = 15000;
+  /** 自动补货失败后的退避起点与封顶（成功清零；封顶 10 分钟与网关闸门 TTL 同量级） */
+  const REFILL_BACKOFF_START_MS = 30_000;
+  const REFILL_BACKOFF_MAX_MS = 10 * 60_000;
+  /** 两次自动铸入之间的最小间隔：令牌寿命 120 秒，跟上消费节奏即可，不抢节奏 */
+  const REFILL_MIN_GAP_MS = 60_000;
   let timer = 0;
   let stopped = false;
   let running = false;
@@ -13,6 +21,10 @@
   const accountStatuses = new Map();
   const accountReads = new Map();
   let readSequence = 0;
+  /** 自动补货的退避与节奏状态（手动「开始验证」不受它们约束） */
+  let refillNextAt = 0;
+  let refillBackoff = 0;
+  let refillLastOkAt = 0;
 
   const idle = accountId => ({ state: 'idle', error: '', accountId, provider: '' });
   const providerValid = value => value === 'zcode' || value === 'zcode-intl';
@@ -90,23 +102,67 @@
     publish('idle', '', accountId, provider);
   }
 
-  async function check() {
-    if (running || stopped) return;
-    if ((window.wbApp?.currentPage || '') !== 'accounts') {
-      schedule(IDLE_POLL_MS);
+  /**
+   * 自动补货：上游要求验证码而库存为空时，对绑定账号铸一枚入池。
+   *
+   * 触发条件（都来自无参读数）：required !== false（上游此刻真要码，免码期
+   * 白铸烧风控配额）、needsTokens === true（库存满足不了需求）、读数带着
+   * 绑定账号（accountId 是网关按 Start Plan 账号选定的铸造对象）。
+   * 节奏：verify 自身单飞（手动按钮共存）；失败指数退避 30 秒起步、封顶
+   * 10 分钟；两次成功铸入至少隔 60 秒；库存恢复（needsTokens 变 false）
+   * 自动停，退避状态清零。
+   *
+   * @param value 无参读数（check 轮询取得）
+   */
+  async function autoRefill(value) {
+    if (value.required === false || value.needsTokens !== true) {
+      // 库存恢复或上游免码：清退避，下一轮回到常规节奏
+      refillBackoff = 0;
+      refillNextAt = 0;
       return;
     }
+    const accountId = text(value.accountId) ? value.accountId : '';
+    if (!accountId || active || Date.now() < refillNextAt
+      || Date.now() - refillLastOkAt < REFILL_MIN_GAP_MS) return;
+    const at = Date.now();
+    try {
+      const minted = await verify(accountId);
+      if (minted === true) {
+        refillLastOkAt = at;
+        refillBackoff = 0;
+        refillNextAt = 0;
+      } else {
+        // verify 返回 false = 读了配置后发现上游已转免码：小退避后复探
+        refillNextAt = at + REFILL_BACKOFF_START_MS;
+      }
+    } catch {
+      // 失败（网络 / 组件 / 提交未确认）：指数退避，把错误显示留给状态发布
+      refillBackoff = refillBackoff > 0
+        ? Math.min(REFILL_BACKOFF_MAX_MS, refillBackoff * 2)
+        : REFILL_BACKOFF_START_MS;
+      refillNextAt = at + refillBackoff;
+    }
+  }
+
+  async function check() {
+    if (running || stopped) return;
+    const onAccounts = (window.wbApp?.currentPage || '') === 'accounts';
+    // 自动补货不限于账号页：页面挂在任何一页都要能补（headless 部署没有
+    // 人工点按钮的链路）；非账号页用低频节拍，账号页维持原有密集轮询。
     running = true;
     const epoch = generation;
     try {
       const value = await readStats();
       if (epoch !== generation || stopped) return;
-      stateOf(value);
+      if (onAccounts) stateOf(value);
+      await autoRefill(value);
       const poll = Number(value.pollMs) || POLL_MS;
-      schedule(value.demandActive === true ? Math.min(30000, Math.max(1000, poll)) : IDLE_POLL_MS);
+      const delay = !onAccounts ? IDLE_POLL_MS
+        : value.demandActive === true ? Math.min(30000, Math.max(1000, poll)) : IDLE_POLL_MS;
+      schedule(delay);
     } catch {
       if (epoch === generation && !stopped) {
-        publish('error', wbI18n.t('验证码状态读取失败，请刷新后重试'));
+        if (onAccounts) publish('error', wbI18n.t('验证码状态读取失败，请刷新后重试'));
         schedule(IDLE_POLL_MS);
       }
     } finally {

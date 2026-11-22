@@ -1,4 +1,4 @@
-//! 插件商店和更新检查共用官网目录与持久化缓存。
+//! 插件商店和更新检查共用本 fork 索引仓库与持久化缓存。
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -18,7 +18,7 @@ fn key() -> String {
 }
 
 fn key_for(channels: crate::server::config::UpdateChannels) -> String {
-    format!("pluginCatalog:{}:{}", update::INDEX_SOURCE, channels.key())
+    format!("pluginCatalog:{}:{}", update::INDEX_REPO, channels.key())
 }
 
 fn signal() -> &'static Notify {
@@ -33,7 +33,7 @@ pub fn wake() {
 pub fn clear_cooldown() {
     for channel in ["stable", "beta", "both"] {
         let _ =
-            task_state::clear_cooldown(&format!("pluginCatalog:{}:{channel}", update::INDEX_SOURCE));
+            task_state::clear_cooldown(&format!("pluginCatalog:{}:{channel}", update::INDEX_REPO));
     }
     wake();
 }
@@ -50,7 +50,7 @@ pub fn schedule_now() {
 pub fn reschedule(interval_ms: i64) {
     for channel in ["stable", "beta", "both"] {
         let _ = task_state::reschedule(
-            &format!("pluginCatalog:{}:{channel}", update::INDEX_SOURCE),
+            &format!("pluginCatalog:{}:{channel}", update::INDEX_REPO),
             interval_ms,
         );
     }
@@ -174,21 +174,23 @@ pub async fn refresh(manual: bool) -> Result<Value, String> {
 }
 
 async fn fetch_catalog(channels: crate::server::config::UpdateChannels) -> Result<Value, UpdateError> {
-    let url = format!("{}/catalog?stable={}&beta={}", update::INDEX_SOURCE, u8::from(channels.stable), u8::from(channels.beta));
-    let response = crate::server::core::update::website::fetch_json(&url, 30_000).await?;
-    if !response.status.is_success() || response.value["schema"] != 1 {
-        return Err(UpdateError::new("官网插件目录暂不可用"));
-    }
-    let entries = response.value["plugins"].as_array().filter(|items| items.len() <= 200)
-        .ok_or_else(|| UpdateError::new("官网插件目录格式无效"))?;
+    // 组装来源：本 fork 索引仓库的 index.json 与插件清单，发行版按清单查询 GitHub Releases
+    let index = update::fetch_index_document().await?;
+    let entries: Vec<Value> = index["plugins"].as_array().cloned().unwrap_or_default();
     let cached = snapshot_for(channels);
+    let manifest_paths: Vec<String> = entries.iter()
+        .map(|entry| entry["manifest"].as_str().unwrap_or("").to_string())
+        .collect();
+    let manifests: Vec<Option<Value>> = stream::iter(manifest_paths.into_iter().map(|path| async move {
+        update::fetch_manifest(&path).await
+    })).buffered(6).collect().await;
     let mut icons = HashMap::new();
     let icon_jobs: Vec<_> = entries.iter().filter_map(|entry| {
         let id = entry["id"].as_str()?;
-        let icon = entry["icon"].as_str().unwrap_or("");
+        let icon = entry["icon"].as_str().unwrap_or("").to_string();
         let old = cached["plugins"].as_array().and_then(|items| items.iter().find(|item| item["id"] == id));
         (old.is_none_or(|item| item["iconSource"] != entry["icon"] || item["icon"].is_null()))
-            .then(|| (id.to_string(), icon.to_string()))
+            .then(|| (id.to_string(), icon))
     }).collect();
     let mut fetched = stream::iter(icon_jobs.into_iter().map(|(id, icon)| async move {
         (id, update::read_store_icon(&icon).await)
@@ -196,19 +198,24 @@ async fn fetch_catalog(channels: crate::server::config::UpdateChannels) -> Resul
     while let Some((id, icon)) = fetched.next().await { icons.insert(id, json!(icon)); }
     let current = super::host_target();
     let mut plugins = Vec::new();
-    for entry in entries {
+    for (position, entry) in entries.into_iter().enumerate() {
+        let manifest = manifests[position].clone().unwrap_or_default();
         let Some(id) = entry["id"].as_str().filter(|id| !id.is_empty() && id.len() <= 64
             && id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')) else { continue; };
         let text = |key: &str| entry[key].as_str().unwrap_or("");
+        let release_meta = manifest.get("release");
         let detail = update::PluginDetail {
-            protocol: entry["detail"]["protocol"].as_u64().unwrap_or(0) as u32,
-            repo: entry["detail"]["release"]["repo"].as_str().unwrap_or("").to_string(),
-            tag_template: entry["detail"]["release"]["tag"].as_str().unwrap_or("v{version}").to_string(),
-            asset_template: entry["detail"]["release"]["asset"].as_str().unwrap_or("{id}-{version}-{target}.zip").to_string(),
-            homepage: entry["detail"]["homepage"].as_str().unwrap_or("").to_string(),
+            protocol: manifest["protocol"].as_u64().unwrap_or(0) as u32,
+            repo: release_meta.and_then(|value| value["repo"].as_str()).unwrap_or("").to_string(),
+            tag_template: release_meta.and_then(|value| value["tag"].as_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or("v{version}").to_string(),
+            asset_template: release_meta.and_then(|value| value["asset"].as_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or("{id}-{version}-{target}.zip").to_string(),
+            homepage: manifest["homepage"].as_str().unwrap_or("").to_string(),
             require_signed: true,
         };
-        let repo = &detail.repo;
         let old = cached["plugins"]
             .as_array()
             .and_then(|items| items.iter().find(|item| item["id"] == id));
@@ -220,25 +227,21 @@ async fn fetch_catalog(channels: crate::server::config::UpdateChannels) -> Resul
         let icon = icons.remove(id).unwrap_or(icon);
         let mut value = json!({
             "id": id, "name": super::pack_view::display_name(text("name")), "description": text("description"),
-            "order": entry["order"], "category": entry["category"],
-            "providers": entry.get("providers").cloned().unwrap_or_else(|| json!([])),
-            "repository": repo,
+            "order": position as u64, "category": entry.get("category").cloned().unwrap_or_else(|| json!("")),
+            "providers": manifest.get("providers").cloned().unwrap_or_else(|| json!([])),
+            "repository": detail.repo,
             "homepage": detail.homepage,
             "protocol": detail.protocol, "icon": icon, "iconSource": entry["icon"],
             "requireSigned": true,
             "version": Value::Null, "page": Value::Null, "notes": "", "prerelease": false,
             "platforms": [], "error": false, "reason": Value::Null,
         });
-        let release = &entry["release"];
-        let selected = if release.is_null() { Ok(None) } else {
-            update::pick_release_assets(release, id, Some(&detail))
-                .ok_or_else(|| UpdateError::new("官网插件版本或附件格式无效"))
-                .and_then(|mut assets| {
-                    update::validate_release_urls(release, &assets, id)?;
-                    if !channels.accepts(assets.prerelease) { return Err(UpdateError::new("官网插件版本不属于当前通道")); }
-                    assets.require_signed = true;
-                    Ok(Some(assets))
-                })
+        let selected = if manifest.is_null() {
+            Err(UpdateError::new("插件清单读取失败"))
+        } else if detail.repo.is_empty() {
+            Ok(None)
+        } else {
+            update::release_for_channels(&detail.repo, id, Some(&detail), None, channels).await
         };
         match selected {
             Ok(Some(release)) => {
@@ -322,7 +325,7 @@ pub fn updates_with_packs(packs: &[super::PackSummary], catalog: &Value) -> Valu
             else if error {
                 failure["reason"].as_str().map(str::to_string)
             } else if entry.is_none() && catalog["checked"] == true {
-                Some("插件不在官网目录中，暂无可用更新".to_string())
+                Some("插件不在索引目录中，暂无可用更新".to_string())
             } else if available { None }
             else if catalog["checked"] != true { Some("尚未检查更新".to_string()) }
             else if version.is_none() || platform.is_none() { Some("当前通道暂无可安装的版本".to_string()) }

@@ -1,17 +1,33 @@
-//! 插件目录、发行版与下载统一读取官网，官方包保持可信签名校验。
+//! 插件目录、发行版与下载统一读取本 fork 的插件索引仓库，包保持可信签名校验。
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub(crate) use super::packages::MAX_PACK_BYTES;
 
-use crate::server::core::update::{compare_versions, is_prerelease_version, website, UpdateError};
+use crate::server::core::update::{compare_versions, is_prerelease_version, UpdateError};
 
-pub const INDEX_SOURCE: &str = website::PLUGIN_BASE;
-pub const FALLBACK_REPO: &str = "mojie126/A2P";
-/// 本地插件仓库的索引仓库（本 fork 的插件目录托管在 GitHub），官网不可用时回退
+/// 本 fork 的插件索引仓库，index.json、插件清单与图标托管在 GitHub
 pub const INDEX_REPO: &str = "Agent2plugin/Agent2plugin";
+/// 本 fork 的插件构建仓库，索引不可达时的兜底
+pub const FALLBACK_REPO: &str = "mojie126/A2P";
 const QUERY_TIMEOUT_MS: u64 = 30_000;
+
+/// 索引仓库内相对路径对应的 raw 地址
+///
+/// @param path 索引仓库内的相对路径，禁止绝对路径、反斜杠与 .. 上跳
+fn index_raw(path: &str) -> Option<String> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.contains(['?', '#'])
+        || path.split('/').any(|part| part == "..")
+    {
+        return None;
+    }
+    Some(format!("https://raw.githubusercontent.com/{INDEX_REPO}/main/{path}"))
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PackAsset {
@@ -27,17 +43,6 @@ pub struct PackAsset {
 
 pub fn asset_name(pack_id: &str, version: &str, target: &str) -> String {
     format!("{pack_id}-{version}-{target}.zip")
-}
-
-#[derive(Clone, Debug)]
-pub struct IndexEntry {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub require_signed: bool,
-    pub manifest: String,
-    pub icon: String,
-    pub repo: String,
 }
 
 #[derive(Clone, Debug)]
@@ -96,119 +101,59 @@ pub fn clear_cooldown() {
     super::catalog::clear_cooldown();
 }
 
-pub async fn read_index_result() -> Result<Vec<IndexEntry>, UpdateError> {
-    // 先读官网；官网拿不到（未部署 / fork 环境无官方站点）时回退本地插件仓库的
-    // GitHub index.json（本 fork 的插件走 GitHub Releases 分发，见模块头）
-    let (value, official) = match website::fetch_json(&format!("{INDEX_SOURCE}/index.json"), QUERY_TIMEOUT_MS).await {
-        Ok(response) if response.status.is_success() && response.value.get("plugins").and_then(Value::as_array).is_some() => {
-            (response.value, true)
-        }
-        _ => {
-            let url = format!("https://raw.githubusercontent.com/{INDEX_REPO}/main/index.json");
-            let headers = vec![("User-Agent".to_string(), "agent2api-plugin".to_string())];
-            let response = crate::server::core::update::client::fetch_public(&url, &headers, Some(QUERY_TIMEOUT_MS))
-                .await.map_err(UpdateError::new)?;
-            if !response.status().is_success() {
-                return Err(UpdateError::new(format!(
-                    "读取插件索引失败：官网与 GitHub 均不可用（HTTP {}）",
-                    response.status().as_u16()
-                )));
-            }
-            let bytes = response.bytes().await.map_err(|error| UpdateError::new(error.to_string()))?;
-            let value: Value = serde_json::from_slice(&bytes).map_err(|_| UpdateError::new("插件索引不是合法 JSON"))?;
-            (value, false)
-        }
-    };
-    let document = value;
-    if official && document["schema"] != 1 { return Err(UpdateError::new("官网插件目录版本不受支持")); }
-    let require_signed = true;
-    let items = document
-        .get("plugins")
-        .and_then(Value::as_array)
-        .ok_or_else(|| UpdateError::new("插件索引缺少 plugins 数组"))?;
-    if items.len() > 200 { return Err(UpdateError::new("插件目录过大")); }
-    Ok(items
-        .iter()
-        .filter_map(|item| {
-            let id = text(item, "id");
-            if id.is_empty()
-                || !id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-            {
-                return None;
-            }
-            let name = text(item, "name");
-            Some(IndexEntry {
-                name: if name.is_empty() { id.clone() } else { name },
-                id,
-                description: text(item, "description"),
-                require_signed,
-                manifest: text(item, "manifest"),
-                icon: text(item, "icon"),
-                repo: item
-                    .get("source")
-                    .map(|source| text(source, "repo"))
-                    .unwrap_or_default(),
-            })
-        })
-        .collect())
-}
-
-pub async fn read_index() -> Vec<IndexEntry> {
-    read_index_result().await.unwrap_or_default()
-}
-
-fn index_path(path: &str) -> Option<String> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.contains('\\')
-        || path.contains(':')
-        || path.split('/').any(|part| part == "..")
-    {
-        return None;
+/// 读取本 fork 索引仓库的 index.json
+///
+/// @return 索引文档，schema 须为 1 且 plugins 数组不超过 200 项
+pub(super) async fn fetch_index_document() -> Result<Value, UpdateError> {
+    let url = format!("https://raw.githubusercontent.com/{INDEX_REPO}/main/index.json");
+    let headers = vec![("User-Agent".to_string(), "agent2api-plugin".to_string())];
+    let response = crate::server::core::update::client::fetch_public(&url, &headers, Some(QUERY_TIMEOUT_MS))
+        .await.map_err(UpdateError::new)?;
+    if !response.status().is_success() {
+        return Err(UpdateError::new(format!(
+            "读取插件索引失败：GitHub 返回 HTTP {}",
+            response.status().as_u16()
+        )));
     }
-    Some(format!("{INDEX_SOURCE}/{path}"))
+    let bytes = response.bytes().await.map_err(|error| UpdateError::new(error.to_string()))?;
+    let document: Value = serde_json::from_slice(&bytes).map_err(|_| UpdateError::new("插件索引不是合法 JSON"))?;
+    if document["schema"] != 1 { return Err(UpdateError::new("插件索引版本不受支持")); }
+    if document.get("plugins").and_then(Value::as_array).is_none() {
+        return Err(UpdateError::new("插件索引缺少 plugins 数组"));
+    }
+    if document["plugins"].as_array().is_some_and(|items| items.len() > 200) {
+        return Err(UpdateError::new("插件目录过大"));
+    }
+    Ok(document)
 }
 
-pub async fn read_detail(path: &str) -> Option<PluginDetail> {
-    let response = website::fetch_json(&index_path(path)?, QUERY_TIMEOUT_MS)
+/// 读取索引仓库内的插件清单
+pub(super) async fn fetch_manifest(path: &str) -> Option<Value> {
+    let url = index_raw(path)?;
+    let headers = vec![("User-Agent".to_string(), "agent2api-plugin".to_string())];
+    let response = crate::server::core::update::client::fetch_public(&url, &headers, Some(QUERY_TIMEOUT_MS))
         .await.ok()?;
-    if !response.status.is_success() {
-        return None;
-    }
-    let document = response.value;
-    let release = document.get("release");
-    Some(PluginDetail {
-        protocol: document
-            .get("protocol")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u32,
-        repo: release.map(|value| text(value, "repo")).unwrap_or_default(),
-        tag_template: release
-            .map(|value| text(value, "tag"))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "v{version}".to_string()),
-        asset_template: release
-            .map(|value| text(value, "asset"))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "{id}-{version}-{target}.zip".to_string()),
-        homepage: text(&document, "homepage"),
-        require_signed: true,
-    })
+    if !response.status().is_success() { return None; }
+    let bytes = response.bytes().await.ok()?;
+    serde_json::from_slice(&bytes).ok()?
 }
 
-pub async fn read_store_icon(path: &str) -> Option<String> {
-    if !path.starts_with("/plugin-assets/") && !path.starts_with("/api/media/") { return None; }
-    if path.contains("..") || path.contains(['?', '#', '\\']) { return None; }
-    let mime = match path.rsplit('.').next()?.to_ascii_lowercase().as_str() {
+/// 读取索引仓库内的插件图标并编码为 data URL
+pub(super) async fn read_store_icon(path: &str) -> Option<String> {
+    let extension = path.rsplit('.').next()?.to_ascii_lowercase();
+    let mime = match extension.as_str() {
         "png" => "image/png",
         "webp" => "image/webp",
         "jpg" | "jpeg" => "image/jpeg",
-        "svg" if path.starts_with("/plugin-assets/") => "image/svg+xml",
+        "svg" => "image/svg+xml",
         _ => return None,
     };
-    let bytes = website::fetch_bytes(&format!("{}{path}", website::ORIGIN), 2 * 1024 * 1024).await.ok()?;
+    let url = index_raw(path)?;
+    let headers = vec![("User-Agent".to_string(), "agent2api-plugin".to_string())];
+    let response = crate::server::core::update::client::fetch_public(&url, &headers, Some(2 * QUERY_TIMEOUT_MS))
+        .await.ok()?;
+    if !response.status().is_success() { return None; }
+    let bytes = response.bytes().await.ok()?;
     if bytes.len() > 2 * 1024 * 1024 {
         return None;
     }
@@ -286,13 +231,13 @@ pub(super) fn pick_release_assets(
         prerelease: release.get("prerelease").and_then(Value::as_bool) == Some(true)
             || is_prerelease_version(&version),
         version,
-        // 官网放行官网链接；GitHub 兜底时保留 release 页原链接（别把人引去官网）
+        // GitHub Releases 页原链接（别把人引去官网）
         page: {
             let html = text(release, "html_url");
             if url::Url::parse(&html).is_ok_and(|parsed| parsed.host_str() == Some("github.com")) {
                 html
             } else {
-                website::release_page(&html)
+                String::new()
             }
         },
         notes: text(release, "body").chars().take(32_000).collect(),
@@ -303,18 +248,16 @@ pub(super) fn pick_release_assets(
     })
 }
 
-pub(super) fn validate_release_urls(release: &Value, assets: &ReleaseAssets, id: &str) -> Result<(), UpdateError> {
-    let tag = text(release, "tag_name");
+pub(super) fn validate_release_urls(_release: &Value, assets: &ReleaseAssets, id: &str) -> Result<(), UpdateError> {
     for (platform, url, _) in &assets.platforms {
         let name = asset_name(id, &assets.version, platform);
-        // 官网：路径须与包/版本逐字一致；GitHub Releases：资产名须一致、走 releases/download
-        let official = website::plugin_url(url, id, &tag, &name);
+        // GitHub Releases：资产名须一致、走 releases/download
         let github = url::Url::parse(url).is_ok_and(|parsed| {
             parsed.host_str() == Some("github.com")
                 && parsed.path().contains("/releases/download/")
                 && parsed.path().ends_with(&format!("/{name}"))
         });
-        if !official && !github {
+        if !github {
             return Err(UpdateError::new("插件下载地址与包或版本不一致"));
         }
     }
@@ -344,14 +287,7 @@ pub(super) async fn release_for_channels(
         .map(|detail| detail.tag_template != "v{version}")
         .unwrap_or(false);
     let listed = channels.beta || custom_tag;
-    let response = match query_releases(
-        repo,
-        id,
-        if listed { "?per_page=100" } else { "/latest" },
-        listed,
-    )
-    .await?
-    {
+    let response = match query_releases(repo, id, listed).await? {
         Some(response) => response,
         None => return Ok(None),
     };
@@ -400,28 +336,12 @@ pub(super) async fn release_for_channels(
 async fn query_releases(
     repo: &str,
     id: &str,
-    suffix: &str,
     listed: bool,
-) -> Result<Option<website::JsonResponse>, UpdateError> {
+) -> Result<Option<crate::server::core::update::website::JsonResponse>, UpdateError> {
     if id.is_empty() || id.len() > 64 || !id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-') {
         return Err(UpdateError::new("插件标识无效"));
     }
-    // 先问官网（按 id）；官网不可用或未部署时回退 GitHub Releases（按 repo，
-    // 本 fork 的插件仓库发布在这里，见模块头）
-    let url = format!("{INDEX_SOURCE}/{id}/releases{suffix}");
-    if let Ok(response) = website::fetch_json(&url, QUERY_TIMEOUT_MS).await {
-        if response.status.as_u16() == 404 {
-            return Ok(None);
-        }
-        if response.status.is_success() {
-            if (listed && !response.value.is_array())
-                || (!listed && response.value.get("tag_name").and_then(Value::as_str).is_none()) {
-                return Err(UpdateError::new("官网插件版本信息格式无效"));
-            }
-            return Ok(Some(response));
-        }
-    }
-    // GitHub 兜底：repo 无效时无从回退
+    // 直接查 GitHub Releases（按 repo，本 fork 的插件仓库发布在这里，见模块头）
     if !valid_repo(repo) { return Ok(None); }
     let api = format!("https://api.github.com/repos/{repo}/releases{}", if listed { "?per_page=100" } else { "/latest" });
     let headers = vec![
@@ -439,7 +359,7 @@ async fn query_releases(
     }
     let bytes = response.bytes().await.map_err(|error| UpdateError::new(error.to_string()))?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| UpdateError::new("GitHub 插件版本信息不是合法 JSON"))?;
-    Ok(Some(website::JsonResponse { value, status: reqwest::StatusCode::OK }))
+    Ok(Some(crate::server::core::update::website::JsonResponse { value, status: reqwest::StatusCode::OK }))
 }
 
 pub async fn latest(pack_id: &str, target: &str) -> Result<Option<PackAsset>, String> {
@@ -466,18 +386,14 @@ pub async fn download(
     asset: &PackAsset,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<Vec<u8>, String> {
-    // 两种来源：官网（/downloads/plugins/）与本地插件仓库的 GitHub Releases
-    // （github.com/<repo>/releases/download/…）。本 fork 的插件走后者，见模块头。
-    let official = website::trusted_url(&asset.url) && url::Url::parse(&asset.url).is_ok_and(|url| {
-        url.path().starts_with("/downloads/plugins/") && url.query().is_none()
-    });
+    // 来源：本 fork 插件仓库的 GitHub Releases（github.com/<repo>/releases/download/…）
     let github = url::Url::parse(&asset.url).is_ok_and(|url| {
         url.host_str() == Some("github.com")
             && url.path().starts_with('/')
             && url.path().contains("/releases/download/")
     });
-    if !official && !github {
-        return Err("插件包只能从官网或 GitHub Releases 下载，请重新刷新插件列表".to_string());
+    if !github {
+        return Err("插件包只能从 GitHub Releases 下载，请重新刷新插件列表".to_string());
     }
     if asset.size > MAX_PACK_BYTES as u64 {
         return Err(format!("插件包超过 {} MiB 上限", MAX_PACK_BYTES / (1024 * 1024)));
@@ -491,12 +407,8 @@ pub async fn download(
         name.split_once(version_marker.as_str())
             .map(|(id, _)| id.to_string())
     });
-    let response = if official {
-        website::request(&asset.url, &headers, None).await.map_err(|error| error.message)?
-    } else {
-        crate::server::core::update::client::fetch_public(&asset.url, &headers, None).await
-            .map_err(|error| format!("下载插件包失败：{error}"))?
-    };
+    let response = crate::server::core::update::client::fetch_public(&asset.url, &headers, None).await
+        .map_err(|error| format!("下载插件包失败：{error}"))?;
     if response.status().as_u16() != 200 {
         return Err(format!("下载插件包失败：上游返回 HTTP {}", response.status().as_u16()));
     }

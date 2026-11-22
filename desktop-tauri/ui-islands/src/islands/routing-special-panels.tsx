@@ -548,10 +548,10 @@ export function VisionSpecialPanel({ editor }: { editor: SpecialEditor<VisionCon
         <div className='grid gap-3 px-4 py-3 sm:grid-cols-2'>
           <div className='flex flex-col gap-1.5'>
             <span className='text-[12.5px] font-medium text-foreground'>{t('兼容处理最长等待')}</span>
-            <NumberSetting value={draft.timeoutSeconds} min={5} max={120} step={1} unit={t('秒')}
+            <NumberSetting value={draft.timeoutSeconds} min={5} max={600} step={1} unit={t('秒')}
               disabled={saving} label={t('兼容处理最长等待')}
               onCommit={timeoutSeconds => editor.update(current => ({ ...current, timeoutSeconds }))} />
-            <span className='text-[11.5px] leading-[1.6] text-muted-foreground'>{t('范围 5–120 秒，并受原请求时限约束。')}</span>
+            <span className='text-[11.5px] leading-[1.6] text-muted-foreground'>{t('范围 5–600 秒，并受原请求时限约束。')}</span>
           </div>
           <div className='flex flex-col gap-1.5'>
             <span className='text-[12.5px] font-medium text-foreground'>{t('默认识图模型')}</span>

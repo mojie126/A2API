@@ -22,7 +22,7 @@ import {
   GROUP_LIMIT, MODEL_STATE_OPTIONS, MODEL_VISIBILITY_OPTIONS, builtinRailCounts,
   closeCapability, closeCustomModel, closeMapping, collapseGroup, customRailItems, directoryReady,
   expandGroup, getSnapshot, isAllCustomView, openAddCustomProvider, openCustomModel, providerLabelOf,
-  refreshAll, refreshModels, registerColumnSettings, removeCustomProvider, render, resolveProvider,
+  rateOf, refreshAll, refreshModels, registerColumnSettings, removeCustomProvider, render, resolveProvider,
   restoreSavedFilters, pruneForeignTableNodes, rowEnabled, rowKeyOf, selectProvider, setSearch, setSort,
   setStateFilter, setVisibilityFilter, setTableEl, visibilityOf, shared, subscribe, syncHead, viewData,
   visibleColumns,
@@ -38,23 +38,6 @@ import { t } from '../i18n'
  * 只有带删除 × 的条目（自定义家）需要它，内置家不传。
  */
 const RAIL_HIDE_COUNT_ON_HOVER = '[.pv-row:hover_&_[data-slot=nav-item-count]]:invisible'
-
-/**
- * 倍率的**数值**（排序用；解析不出返回 null）。
- *
- * 倍率是各家上游用同一套文本口径写进来的
- * （`x0.7 credits`，见各家的 `attach_rates`），所以「取不出数值」与「显示成 —」
- * 恰好是同一批行 —— 两处不会出现「显示的倍率和排序依据不是一个数」。
- *
- * `null` 不按 0 参与排序：0 是合法倍率（免费 / 限免档），而 null 是「上游没给」。
- * 混在一起会把未知的排到最便宜那一端（排序说明见 models-panel-state 的 MODEL_SORTS）。
- */
-function rateOf(credits: unknown): number | null {
-  const match = /x\s*([\d.]+)/i.exec(String(credits || ''))
-  if (!match) return null
-  const value = Number(match[1])
-  return Number.isFinite(value) ? value : null
-}
 
 /* ─── 提供商头像（左栏 + 面板头标题）───────────────────────
    每家一枚色相 monogram：底 = 色相淡混、字 = 色相亮档（浅色主题压暗一档，
