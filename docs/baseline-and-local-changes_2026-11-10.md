@@ -512,6 +512,14 @@
 - 小浣熊批量刷新移除：随上游刷新接口下线（见插件仓库同日记录），网关侧存量公开形态的模块注释同步改口径
 - 验证：本地测试网关实测 raccoon 账号代理选 WARP 设备后转发经 WARP 出口打上游（出口连接计数与流量增长证实）；网关 `cargo test` 479 通过 / 11 忽略，插件 70 项单测通过，Release 构建通过
 
+### 2026-11-22（ZCode 直连优先判定修复）
+
+- 缺陷：容量准入 `account_admission::select` 在返回前已通过 `try_rebind` 把当前请求预占进连接计数，随后 `zcode_direct_in_flight` 未排除自身，导致每个首次 ZCode 请求都被判成「直连已被占用」而无条件切 WARP，与「直连优先」的设计口径相反
+- 修复：`Connections::any_in_flight` 回调增加在途数，`zcode_direct_in_flight` 排除「当前账号且在途数 ≤ 1」；同账号真有第二个在途请求、或其他未绑定 WARP 的 ZCode 账号在途时才切 WARP
+- 出口判定外层补 `warp_enabled_for` 门控，明确第二个请求改走 WARP 只针对 ZCode 国内 / 国际版，其他提供商不进入该分支
+- 新增四个单测覆盖单请求、同账号并发、其他账号与已绑定账号、非 ZCode 家族
+- 验证：`cargo check --release -p agent2api-server` 与 `cargo test --release -p agent2api-server zcode_direct` 4 项通过
+
 ## 后续同步官方更新
 
 1. 在 `main` 执行 `git fetch origin --prune` 并快进到官方最新版本

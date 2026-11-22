@@ -768,9 +768,11 @@ async fn attempt_queue(
             target.proxy = override_proxy.clone();
             target.proxy_notice = None;
         } else {
-            // 直连优先：同一提供商没有其他在途请求时先走账号原出口；
+            // 直连优先：没有其他在途直连 ZCode 请求时先走账号原出口；
             // 已有 ZCode 请求占着直连、账号处于 WARP 临时绑定、或本请求
             // 刚吃过 429 时才切 WARP
+            // 出口池只服务 ZCode 国内 / 国际版，其他提供商即使命中上面的
+            // 条件也不进入这条分支
             let account_id = target
                 .account
                 .as_ref()
@@ -779,7 +781,9 @@ async fn attempt_queue(
                 .unwrap_or("");
             let pool = crate::server::core::warp::pool::global();
             let warp_bound = pool.as_ref().is_some_and(|pool| pool.is_bound(account_id));
-            if warp_fallback || warp_bound || zcode_direct_in_flight(service, pool.as_deref()) {
+            if warp_enabled_for(target.account.as_ref(), &target.provider)
+                && (warp_fallback || warp_bound || zcode_direct_in_flight(service, pool.as_deref(), account_id))
+            {
                 warp_exit = warp_exit_for(target.account.as_ref(), &target.provider);
             }
             if let Some(exit) = &warp_exit {
@@ -2832,14 +2836,82 @@ fn warp_enabled_for(account: Option<&Value>, provider: &str) -> bool {
 /// 直连优先：没有在途直连 ZCode 请求时先走直连；已有请求在途说明直连
 /// 出口正被占用，新请求改走 WARP。已绑定 WARP 的账号不算占用直连
 ///
+/// ── 为什么要把当前请求自己刨掉 ──────────────────────────────
+/// 容量准入在返回之前就已把本请求预占进连接计数（`try_rebind`），
+/// 到这里表里必然有自己这条记录，只看「有没有在途」会让每个首次请求
+/// 都误判成「直连已被占用」而无条件切 WARP
+/// 因此只有当前账号在途数大于 1（真的还有别的请求）或其他未绑定
+/// WARP 的 ZCode 账号在途时，才算直连出口被占用
+///
 /// 判定按连接计数里记下的 **provider** 过滤（`zcode` 与 `zcode-intl`），
 /// 不依赖账号 id 的命名约定
 fn zcode_direct_in_flight(
     service: &UpstreamService,
     pool: Option<&crate::server::core::warp::pool::WarpPool>,
+    current_account: &str,
 ) -> bool {
-    service.connections.any_in_flight(|account_id, provider| {
-        crate::server::core::account_store::is_zcode_family(provider)
-            && !pool.is_some_and(|pool| pool.is_bound(account_id))
+    service.connections.any_in_flight(|account_id, provider, count| {
+        zcode_direct_slot_taken(
+            account_id,
+            provider,
+            count,
+            current_account,
+            pool.is_some_and(|pool| pool.is_bound(account_id)),
+        )
     })
+}
+
+/// 一条在途记录是否构成「直连出口被占用」
+///
+/// 当前账号只有自己这一条记录（`count <= 1`）时不算占用；已绑定 WARP 的
+/// 账号走的是出口池，同样不占直连
+fn zcode_direct_slot_taken(
+    account_id: &str,
+    provider: &str,
+    count: usize,
+    current_account: &str,
+    warp_bound: bool,
+) -> bool {
+    crate::server::core::account_store::is_zcode_family(provider)
+        && !(account_id == current_account && count <= 1)
+        && !warp_bound
+}
+
+#[cfg(test)]
+mod zcode_direct {
+    use super::{warp_enabled_for, zcode_direct_slot_taken};
+    use serde_json::json;
+
+    #[test]
+    fn only_zcode_family_enters_the_warp_branch() {
+        // 第二个请求改走 WARP 只针对 ZCode 国内 / 国际版
+        assert!(warp_enabled_for(Some(&json!({})), "zcode"));
+        assert!(warp_enabled_for(Some(&json!({})), "zcode-intl"));
+        assert!(!warp_enabled_for(Some(&json!({ "zcodeEgressPool": true })), "workbuddy"));
+        assert!(!warp_enabled_for(Some(&json!({ "zcodeEgressPool": true })), "autoclaw"));
+        // ZCode 账号自己关掉出口池时同样不进入
+        assert!(!warp_enabled_for(Some(&json!({ "zcodeEgressPool": false })), "zcode"));
+    }
+
+    #[test]
+    fn the_request_itself_does_not_block_the_direct_exit() {
+        // 容量准入先把本请求预占进连接计数，单请求必须仍判定为「直连空闲」
+        assert!(!zcode_direct_slot_taken("a", "zcode", 1, "a", false));
+        assert!(!zcode_direct_slot_taken("a", "zcode-intl", 1, "a", false));
+    }
+
+    #[test]
+    fn a_second_request_on_the_same_account_blocks_the_direct_exit() {
+        assert!(zcode_direct_slot_taken("a", "zcode", 2, "a", false));
+    }
+
+    #[test]
+    fn another_direct_account_blocks_but_bound_and_foreign_accounts_do_not() {
+        // 别的 ZCode 账号的直连请求占着出口
+        assert!(zcode_direct_slot_taken("b", "zcode", 1, "a", false));
+        // 已绑定 WARP 的账号不占直连
+        assert!(!zcode_direct_slot_taken("b", "zcode", 1, "a", true));
+        // 非 ZCode 家的在途与直连优先无关
+        assert!(!zcode_direct_slot_taken("b", "workbuddy", 3, "a", false));
+    }
 }

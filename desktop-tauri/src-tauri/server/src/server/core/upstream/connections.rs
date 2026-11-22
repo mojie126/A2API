@@ -67,13 +67,15 @@ impl Connections {
         entries
     }
 
-    /// 是否存在满足条件的在途账号（回调收到账号 id 与提供商）
+    /// 是否存在满足条件的在途账号（回调收到账号 id、提供商与该账号的在途数）
     ///
     /// 供「按提供商统计在途」一类判定使用（例如 ZCode 直连出口是否被占用）；
+    /// 带上在途数是因为调用方可能要把**自己**从判定里刨掉 —— 请求在容量准入
+    /// 阶段就已预占当前账号，只看「有在途」会把自身误判成「别人占着出口」，
     /// 与 [`Self::snapshot`] 一样只读一次锁
-    pub fn any_in_flight(&self, mut predicate: impl FnMut(&str, &str) -> bool) -> bool {
+    pub fn any_in_flight(&self, mut predicate: impl FnMut(&str, &str, usize) -> bool) -> bool {
         let guard = lock_counts(&self.inner);
-        guard.iter().any(|(id, entry)| predicate(id, &entry.provider))
+        guard.iter().any(|(id, entry)| predicate(id, &entry.provider, entry.count))
     }
 
     /// 计数 +1（空 id 是「没有账号」的转发，不计数）

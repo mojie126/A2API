@@ -223,6 +223,13 @@ IPv6：
 - 代理列按代理配置、代理池与设备清单版本重绘，后台自动刷新不重建下拉；余额查询的出网指纹同步纳入设备
 - 更新出网与模型目录刷新共用同一条出口解析，`/api/update/proxy` 也可保存 WARP 设备引用；自动维护页「模型目录更新」的代理列与账号页代理列使用同一套缓存与选项构造
 
+### 12.3 直连优先判定修复（2026-11-22）
+
+- 缺陷：容量准入 `account_admission::select` 在返回前已把当前请求预占进连接计数，`zcode_direct_in_flight` 未排除自身，每个首次 ZCode 请求都被判成「直连已被占用」而无条件切 WARP
+- 修复：`Connections::any_in_flight` 回调增加在途数，判定排除「当前账号且在途数 ≤ 1」，并补 `warp_enabled_for` 外层门控
+- 口径确认：第二个请求改走 WARP 只针对 ZCode 国内 / 国际版，其他提供商即使命中并发或 429 也不进入该分支
+- 验证：`cargo check --release -p agent2api-server` 与 `cargo test --release -p agent2api-server zcode_direct` 4 项通过
+
 ## 十三、实现进度
 
 | 项目 | 状态 | 说明 |
