@@ -50,7 +50,8 @@ pub struct RoutingProfile {
 
 impl RoutingProfile {
     pub fn scope(&self) -> RoutingProviderScope {
-        // 旧名单无法区分主动移除和后来新增，缺少范围标记时保留原有限制。
+        // 旧名单无法区分主动移除和后来新增，缺少范围标记时按指定名单处理，
+        // 名单外新出现的提供商由路由选路时自动纳入
         self.provider_scope.unwrap_or(RoutingProviderScope::Selected)
     }
 
@@ -107,7 +108,7 @@ pub(crate) fn from_raw(raw: &Map<String, Value>) -> Arc<RoutingProfiles> {
         .filter(|profile| validate_shape(profile).is_ok())
         // 旧版全局 selected 名单（历史快照，无法区分主动移除与后来新增）只保留
         // 启动时已登记的家：名单外的新提供商自动纳入，不再被旧名单静默排除。
-        // 模型独立配置是用户显式创建的，不受此处理影响。
+        // 模型独立配置不在加载时改写，名单外的新提供商由路由物化与选路时自动纳入。
         .map(|mut profile| {
             if profile.provider_scope.is_none() {
                 let known: HashSet<_> = profile.providers.iter().chain(profile.disabled_providers.iter()).cloned().collect();

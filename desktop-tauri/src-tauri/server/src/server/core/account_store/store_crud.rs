@@ -496,6 +496,11 @@ impl AccountStore {
         // 两者不必（也不该）嵌套（见 `invalidate_catpaw_sessions` 的说明）
         drop(_guard);
         self.invalidate_catpaw_sessions(id, &provider);
+        // 路由配置里的账号 id 与提供商引用同步清理（账号 id 按凭据确定生成，
+        // 不清理时重新添加会复用旧位置与排除状态）
+        crate::server::config::routing_workspace::prune_deleted_accounts(
+            self, &[(id.to_string(), provider)],
+        );
         Ok(())
     }
 

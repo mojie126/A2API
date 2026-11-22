@@ -40,7 +40,7 @@ export function RoutingConfigPanel({ editor, scope, now, accountControl, refresh
     editor.update(current => { const profile = structuredClone(current.profile); fn(profile, current.workspace); return { ...current, profile } })
   }, [editor])
   const drop = React.useCallback(({ kind, provider, id, target, after }: RoutingDrop) => mutate((profile, workspace) => {
-    if (kind === 'provider' && profile.providerScope === 'all') {
+    if (kind === 'provider') {
       for (const item of workspace.providers) if (!profile.providers.includes(item.id)) profile.providers.push(item.id)
     }
     if (kind === 'account') {
@@ -60,10 +60,12 @@ export function RoutingConfigPanel({ editor, scope, now, accountControl, refresh
   const label = (id: string) => workspace.providers.find(item => item.id === id)?.label || id
   const allProviders = [...new Set([...profile.providers, ...workspace.providers.map(provider => provider.id)])]
   const enabledProviders = new Set(workspace.accounts.filter(account => account.enabled !== false).map(providerOf))
+  // 模型独立路由不再按保存时的名单限制，新添加账号带来的家自动参与，明确移出的保持排除
+  const automatic = !globalAccounts && !inherited
   const included = (id: string) => globalAccounts ? enabledProviders.has(id)
-    : (profile.providerScope === 'all' || profile.providers.includes(id)) && !profile.disabledProviders.includes(id)
+    : automatic ? !profile.disabledProviders.includes(id)
+      : (profile.providerScope === 'all' || profile.providers.includes(id)) && !profile.disabledProviders.includes(id)
   const participating = allProviders.filter(included)
-  const excluded = allProviders.filter(id => !included(id))
   const participants = workspace.accounts.filter(account => globalAccounts ? account.enabled !== false
     : included(providerOf(account)) && !profile.excludedAccounts.includes(account.id))
   // 组内并发按参与本路由的账号计算，与后端候选集合同一口径（仅当前模型可用的提供商，含禁用账号）
@@ -115,7 +117,7 @@ export function RoutingConfigPanel({ editor, scope, now, accountControl, refresh
     if (!await confirmDialog(t('只移出本路由，账号状态和其他路由不变；保存后此入口将没有可用路由。'), {
       title: t('全部移出本路由'), confirmText: t('全部移出'),
     })) return
-    mutate(next => { next.providerScope = 'selected'; next.providers = allProviders; next.disabledProviders = [...allProviders] })
+    mutate(next => { next.providerScope = 'all'; next.providers = allProviders; next.disabledProviders = [...allProviders] })
   }
   const save = async () => {
     if (!globalAccounts && !participants.length && !await confirmDialog(t('此入口没有参与路由的账号。保存后请求将明确失败，不会回退全局或自动恢复参与名单。'), {
@@ -203,12 +205,8 @@ export function RoutingConfigPanel({ editor, scope, now, accountControl, refresh
               options={[...(scope ? [['__inherit', t('继承全局：{value}', { value: stickyLabel(workspace.globalSettings?.routingSticky) })] as [string, string]] : []),
                 ['auto', t('自动')], ['session', t('会话内')], ['turn', t('每轮')], ['off', t('关闭')]]}
               onChange={value => mutate(next => { next.sticky = value === '__inherit' ? undefined : value })} /></div>
-            {!globalAccounts ? <div className={scope ? 'routing-rule-field' : 'routing-rule-field routing-rule-wide'}><Label>{t('参与方式')}</Label><RoutingSelect label={t('参与方式')} value={profile.providerScope || 'all'} disabled={locked}
-              options={[['all', t('全部自动参与')], ['selected', t('仅加入的参与')]]} onChange={value => mutate(next => {
-                next.providerScope = value === 'all' ? 'all' : 'selected'; next.providers = allProviders; next.disabledProviders = excluded
-              })} /></div> : null}
           </div>
-          {!globalAccounts ? <p className='routing-config-note'>{profile.providerScope === 'all' ? t('新增提供商自动参与；移出本路由的不会自动加回。') : t('只有加入的提供商参与，新增提供商需要手动加入。')}</p> : null}
+          {!globalAccounts && !inherited ? <p className='routing-config-note'>{t('新增提供商自动参与；移出本路由的不会自动加回。')}</p> : null}
           {!globalAccounts && !inherited ? <div className='routing-config-rules routing-concurrency-rules'>
             <RoutingConcurrencyFields accounts={concurrencyAccounts} enabled={profile.concurrencyEnabled}
               total={profile.concurrency} strategy={profile.concurrencyStrategy} disabled={locked}

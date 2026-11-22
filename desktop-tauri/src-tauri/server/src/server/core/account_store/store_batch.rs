@@ -453,9 +453,11 @@ impl AccountStore {
         );
         // 落盘完成后作废这些账号的 CatPaw 会话映射（放锁，见本函数说明）
         drop(_guard);
-        for (id, provider) in removed_owners {
-            self.invalidate_catpaw_sessions(&id, &provider);
+        for (id, provider) in &removed_owners {
+            self.invalidate_catpaw_sessions(id, provider);
         }
+        // 与单账号删除同一口径：同步清理路由配置里的账号与提供商引用
+        crate::server::config::routing_workspace::prune_deleted_accounts(self, &removed_owners);
         Ok(json!({ "removed": removed, "failed": failed, "list": snapshot }))
     }
 }

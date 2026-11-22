@@ -4,6 +4,8 @@ import { shared, accountProviderAvailable } from './add-account-bridge'
 import { CUSTOM_PROVIDER } from './add-account-constants'
 import { CustomProviderBlock } from './add-custom-provider'
 import { AddAccountProxySection } from './add-account-proxy'
+import { ProviderBlock } from './add-provider-blocks'
+import { configOf } from './add-account-configs'
 import { DynamicProviderBlock } from './add-dynamic-provider'
 import { t } from '../i18n'
 
@@ -38,6 +40,15 @@ const AccountForm = React.memo(function AccountForm({ form, active, version, ava
     {t('该提供商当前不可用，请安装并启用对应插件后重试')}
   </AlertDescription></Alert></div>
   const label = t(shared().wbProviders?.labelOf?.(provider) || provider)
+  // AutoClaw 国际版的网页登录要先在主窗口跑完阿里云滑块才能换授权地址（见
+  // ui/autoclaw-oauth.js 的文件头），而通用动态登录只接受插件声明的表单与
+  // 浏览器跳转、没有「先跑验证码」这一步。这类内置表单继续走旧块，其余家
+  // 仍用动态块 —— 否则插件的 login.start 会回「请回到添加账号弹窗发起」，
+  // 用户在当前弹窗里无路可走
+  const builtin = configOf(provider)
+  if (builtin?.oauthLogin) {
+    return <ProviderBlock config={builtin} active={active} footerHost={footerHost} />
+  }
   return <DynamicProviderBlock provider={provider} label={label} active={active} preserveOnHide
     version={version} availability={availability} footerHost={footerHost} />
 })

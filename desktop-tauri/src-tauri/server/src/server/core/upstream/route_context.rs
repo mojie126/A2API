@@ -31,7 +31,10 @@ impl RequestRouting {
             .filter(|account| crate::server::core::account_store::store_view::account_visible(routing::provider_of(account)))
             .map(|account| account.as_ref().clone()).collect();
         let ordered = if let Some(profile) = profiles.model_profile(model) {
-            crate::server::core::routing_scope::project_accounts(&accounts, profile)
+            let mut profile = profile.clone();
+            crate::server::core::routing_scope::include_new_providers(&mut profile,
+                &crate::server::core::routing_scope::account_providers(&accounts));
+            crate::server::core::routing_scope::project_accounts(&accounts, &profile)
         } else {
             let sorting = account_order::sorting(&accounts, crate::server::logging::now_ms());
             account_order::ordered_accounts(&accounts, &sorting).into_iter().filter(|account| profiles.global.as_ref().map_or(true, |profile|
@@ -101,6 +104,9 @@ impl RequestRouting {
     pub fn providers(&self, available: Vec<String>) -> Vec<String> {
         if let Some(group) = &self.group { return group.profile().providers; }
         let Some(profile) = &self.profile else { return available };
+        let mut profile = profile.clone();
+        // 模型独立路由：新出现的家自动参与，明确停用的保持排除
+        if !self.scope.is_empty() { crate::server::core::routing_scope::include_new_providers(&mut profile, &available); }
         let mut ordered = if self.scope.is_empty() { available.clone() } else { profile.providers.clone() };
         if profile.scope() == config::RoutingProviderScope::All {
             for id in &available { if !ordered.contains(id) { ordered.push(id.clone()); } }

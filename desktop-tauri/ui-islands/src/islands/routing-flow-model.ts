@@ -48,12 +48,16 @@ export function matchesSelection(path: FlowPath, selection: FlowSelection): bool
 export const sumPaths = (paths: FlowPath[], key: 'requests' | 'running' | 'sessions' | 'stickyHits') => paths.reduce((sum, path) => sum + path[key], 0)
 export function accountParticipation(workspace: RoutingWorkspace, account: AccountRecord): boolean {
   const profile = workspace.profile, provider = providerOf(account)
-  return (profile.providerScope === 'all' || profile.providers.includes(provider))
+  // 模型独立路由按自动参与判定，新添加账号带来的家无需再手动加入
+  const automatic = Boolean(workspace.model) && workspace.customized
+  return (automatic || profile.providerScope === 'all' || profile.providers.includes(provider))
     && !profile.disabledProviders.includes(provider) && !profile.excludedAccounts.includes(account.id)
 }
 export function providerFlowReason(workspace: RoutingWorkspace, provider: string): string {
   const profile = workspace.profile
-  if (profile.disabledProviders.includes(provider) || profile.providerScope !== 'all' && !profile.providers.includes(provider)) return t('当前配置已排除')
+  const automatic = Boolean(workspace.model) && workspace.customized
+  if (profile.disabledProviders.includes(provider)
+    || (!automatic && profile.providerScope !== 'all' && !profile.providers.includes(provider))) return t('当前配置已排除')
   if (workspace.providers.find(item => item.id === provider)?.available === false) return t('模型绑定不可用')
   const accounts = workspace.accounts.filter(account => providerOf(account) === provider)
   if (!accounts.length) return t('没有参与路由的账号')

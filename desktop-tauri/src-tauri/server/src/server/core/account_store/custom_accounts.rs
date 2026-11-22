@@ -374,14 +374,18 @@ impl AccountStore {
         let provider_id = provider_id.trim();
         let _guard = self.guard();
         let records = self.with_conn(&_guard, |conn| sql::load_by_provider(conn, provider_id))?;
-        let mut removed = 0usize;
+        let mut removed: Vec<(String, String)> = Vec::new();
         for record in &records {
             let deleted = self.with_conn(&_guard, |conn| sql::delete(conn, record.id()))?;
             if deleted {
-                removed += 1;
+                removed.push((record.id().to_string(), record.provider()));
             }
         }
-        Ok(removed)
+        let count = removed.len();
+        // 与单账号删除同一口径：放锁后清理路由配置里的账号与提供商引用
+        drop(_guard);
+        crate::server::config::routing_workspace::prune_deleted_accounts(self, &removed);
+        Ok(count)
     }
 
     /// 把该提供商名下**等于给定地址**的账号级覆盖项清掉，返回被清理的账号名。

@@ -263,6 +263,8 @@ function DynamicForm({ provider, label, source, onAdded, active, footerHost }: D
       parsed.methods = parsed.methods.filter(method => !method.desktopOnly)
       if (provider === 'trae') parsed.methods = parsed.methods.filter(method => method.type !== 'oauth')
       if (provider === 'deepseek-web') parsed.methods = parsed.methods.filter(method => method.type !== 'oauth')
+      // AutoClaw 国际版的 OAuth 要先在主窗口跑阿里云滑块，手机端没有这一段
+      if (provider === 'autoclaw-intl') parsed.methods = parsed.methods.filter(method => method.type !== 'oauth')
       setMethods(parsed)
     }).catch(failure => {
       if (controller.signal.aborted) return

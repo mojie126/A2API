@@ -163,15 +163,13 @@ export function useRoutingEditor(onSaved: () => void) {
       profile.concurrencyEnabled = undefined
       profile.concurrency = undefined
       profile.concurrencyStrategy = undefined
-      // 新独立配置沿用当前生效的参与方式；没有显式配置时默认全部自动参与。
-      if (!profile.providerScope) profile.providerScope = 'all'
-      if (profile.providerScope === 'selected') profile.disabledProviders = profile.disabledProviders.filter(id => profile.providers.includes(id))
+      // 新独立配置统一按自动参与保存，新添加账号带来的家也会自动参与，
+      // 明确停用的保持排除
+      profile.providerScope = 'all'
+      profile.disabledProviders = profile.disabledProviders.filter(id => profile.providers.includes(id))
       profile.excludedAccounts = profile.excludedAccounts.filter(id => workspace.accounts.some(account => account.id === id))
       for (const provider of workspace.providers) {
-        if (!profile.providers.includes(provider.id)) {
-          profile.providers.push(provider.id)
-          if (profile.providerScope === 'selected') profile.disabledProviders.push(provider.id)
-        }
+        if (!profile.providers.includes(provider.id)) profile.providers.push(provider.id)
         if (!profile.accountOrder[provider.id]) {
           profile.accountOrder[provider.id] = workspace.accounts.filter(account => account.provider === provider.id)
             .sort((left, right) => Number(left.priority) - Number(right.priority)).map(account => account.id)

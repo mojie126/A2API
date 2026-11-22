@@ -1,6 +1,6 @@
 pub(crate) mod global_accounts;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -12,6 +12,67 @@ use crate::server::core::{account_order, account_store::store::AccountStore, rou
 pub fn revision(profile: &RoutingProfile, settings: super::RoutingSettings, customized: bool) -> String {
     let value = json!({ "profile": profile, "strategy": settings.strategy.as_str(), "sticky": settings.sticky.as_str(), "customized": customized });
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
+}
+
+/// 清理删除账号在路由配置中的引用
+///
+/// 账号 id 从排除名单与账号顺序移除，提供商没有剩余账号时从参与名单与停用名单移除，
+/// 路由组的成员账号同步移除，账号 id 按凭据确定生成，不清理时重新添加会复用旧位置与排除状态
+pub fn prune_deleted_accounts(store: &AccountStore, removed: &[(String, String)]) {
+    if removed.is_empty() { return; }
+    let deleted: HashSet<&str> = removed.iter().map(|(id, _)| id.as_str()).collect();
+    let affected: HashSet<&str> = removed.iter().map(|(_, provider)| provider.as_str()).collect();
+    // 读一次剩余账号：只把已经没有任何账号的家从路由名单移除，插件暂时未加载不在此列
+    let remaining: HashSet<String> = routing::accounts_of(&store.list_accounts()).into_iter()
+        .map(|account| routing::provider_of(&account).to_string()).collect();
+    let gone: HashSet<String> = affected.iter()
+        .filter(|provider| !remaining.contains(**provider)).map(|provider| provider.to_string()).collect();
+    let mut pruned = false;
+    let saved = super::update(|config: &mut super::RuntimeConfig| {
+        let mut profiles = (*config.routing_profiles).clone();
+        let mut changed = false;
+        if let Some(profile) = profiles.global.as_mut() { changed |= prune_profile(profile, &deleted, &gone); }
+        for profile in profiles.models.values_mut() { changed |= prune_profile(profile, &deleted, &gone); }
+        for group in profiles.groups.values_mut() {
+            for member in &mut group.members {
+                let before = member.accounts.len();
+                member.accounts.retain(|id| !deleted.contains(id.as_str()));
+                changed |= member.accounts.len() != before;
+            }
+        }
+        if !changed { return; }
+        pruned = true;
+        match serde_json::to_value(&profiles) {
+            Ok(value) => {
+                config.raw.insert(super::KEY_ROUTING_PROFILES.to_string(), value);
+                config.routing_profiles = Arc::new(profiles);
+            }
+            Err(error) => crate::server::logging::log("[Routing]", &format!("清理删除账号的路由引用序列化失败: {error}")),
+        }
+    });
+    if saved && pruned {
+        crate::server::logging::log("[Routing]", &format!("已清理 {} 个删除账号在路由配置中的引用", removed.len()));
+    }
+}
+
+fn prune_profile(profile: &mut RoutingProfile, deleted: &HashSet<&str>, gone: &HashSet<String>) -> bool {
+    let mut changed = false;
+    let before = profile.excluded_accounts.len();
+    profile.excluded_accounts.retain(|id| !deleted.contains(id.as_str()));
+    changed |= profile.excluded_accounts.len() != before;
+    for ids in profile.account_order.values_mut() {
+        let before = ids.len();
+        ids.retain(|id| !deleted.contains(id.as_str()));
+        changed |= ids.len() != before;
+    }
+    if !gone.is_empty() {
+        let before = (profile.providers.len(), profile.disabled_providers.len(), profile.account_order.len());
+        profile.providers.retain(|provider| !gone.contains(provider));
+        profile.disabled_providers.retain(|provider| !gone.contains(provider));
+        profile.account_order.retain(|provider, _| !gone.contains(provider));
+        changed |= before != (profile.providers.len(), profile.disabled_providers.len(), profile.account_order.len());
+    }
+    changed
 }
 
 pub fn save_workspace(
@@ -102,4 +163,49 @@ pub fn save_workspace(
     drop(guard);
     crate::server::core::cloud_sync::auto_sync::notify_change();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prune_profile;
+    use crate::server::config::{RoutingProfile, RoutingProviderScope};
+    use std::collections::{BTreeMap, HashSet};
+
+    fn profile() -> RoutingProfile {
+        RoutingProfile {
+            provider_scope: Some(RoutingProviderScope::Selected),
+            providers: vec!["alpha".into(), "beta".into()],
+            disabled_providers: vec!["beta".into()],
+            account_order: BTreeMap::from([
+                ("alpha".to_string(), vec!["a1".to_string(), "a2".to_string()]),
+                ("beta".to_string(), vec!["b1".to_string()]),
+            ]),
+            excluded_accounts: vec!["a2".into(), "b1".into()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn prune_removes_deleted_accounts_and_empty_providers() {
+        let mut profile = profile();
+        let deleted: HashSet<&str> = ["a2", "b1"].into_iter().collect();
+        let gone: HashSet<String> = ["beta".to_string()].into_iter().collect();
+        assert!(prune_profile(&mut profile, &deleted, &gone));
+        assert_eq!(profile.providers, vec!["alpha"]);
+        assert!(profile.disabled_providers.is_empty());
+        assert_eq!(profile.account_order.get("alpha"), Some(&vec!["a1".to_string()]));
+        assert!(!profile.account_order.contains_key("beta"));
+        assert!(profile.excluded_accounts.is_empty());
+        assert!(!prune_profile(&mut profile, &deleted, &gone));
+    }
+
+    #[test]
+    fn prune_keeps_providers_that_still_have_accounts() {
+        let mut profile = profile();
+        let deleted: HashSet<&str> = ["a1"].into_iter().collect();
+        assert!(prune_profile(&mut profile, &deleted, &HashSet::new()));
+        assert_eq!(profile.providers, vec!["alpha", "beta"]);
+        assert_eq!(profile.disabled_providers, vec!["beta"]);
+        assert_eq!(profile.account_order.get("alpha"), Some(&vec!["a2".to_string()]));
+    }
 }
