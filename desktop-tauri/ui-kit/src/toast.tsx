@@ -22,8 +22,8 @@ function ToastDescription({ className, ...props }: BaseToast.Description.Props) 
 }
 
 function Toast({ className, ...props }: BaseToast.Root.Props) {
-  return <BaseToast.Root data-slot='toast' className={cn(
-    'pointer-events-auto max-w-full rounded-lg border border-border bg-raised px-4 py-2.5 text-[12.5px] text-foreground shadow-3 outline-none',
+  return <BaseToast.Root data-slot='toast' swipeDirection={[]} className={cn(
+    'pointer-events-auto max-w-full select-text rounded-lg border border-border bg-raised px-4 py-2.5 text-[12.5px] text-foreground shadow-3 outline-none',
     'data-[type=success]:border-success-bd data-[type=success]:text-success',
     'data-[type=error]:border-destructive-bd data-[type=error]:text-destructive',
     'data-[type=warning]:border-warning-bd data-[type=warning]:text-warning',
@@ -49,7 +49,9 @@ function Toaster({ manager = toastManager, position = 'top-center', className }:
     <BaseToast.Portal>
       <BaseToast.Viewport data-slot='toast-viewport' className={cn(
         'pointer-events-none fixed left-1/2 z-[100] flex w-max max-w-[84vw] -translate-x-1/2 flex-col items-center gap-2 outline-none',
-        position === 'top-center' ? 'top-4' : 'bottom-[calc(78px+env(safe-area-inset-bottom,0px))]',
+        // 顶部让开 32px 标题栏：标题栏是 data-tauri-drag-region，提示条压在它上面
+        // 时鼠标按下会变成拖动窗口，既拖不走文字也选不中
+        position === 'top-center' ? 'top-12' : 'bottom-[calc(78px+env(safe-area-inset-bottom,0px))]',
         className,
       )}>
         <ToastList />

@@ -67,10 +67,19 @@ const SCOPED_RUNTIME_IDS: [&str; 3] = [
 ///
 /// 订阅身份不向插件开放。Claude、ChatGPT、Codex 由本体执行；
 /// Copilot 与 Gemini 的订阅身份仍保留在停用名单中。
-const SUSPENDED_IDS: [&str; 3] = [
+///
+/// ── AutoClaw 国际版为什么停用（2026-11-23）────────────────────
+/// 它的网页登录整条链在上游被拒：授权页与回调都正常拿到授权码（实测
+/// `stateMatch` 与 `deviceHash` 均吻合），但换码恒定返回 631001。补
+/// `Origin`/`Referer`、换客户端版本号、走代理或直连、固定 device_id 均无
+/// 改善，且该码对空 code 与伪造 code 同样返回，判定上游已停止对 AutoClaw
+/// 签发国际版授权，与本地实现、代理、设备标识都无关。因此本家不再提供
+/// 添加入口与调用，存量账号与稳定身份保留（与 Kiro 移入停用名单前同一处置）。
+const SUSPENDED_IDS: [&str; 4] = [
     "qwenwork-enterprise",
     "copilot-subscription",
     "gemini-subscription",
+    "autoclaw-intl",
 ];
 
 /// 本家是不是「千问办公」那一族（国内版 / 国际版 / 企业版）。
