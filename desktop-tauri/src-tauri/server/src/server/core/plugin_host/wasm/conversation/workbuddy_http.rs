@@ -29,23 +29,12 @@ const PATH: &str = "/v2/chat/completions";
 const ORIGINS: [&str; 3] = [
     "https://www.workbuddy.cn", "https://copilot.tencent.com", "https://wb.tencentbuddy.com",
 ];
-const MAX_BODY: usize = 8 * 1024 * 1024;
+/// 正文上限：官方 3.5.1 把国内版提到 14 MiB（分片正文通道与大上下文会话需要），
+/// 条目数不再单独设限，改由这里的字节上限与节点上限共同约束。
+pub(in crate::server::core::plugin_host) const MAX_BODY: usize = 14 * 1024 * 1024;
 const MAX_ENCODED: usize = ((MAX_BODY + 2) / 3) * 4;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_NODES: usize = 65_536;
-/// 消息条数上限。
-///
-/// 官方 beta.2 起 WorkBuddy 国内对话走 WASM 插件的这条固定投递路线，原实现
-/// 把条数卡在 512，超限时返回 `bad_params` → 网关 400。而长会话很容易超过这个
-/// 数（实测修复前 514 条即失败，与内容长度、字节数、节点数都无关），表现为
-/// 「没有任何提示的 400」。
-///
-/// 放到 2048 而非无限：覆盖实测观察到的最大规模（967 条），并仍落在两道更早
-/// 生效的护栏之内 —— 请求体 `MAX_BODY` 8 MiB（约 2700 条到顶）与 `MAX_NODES`
-/// 65536（约 8000 条到顶），2048 不会先撞上它们，也不是无限放行。
-///
-/// 上游若后续自行放宽，应撤掉这里回到上游行为（见 docs 的 2026-11-20 补记）。
-const MAX_MESSAGES: usize = 2048;
 
 struct Binding {
     signal: Arc<Signal>,
@@ -180,7 +169,7 @@ fn prepare(context: &Context, params: &Value, deadline: script::HttpDeadline) ->
         crate::server::config::timeout_settings().headers_ms().clamp(1000, 600_000)));
     headers_deadline.check()?;
     deadline.check()?;
-    let material = material(params, url)?;
+    let material = material(context, params, url)?;
     let call = context.conversation.as_ref().ok_or_else(unavailable)?;
     let cancel = context.sink.as_ref().ok_or_else(unavailable)?.cancel.clone();
     if call.provider != PROVIDER || call.account.is_empty() || call.account != context.account
@@ -288,10 +277,10 @@ fn route(context: &Context, params: &Value) -> Result<Option<String>, proto::Wir
     Ok(Some(raw.to_string()))
 }
 
-fn material(params: &Value, url: String) -> Result<Material, proto::WireError> {
+fn material(context: &Context, params: &Value, url: String) -> Result<Material, proto::WireError> {
     let object = params.as_object().ok_or_else(invalid)?;
     if object.keys().any(|key| !matches!(key.as_str(),
-        "method" | "url" | "headers" | "body" | "timeout_ms" | "id" | "provider" | "proxy" | "trace" | "max_chunk")) {
+        "method" | "url" | "headers" | "body" | "body_resource" | "timeout_ms" | "id" | "provider" | "proxy" | "trace" | "max_chunk")) {
         return Err(invalid());
     }
     if params["provider"] != PROVIDER || params["max_chunk"].as_u64() != Some(64 * 1024) { return Err(invalid()); }
@@ -324,22 +313,50 @@ fn material(params: &Value, url: String) -> Result<Material, proto::WireError> {
             .is_some_and(|value| value.strip_prefix("Bearer ").is_some_and(|token| !token.is_empty() && !token.chars().any(char::is_whitespace))) {
         return Err(invalid());
     }
-    let encoded = params["body"].as_str().filter(|body| !body.is_empty() && body.len() <= MAX_ENCODED).ok_or_else(invalid)?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| invalid())?;
-    if bytes.is_empty() || bytes.len() > MAX_BODY || base64::engine::general_purpose::STANDARD.encode(&bytes) != encoded {
-        return Err(invalid());
-    }
+    let bytes = body_bytes(context, params)?;
     let value: Value = crate::server::core::plugin_host::wasm::managed_task::declaration::parse_object(&bytes, MAX_BODY)
         .map_err(|_| invalid())?;
     let mut nodes = 0;
     shape(&value, 0, &mut nodes)?;
-    if value["stream"] != true || !value["messages"].as_array().is_some_and(|rows| !rows.is_empty() && rows.len() <= MAX_MESSAGES)
+    if value["stream"] != true || !value["messages"].as_array().is_some_and(|rows| !rows.is_empty())
         || !value["model"].as_str().is_some_and(|model| !model.trim().is_empty() && model.len() <= 1024 && !model.chars().any(char::is_control)) {
         return Err(invalid());
     }
     let params = json!({ "method": "POST", "url": url, "headers": wire_headers, "id": id,
         "provider": PROVIDER, "trace": trace, "max_chunk": 64 * 1024 });
-    Ok(Material { params, bytes: Bytes::from(bytes), headers, url })
+    Ok(Material { params, bytes, headers, url })
+}
+
+/// 取这一轮的请求正文：优先用插件上传的资源通道（大上下文），否则用内联 base64
+fn body_bytes(context: &Context, params: &Value) -> Result<Bytes, proto::WireError> {
+    let raw = params.get("body").filter(|value| !value.is_null());
+    let resource = params.get("body_resource").filter(|value| !value.is_null());
+    match (raw, resource) {
+        (Some(raw), None) => {
+            let encoded = raw.as_str().filter(|body| !body.is_empty() && body.len() <= MAX_ENCODED).ok_or_else(invalid)?;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| invalid())?;
+            if bytes.is_empty() || bytes.len() > MAX_BODY || base64::engine::general_purpose::STANDARD.encode(&bytes) != encoded {
+                return Err(invalid());
+            }
+            Ok(Bytes::from(bytes))
+        }
+        (None, Some(resource)) => {
+            context.permission("resources.v1")?;
+            let id = resource.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+            let bytes = context.blobs.raw(id).map_err(|_| invalid())?;
+            if bytes.is_empty() {
+                return Err(invalid());
+            }
+            if bytes.len() > MAX_BODY {
+                return Err(proto::WireError::with_code(
+                    format!("请求正文超过 {} MiB 的受控上限，请缩小上下文或图片后重试", MAX_BODY / (1024 * 1024)),
+                    "plugin_request_too_large",
+                ));
+            }
+            Ok(bytes)
+        }
+        _ => Err(invalid()),
+    }
 }
 
 fn shape(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), proto::WireError> {

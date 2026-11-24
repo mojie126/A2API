@@ -59,11 +59,39 @@ pub struct Registry {
     pub identities: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
+impl Package {
+    /// 单提供商脚本包的唯一 provider id；多提供商包返回 None
+    pub(super) fn single_provider_id(&self) -> Option<&str> {
+        match self.providers.as_slice() {
+            [provider] => Some(provider.as_str()),
+            _ => None,
+        }
+    }
+
+    /// 单提供商包的启停以包级 `enabled` 为唯一真相：历史数据里「包启用、唯一提供商停用」
+    /// 折合为包停用并恢复该项标记，避免打开包开关后被隐藏的子开关卡住
+    pub(super) fn normalize_single_provider(&mut self) {
+        let Some(provider_id) = self.single_provider_id().map(str::to_string) else {
+            return;
+        };
+        if self.disabled_providers.iter().any(|id| id == &provider_id) {
+            self.enabled = false;
+            self.disabled_providers.retain(|id| id != &provider_id);
+        }
+    }
+}
+
 pub fn read() -> Result<Registry, String> {
     let path = super::root().join("registry.json");
     match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|_| "脚本插件登记信息损坏，未用空清单覆盖".into()),
+        Ok(bytes) => {
+            let mut registry: Registry = serde_json::from_slice(&bytes)
+                .map_err(|_| "脚本插件登记信息损坏，未用空清单覆盖")?;
+            for package in &mut registry.packages {
+                package.normalize_single_provider();
+            }
+            Ok(registry)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Registry::default()),
         Err(error) => Err(format!("读取脚本插件登记信息失败：{error}")),
     }

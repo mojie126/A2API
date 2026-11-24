@@ -57,6 +57,7 @@ impl Db {
 
     /// 只为原固定存储路径外持COMMIT事实；不是新来源或可重复使用的提交许可。
     /// commit须在调用方catch_unwind外持有，已非None时不进连接、不执行action、不改写事实。
+    #[track_caller]
     pub(crate) fn codearts_slot_transaction_with_fact<T, E>(
         &self,
         source: &CredentialSource,
@@ -66,6 +67,9 @@ impl Db {
         if commit.is_some() {
             return unavailable();
         }
+        let Some(_reentrant_guard) = super::ThreadLockGuard::enter(&self.inner) else {
+            return unavailable();
+        };
         let state = match self.inner.conn.lock() {
             Ok(state) => state,
             Err(_) => return unavailable(),

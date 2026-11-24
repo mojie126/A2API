@@ -52,6 +52,20 @@ pub const STATUS_SKIPPED: &str = "skipped";
 /// 尝试刷新但失败（结果里带可读的 `message`）
 pub const STATUS_FAILED: &str = "failed";
 
+/// 临期提前量的缓冲：与本轮维护间隔相加，得到传给适配器的最小提前量
+pub const MAINTENANCE_BUFFER_MS: i64 = 5 * 60_000;
+
+/// 本轮凭证维护要求的最小临期提前量（毫秒）：维护间隔 + 5 分钟缓冲
+pub fn maintenance_lead_ms() -> i64 {
+    let minutes = crate::server::config::scheduled_settings()
+        .credential_maintenance
+        .interval
+        .max(1);
+    minutes
+        .saturating_mul(60_000)
+        .saturating_add(MAINTENANCE_BUFFER_MS)
+}
+
 /// 周期维护的**默认**间隔说明：10 分钟。
 ///
 /// 为什么默认是 10 分钟（而不是更密）：三家的临期窗口是 2~5 分钟，10 分钟的间隔
@@ -165,6 +179,9 @@ pub async fn refresh_accounts(store: &AccountStore, selected: Option<&[String]>,
     // 于是返回顺序与账号列表一致，而不是「先一堆跳过、后面才是刷新的」。
     // 界面上逐条对照时，顺序一致省掉一次按 id 重排。
     let mut slots: Vec<Option<Value>> = vec![None; accounts.len()];
+    // 提前量：维护间隔 + 5 分钟缓冲。各家自带的临期窗口只有 3～5 分钟，只按自带窗口
+    // 判定时，默认 10 分钟间隔下经常上一轮因还剩 6～10 分钟跳过、下一轮到点已过期
+    let min_lead_ms = maintenance_lead_ms();
     // 待刷新项带着适配器本身（而不是 `ProviderKind`）：插件家没有枚举值，
     // 而这里已经查过一次表，再查一次是白费
     let mut pending: Vec<(usize, String, String, std::sync::Arc<dyn crate::server::core::providers::adapter::ProviderAdapter>)> =
@@ -207,10 +224,26 @@ pub async fn refresh_accounts(store: &AccountStore, selected: Option<&[String]>,
             ));
             continue;
         }
-        // 判不出来（没有过期信息 / 账号不存在 / 没有 refreshToken）一律 false
-        if !forced.iter().any(|account_id| account_id == &id) && !adapter.credentials_expiring_async(store, &id).await {
-            slots[index] = Some(skipped(&id, provider, "凭证未过期或临期"));
-            continue;
+        // 判不出来（没有过期信息 / 账号不存在 / 没有 refreshToken）一律 false；
+        // 检查失败不表示未到期，记成失败而不是静默跳过
+        if !forced.iter().any(|account_id| account_id == &id) {
+            match adapter.check_credentials_expiring_within(store, &id, min_lead_ms).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    slots[index] = Some(skipped(&id, provider, "凭证未过期或临期"));
+                    continue;
+                }
+                Err(error) => {
+                    slots[index] = Some(json!({
+                        "id": id,
+                        "provider": provider,
+                        "status": STATUS_FAILED,
+                        "message": crate::server::core::maintenance::types::safe_message(&error.message),
+                        "code": error.code,
+                    }));
+                    continue;
+                }
+            }
         }
         pending.push((index, id, provider.to_string(), adapter));
     }

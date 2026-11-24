@@ -161,14 +161,23 @@ pub fn change(
         "reload" => {
             if !package.enabled { return Err("插件已停用，请先启用后再重新加载".into()); }
         }
-        "enable" => package.enabled = enabled.ok_or("缺少启停状态")?,
+        "enable" => {
+            package.enabled = enabled.ok_or("缺少启停状态")?;
+            if let Some(provider_id) = package.single_provider_id().map(str::to_string) {
+                package.disabled_providers.retain(|id| id != &provider_id);
+            }
+        }
         "checkin" => return Err("签到及附带任务已默认允许，请在签到中心管理执行计划".into()),
         "provider" => {
             let provider = provider
                 .filter(|provider| package.providers.contains(provider))
                 .ok_or("提供商不属于该脚本插件")?;
+            let enabled = enabled.ok_or("缺少启停状态")?;
             package.disabled_providers.retain(|id| id != &provider);
-            if !enabled.ok_or("缺少启停状态")? {
+            if package.single_provider_id() == Some(provider.as_str()) {
+                // 单提供商包：启停落包级开关，子开关保持启用
+                package.enabled = enabled;
+            } else if !enabled {
                 package.disabled_providers.push(provider);
             }
         }

@@ -122,9 +122,12 @@ impl AccountChange<'_> {
 impl Db {
     /// CodeArts首次登记只捕获此Db当前私有代次；不读账号/kv、不写版本、不接任意action。
     /// 只有同一实际连接已收尾且可用才交付，不能从路径、账号ID、JSON或摘要重建。
+    #[track_caller]
     pub(crate) fn capture_codearts_enrollment_source(
         &self,
     ) -> Result<CredentialSource, CredentialSourceError> {
+        let _reentrant_guard =
+            super::ThreadLockGuard::enter(&self.inner).ok_or(CredentialSourceError::Unavailable)?;
         let state = self
             .inner
             .conn
@@ -147,10 +150,13 @@ impl Db {
 
     /// 新来源只伴随成功的真实读取返回；调用者负责有界SQL事务与COMMIT事实。
     /// 此对象本身不能构造ReadStamp，也没有重写账号或出网的能力。
+    #[track_caller]
     pub(crate) fn prepare_credential_source<T, E>(
         &self,
         action: impl FnOnce(&mut Connection) -> Result<T, E>,
     ) -> Result<Result<(T, CredentialSource), E>, CredentialSourceError> {
+        let _reentrant_guard =
+            super::ThreadLockGuard::enter(&self.inner).ok_or(CredentialSourceError::Unavailable)?;
         let mut state = self
             .inner
             .conn
@@ -182,11 +188,14 @@ impl Db {
     }
 
     /// 只接受原读取携带的来源；检查到SQL事务结束始终持同一conn锁，不换新来源补救。
+    #[track_caller]
     pub(crate) fn commit_credential_source<T, E>(
         &self,
         source: &CredentialSource,
         action: impl FnOnce(&mut Connection) -> Result<T, E>,
     ) -> Result<Result<T, E>, CredentialSourceError> {
+        let _reentrant_guard =
+            super::ThreadLockGuard::enter(&self.inner).ok_or(CredentialSourceError::Unavailable)?;
         let mut state = self
             .inner
             .conn
@@ -214,10 +223,12 @@ impl Db {
     }
 
     /// 恢复/云同步/旧账号导入的共同锁入口；不接自由Connection，不取得账号或配置锁。
+    #[track_caller]
     pub(crate) fn with_account_change<T>(
         &self,
         action: impl FnOnce(&mut AccountChange<'_>) -> T,
     ) -> Option<T> {
+        let _reentrant_guard = super::ThreadLockGuard::enter(&self.inner)?;
         let mut state = self.inner.conn.lock().ok()?;
         if self.inner.task_guard_unusable.load(Ordering::Acquire) {
             return None;

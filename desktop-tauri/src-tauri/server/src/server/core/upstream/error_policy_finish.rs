@@ -1,11 +1,35 @@
 use serde_json::json;
 
 use crate::server::config::error_policy::ErrorKind;
+use crate::server::core::account_store::AccountStore;
 use crate::server::errors::GatewayError;
 use crate::server::logging;
 
 use super::{error_policy, rotate, RouteTarget, UpstreamService};
 use super::payload::ProviderContext;
+
+/// 把「挂起」与「冷却」落库，两者互相独立，同一账号可以既挂起又进入冷却
+pub(super) fn persist_account_action(
+    store: &AccountStore,
+    account_id: &str,
+    suspend: bool,
+    cooldown_until: Option<i64>,
+    reason: &str,
+) {
+    if account_id.is_empty() {
+        return;
+    }
+    if suspend {
+        if let Err(error) = crate::server::core::blocking::in_place(|| store.suspend_upstream_account(account_id, reason)) {
+            logging::log_with_level("[Upstream]", &format!("标记上游账号挂起失败 ({account_id}): {error}"), "warn");
+        }
+    }
+    if let Some(until) = cooldown_until {
+        if let Err(error) = crate::server::core::blocking::in_place(|| store.cooldown_upstream_account(account_id, until, reason)) {
+            logging::log_with_level("[Upstream]", &format!("记录上游账号冷却失败 ({account_id}): {error}"), "warn");
+        }
+    }
+}
 
 pub(super) fn finish_failure(service: &UpstreamService, ctx: &ProviderContext<'_>, providers: &[&str], keys: &rotate::CooldownKeys<'_>,
     target: &RouteTarget, error: &mut GatewayError, tried: &mut Vec<String>, switches_left: &mut usize, switch_total: usize) -> bool {

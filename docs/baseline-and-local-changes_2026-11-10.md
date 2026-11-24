@@ -665,6 +665,25 @@
 - 复盘：本 fork 相比上游的本地增强全部保留——「上游身份」列背后的 UA 采集（`note_outbound_identity`）、客户端归属改写标记、请求日志悬停面板暂停、图片兼容标识、特殊路由切换清空选中态、WebDAV 恢复本地优先、WARP 出口与直连优先等均未触碰；上游删除该列仅因其占宽变形，本轮以「并入提示列悬停」的方式满足同一目标且不丢调试信息
 - 验证：服务端 `cargo check --release -p agent2api-server` 通过；页面岛 `tsc --noEmit` 无错误；`scan.mjs --check` 缺失键 0；词典重建与 `vite build` 通过
 
+### 2026-11-24（同步跟进上游 3.5.1 第一批：可靠性与插件启停）
+
+按「2026-11-24 上游 3.5.1 跟进调查」的第一优先逐条手动合并，官方同方案更优的直接采用：
+
+- 数据库连接锁防重入（`00bfca65`）：`db/mod.rs` 新增线程本地持有栈 `ThreadLockGuard`，`with` / `with_mut` / `prepare_credential_source` / `commit_credential_source` / `with_account_change` / `plugin_state_transaction` 与本地新增的 `capture_codearts_enrollment_source`、`codearts_slot_transaction_with_fact` 共八处取锁入口拦截同线程嵌套；测试环境直接 panic 暴露调用点、生产环境安全降级返回 `None`。新增 `reentrancy_tests` 两条用例钉住「降级不死锁」与「严格模式报警」
+- 挂起与冷却同时落库（`a4ea2c11`）：新增 `error_policy_finish::persist_account_action`，`plugin_forward` 与 `provider_loop` 原先的 `if suspend … else if stop` 互斥改为两者分别落库，失败原因写英文 warn 日志
+- WorkBuddy 与 CatPaw 取消固定消息条数上限（`a6b551c7`、`c18c34ab`）：WorkBuddy 正文上限由 8 MiB 提到 14 MiB，新增 `body_resource` 正文通道（`resources.v1` 权限，超限返回 `plugin_request_too_large`），去掉「2048 条」与「512 条」两处本地补丁；CatPaw 去掉输入、历史、投影与正文校验里的 512 条限制，改由体积与节点上限约束，并在 `registry::prepare` 用「关联 ID 数不超过原始消息数」防按外部数字预分配内存
+- 单提供商插件启停归一（`a4ea2c11`）：原生包与脚本包都新增 `single_provider_id` / `normalize_single_provider`，注册表读入、包级启停、提供商级启停与安装落盘统一把「包启用、唯一提供商停用」折合为包停用，避免打开包开关后被隐藏子开关卡住
+- 凭证维护动态提前量（`d20e8501`）：新增 `maintenance_lead_ms`（维护间隔 + 5 分钟缓冲）与适配器 `credentials_expiring_within` / `check_credentials_expiring` / `check_credentials_expiring_within`，插件侧通过 `minLeadMs` 参数传入；维护检查失败记成失败结果而不是静默跳过。本地 `refresh_advanced` 的「无有效期账号不判指纹」豁免完整保留
+- 余额多窗口排序与短窗归零（`a4ea2c11`）：`ratio_of` 按「分组首次出现位置 + 5h/daily/weekly/monthly 顺序」重排，周/月额度耗尽且该分组没有可读短窗时按 0 计；补两条单测
+
+未跟进并保留本地现状（理由）：
+
+- 脚本插件更新缓存同步（`a4ea2c11`、`d98f21f6`）：本 fork 的更新检查在安装/更新收尾走 `updates::wake(true)` 整轮强制重算，结果正确只是比官方的单条写入重；目录缓存与本 fork 的 fork 仓库源结构不同，整体替换收益不足
+- 错误处理默认值（换号 5→32、`MAX_SWITCHES=100`、`Deprioritize` 与规则 v1→v2 迁移）、会话粘滞失败解绑、选路排队候选：属第三优先，依赖整套错误策略迁移，留待单独评估
+- 请求日志轻量列表与事件驱动、静态资源分档缓存、模型元数据预热、签到复合索引：第二优先性能项，单独安排
+
+验证：`cargo check --release -p agent2api-server --all-targets` 零告警；`cargo test --release -p agent2api-server --lib` 492 通过 / 11 忽略 / 0 失败（新增 4 条用例）
+
 ## 后续同步官方更新
 
 1. 在 `main` 执行 `git fetch origin --prune` 并快进到官方最新版本

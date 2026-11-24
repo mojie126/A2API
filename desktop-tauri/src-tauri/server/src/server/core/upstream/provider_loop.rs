@@ -1542,17 +1542,17 @@ async fn attempt_queue(
                         continue 'accounts;
                     }
                     if let Some(account_id) = target.account_id.as_deref() {
-                        if failure.policy.suspend_account {
-                            let _ = crate::server::core::blocking::in_place(|| {
-                                service.store.suspend_upstream_account(account_id, &failure.policy.reason)
-                            });
-                        } else if failure.stop {
-                            if let Some(until) = failure.policy.account_cooldown_until {
-                                let _ = crate::server::core::blocking::in_place(|| {
-                                    service.store.cooldown_upstream_account(account_id, until, &failure.policy.reason)
-                                });
-                            }
-                        }
+                        // 挂起与冷却互不排斥：同一失败既可能要求挂起账号，又可能要求进入冷却，
+                        // 两者分别落库，不能像旧写法那样写了前者就跳过后者。
+                        let cooldown_until = if failure.stop && !failure.policy.suspend_account {
+                            failure.policy.account_cooldown_until
+                        } else {
+                            None
+                        };
+                        super::error_policy_finish::persist_account_action(
+                            &service.store, account_id, failure.policy.suspend_account, cooldown_until,
+                            &failure.policy.reason,
+                        );
                     }
                     if ctx.telemetry.replay_guard().blocked() || failure.stop {
                         ctx.telemetry.finish_last_attempt(

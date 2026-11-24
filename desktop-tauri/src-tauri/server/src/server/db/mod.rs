@@ -94,12 +94,95 @@ pub(crate) use revisions::AccountChanges;
 pub(crate) use task_guard::{TaskTransaction, TaskTransactionError};
 
 use std::path::{Path, PathBuf};
+use std::cell::RefCell;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 
 use rusqlite::Connection;
+
+thread_local! {
+    /// 当前线程正在持有的 `DbInner` 指针地址栈，用于拦截同一线程对同一数据库连接锁的嵌套重入
+    static HELD_DB_INNERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// 测试环境下默认开启严格重入断言（一旦出现锁内套锁立即 panic 暴露调用栈）
+    /// 可在专门验证「生产环境安全降级不死锁」的用例中临时关闭
+    #[cfg(test)]
+    static STRICT_REENTRANCY_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// 同线程嵌套取同一连接锁的拦截标记，析构时把地址从持有栈里摘掉
+pub(in crate::server::db) struct ThreadLockGuard {
+    inner_addr: usize,
+}
+
+impl ThreadLockGuard {
+    /// 首次取锁登记地址并放行，已持有则返回 `None` 由调用方降级
+    #[track_caller]
+    pub(in crate::server::db) fn enter(inner: &Arc<DbInner>) -> Option<Self> {
+        let addr = Arc::as_ptr(inner) as usize;
+        let already_held = HELD_DB_INNERS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.contains(&addr) {
+                true
+            } else {
+                stack.push(addr);
+                false
+            }
+        });
+        if already_held {
+            let caller = std::panic::Location::caller();
+            #[cfg(test)]
+            if STRICT_REENTRANCY_PANIC.with(|cell| cell.get()) {
+                panic!(
+                    "[Db] 检测到同一线程嵌套重入数据库连接锁（库: {}，调用点: {}:{}:{}）：禁止在 db.with / db.with_mut 闭包内再次请求同一 Db 锁",
+                    inner.file.display(),
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                );
+            }
+            eprintln!(
+                "[Storage] ⚠️ 拦截到同一线程重入数据库锁（库: {}，调用点: {}:{}:{}），已安全降级返回以避免死锁",
+                inner.file.display(),
+                caller.file(),
+                caller.line(),
+                caller.column()
+            );
+            return None;
+        }
+        Some(Self { inner_addr: addr })
+    }
+}
+
+impl Drop for ThreadLockGuard {
+    fn drop(&mut self) {
+        let addr = self.inner_addr;
+        HELD_DB_INNERS.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if let Some(position) = stack.iter().rposition(|held| *held == addr) {
+                stack.remove(position);
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn with_reentrancy_fallback_mode<T>(action: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            STRICT_REENTRANCY_PANIC.with(|cell| cell.set(self.0));
+        }
+    }
+    let previous = STRICT_REENTRANCY_PANIC.with(|cell| {
+        let old = cell.get();
+        cell.set(false);
+        old
+    });
+    let _reset = Reset(previous);
+    action()
+}
 
 /// 数据库文件名。放配置目录（`~/.agent2api`）里，与 config.json / 日志并排 ——
 /// 用户在设置页看到的「配置目录」就是这一个位置，备份与排障只需要它。
@@ -220,6 +303,7 @@ impl Db {
     /// （真正的数据在库里）。两处判据不同正是因为**保护对象不同**：这里持的是
     /// 连接本身（状态可能停在事务中间），那里持的是空标记。
     pub fn with<T>(&self, f: impl FnOnce(&Connection) -> T) -> Option<T> {
+        let _reentrant_guard = ThreadLockGuard::enter(&self.inner)?;
         match self.inner.conn.lock() {
             Ok(conn) => {
                 if self.inner.task_guard_unusable.load(Ordering::Acquire) {
@@ -248,6 +332,7 @@ impl Db {
     /// 调用点：`AccountStore::with_conn_mut`（账号层的批量写与整份状态差异写 ——
     /// 批量改/删、`migrate_startup`、三家旧数据导入、导入合并）。
     pub fn with_mut<T>(&self, f: impl FnOnce(&mut Connection) -> T) -> Option<T> {
+        let _reentrant_guard = ThreadLockGuard::enter(&self.inner)?;
         match self.inner.conn.lock() {
             Ok(mut conn) => {
                 if self.inner.task_guard_unusable.load(Ordering::Acquire) {
@@ -422,5 +507,30 @@ pub(crate) mod test_temp {
         pub fn path(&self) -> &Path {
             &self.path
         }
+    }
+}
+
+#[cfg(test)]
+mod reentrancy_tests {
+    use super::{test_temp, with_reentrancy_fallback_mode};
+
+    /// 同一线程嵌套取锁在生产形态下必须安全降级（返回 None）而不是死锁
+    #[test]
+    fn nested_same_thread_lock_falls_back_instead_of_deadlocking() {
+        let (db, _temp) = test_temp::TempDb::open("reentrancy");
+        let outer = with_reentrancy_fallback_mode(|| {
+            db.with(|_conn| db.with(|_inner| "unreachable").is_none())
+        });
+        assert_eq!(outer, Some(true), "外层取锁成功，内层重入应降级为 None");
+        // 重入被拦下之后，正常取锁必须恢复可用
+        assert_eq!(db.with(|_conn| 1), Some(1), "拦截不能污染正常取锁");
+    }
+
+    /// 测试环境默认严格断言：同线程嵌套直接 panic 暴露调用点
+    #[test]
+    #[should_panic(expected = "嵌套重入数据库连接锁")]
+    fn strict_mode_panics_on_nested_lock() {
+        let (db, _temp) = test_temp::TempDb::open("reentrancy-strict");
+        let _ = db.with(|_conn| db.with(|_inner| 0));
     }
 }
