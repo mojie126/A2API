@@ -572,11 +572,35 @@
 - 修复：悬停模块对外暴露 `isOpen`，自动刷新在面板打开期间跳过新一轮，已在途的静默刷新也不落屏；面板收起后下一轮恢复
 - 验证：页面岛类型检查与 Vite 构建通过
 
+### 2026-11-24（清理编译告警）
+
+- 服务端与桌面壳的 `cargo check --release --all-targets` 告警由 212 项清零，`cargo test --release -p agent2api-server --lib` 488 项通过
+- 上游备用但当前未接线的模块与函数按模块或函数加 `#[allow(dead_code)]` 并注明保留理由（错误策略、退避垫底、CodeArts 凭据槽、托管任务与登录执行体等），不删代码，避免下次同步上游时重新引入
+- 修正可见性：`chat_completions`、图片生成与编辑、Responses 与 Anthropic 端点及 MCP `key_source` 收窄为 `pub(crate)` 对齐内部 `Source` 类型；CatPaw 输出句柄改由 `plugin_host::wasm` 直接引用，去掉私有类型重导出；权限确认类型提升到 `pub(crate)`
+- 其他修正：`plugin_forward` 的账号挂起与冷却结果显式忽略错误；插件关闭分支去掉无效路径语句；Trae 回调 `deliver` 的完成标记加 `allow(unused_assignments)`；测试里 11 处 `host.shutdown()` 改为忽略返回值；移除两个 `Cargo.toml` 与 `repository` 重复的 `homepage` 字段
+
+### 2026-11-24（清理作废分支）
+
+- 删除 `pr/2026-11-10-*` 共 11 个本地分支与对应远程分支，均为 2026-11-10 整理上游 PR 时留下的旧分支，其修复已并入 `develop`；当前只保留 `main`、`beta`、`develop` 与工作分支
+
+### 2026-11-24 本地改动保全清单（同步前逐项核对）
+
+同步上游时必须逐文件手工合并，禁止直接 merge 或 cherry-pick。下列本地改动即使所在文件被上游改写，也必须在合并后逐条加回：
+
+- 出口与路由：ZCode WARP 出口池、设备绑定、直连优先与 429 换出口，仅作用于 ZCode 国内/国际；登录与控制面请求继承账号出口；路由组内并发；模型路由自动纳入新提供商；删除账号同步清理路由引用
+- 上游请求：图片兼容原图直转，不压缩；客户端归属与上游身份拆分；模型思考档位覆盖；请求日志协议列；容量准入与错误策略中的本地分支
+- 插件宿主：保留原生插件安装与运行；安装入口先取本机三元组再回退 WASM；插件更新源使用 fork 仓库；登录换码与账号请求走所选代理；8 MiB 工作线程栈；脚本插件运行时清理
+- 数据与同步：保留 schema v30 客户端身份、v31 协议、v32 出口方式与 IP，官方新版本顺延；数据库增量回收与 WAL 检查点参数；WebDAV 连接池与恢复时本地偏好优先；限额事件移出云同步并定期修剪；无有效期账号手动刷新按无需续期处理
+- 界面与交互：弹窗遮罩取消入场动画；请求日志悬停面板打开期间暂停自动刷新；ZCode 验证支持后台标签页；特殊请求路由切换清空选中态；更新检查可彻底关闭；AutoClaw 国际版入口停用；提示条禁用滑动手势
+- 构建与发布：构建工作流仅手动触发；`fork-build.yml` 合并 Windows 任务与并发取消；`build-desktop.ps1` 增量构建与前端指纹；发布说明只列 fork 增量
+
+高风险重叠目录：`core/plugin_host`、`core/account_store`、`core/upstream`、`core/providers`、`core/runtime_capacity`、`core/model_meta`、`request_stats`、`db`、`config`、`api/accounts.rs`、`api/session.rs`、`api/stats_api.rs`。这些路径上游改动最多，合并后逐项回归出口、插件安装、路由组并发、识图、云同步恢复、请求日志与构建产物，并运行 `cargo test --release -p agent2api-server` 与页面岛类型检查和构建。
+
 ## 后续同步官方更新
 
 1. 在 `main` 执行 `git fetch origin --prune` 并快进到官方最新版本
-2. 官方 beta 增量按本轮方式合并进 `develop`，保持本地改动清单完整
-3. 重点检查服务端请求管线、日志存储、请求统计与数据库模块，以及 `.github/workflows` 与插件宿主相关文件
+2. 官方 beta 增量按本轮方式合并进 `develop`，开工前先按上一节「本地改动保全清单」逐项列出待核对项
+3. 重点检查服务端请求管线、日志存储、请求统计、数据库模块、插件宿主与 `.github/workflows`，合并后逐项确认清单未被覆盖
 4. 重新运行服务端编译与测试、前端类型检查与构建、词典构建
 5. 手动运行 `performance-build`（注意草稿 Release 的同 tag 清理与后缀规则）
 6. 更新本文的官方基线、本地改动与验证记录，日期顺延
