@@ -298,7 +298,7 @@ fn resolve_model(
     Ok(requested)
 }
 
-pub async fn generations(
+pub(crate) async fn generations(
     State(state): State<ServerState>,
     headers: HeaderMap,
     scope: Option<Extension<KeyScope>>,
@@ -334,7 +334,7 @@ pub async fn generations(
     )
 }
 
-pub async fn edits(
+pub(crate) async fn edits(
     State(state): State<ServerState>,
     headers: HeaderMap,
     scope: Option<Extension<KeyScope>>,

@@ -93,6 +93,7 @@ pub(crate) fn decide_with(snapshot: &config::ErrorPolicySnapshot, provider: &str
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(super) fn for_error(provider: &str, model: &str, error: &GatewayError, explicit_stop: bool) -> ErrorDecision {
     for_error_with(&config::snapshot(), provider, model, error, explicit_stop)
 }

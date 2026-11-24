@@ -97,12 +97,15 @@ impl VerifiedArtifact {
     pub(in crate::server::core::plugin_host) fn version(&self) -> &str { &self.version }
     pub(in crate::server::core::plugin_host) fn target(&self) -> &str { &self.target }
     pub(in crate::server::core::plugin_host) fn entry(&self) -> &str { &self.entry }
+    #[allow(dead_code)]
     pub(in crate::server::core::plugin_host) fn signature(&self) -> SignatureState { self.signature }
     pub(in crate::server::core::plugin_host) fn module_digest(&self) -> Option<&[u8; 32]> {
         self.facts.files.get(&self.entry).map(|file| &file.digest)
     }
+    #[allow(dead_code)]
     pub(in crate::server::core::plugin_host) fn manifest_bytes(&self) -> &[u8] { &self.facts.pack }
     pub(in crate::server::core::plugin_host) fn wasm_bytes(&self) -> Option<&[u8]> { self.facts.wasm.as_deref() }
+    #[allow(dead_code)]
     pub(in crate::server::core::plugin_host) fn host_bytes(&self) -> Option<&[u8]> { self.facts.host.as_deref() }
 }
 

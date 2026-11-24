@@ -5,14 +5,17 @@ pub(crate) mod aws_oidc;
 pub(crate) mod catalog;
 pub(super) mod catpaw_account;
 mod catpaw_images;
+#[allow(dead_code)]
 pub(super) mod catpaw_turn;
 pub(in crate::server) use catpaw_turn::output::{
     OutputGuard as CatPawOutputGuard, OutputSlot as CatPawOutputSlot,
     unconfirmed as catpaw_output_unconfirmed,
 };
+#[allow(dead_code)]
 pub(super) mod checkin_call;
 pub(in crate::server::core) use checkin_call::OfficialDailyFact;
 pub(crate) mod codearts_enrollment;
+#[allow(dead_code)]
 mod codearts_refresh;
 mod codearts_session;
 pub(crate) mod desktop_credentials;
@@ -39,13 +42,17 @@ mod limits;
 mod legacy_credentials;
 mod legacy_secret;
 mod login;
+#[allow(dead_code)]
 pub(crate) mod managed;
 pub(crate) mod managed_policy;
+#[allow(dead_code)]
 pub(crate) mod managed_task;
 pub(crate) mod manifest;
+#[allow(dead_code)]
 pub(crate) mod native;
 mod progress;
 mod protocol;
+#[allow(dead_code)]
 mod qoder_umid;
 mod quwork_device;
 mod public_view;

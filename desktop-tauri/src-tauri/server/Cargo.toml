@@ -8,7 +8,6 @@ edition = "2021"
 rust-version = "1.88"
 license = "AGPL-3.0-only"
 repository = "https://github.com/aimod-cc/Agent2API"
-homepage = "https://github.com/aimod-cc/Agent2API"
 
 # 关掉 bin 自动发现：`src/bin/service.rs` 其实是 `agent2api-server.rs` 的**模块**
 # （那边写着 `#[cfg(windows)] pub mod service;`），但 Cargo 会把 `src/bin/*.rs`

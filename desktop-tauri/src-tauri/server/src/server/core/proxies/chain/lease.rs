@@ -76,6 +76,7 @@ impl FrozenEndpoint {
 }
 
 /// 旧内部入口：明确选择只捕获一次，再走同一个完整路径冻结实现。
+#[allow(dead_code)]
 pub(crate) async fn freeze_selected(
     selected: Option<ResolvedProxy>,
 ) -> Result<FrozenEndpoint, String> {

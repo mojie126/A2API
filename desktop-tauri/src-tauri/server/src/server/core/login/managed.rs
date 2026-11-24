@@ -3,9 +3,11 @@
 mod autoclaw;
 mod call;
 mod catpaw;
+#[allow(dead_code)]
 mod kiro;
 mod loopback;
 mod step;
+#[allow(dead_code)]
 mod trae;
 
 pub use call::Call;

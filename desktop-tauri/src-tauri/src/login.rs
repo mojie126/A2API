@@ -786,6 +786,7 @@ fn is_login_callback(url: &url::Url, provider: &str) -> bool {
 /// 它的设备授权登录走的就是这条 IPC（壳侧把授权页开出来、后端轮询换令牌），
 /// 与 Qoder 的设备授权同形；手工填凭证与导入桌面端登录态都不经过这里
 /// （那两条走 `POST /api/accounts`）。
+#[allow(dead_code)]
 fn normalize_provider(provider: &str) -> Result<&'static str, String> {
     if let Some(region) = crate::server::core::providers::monkeycode::Region::from_provider_id(provider.trim()) {
         return Ok(region.provider_id());
@@ -1751,6 +1752,7 @@ pub(crate) async fn start_provider_login(provider: &str, proxy: Option<Value>) -
 }
 
 /// 无方式索引的旧入口不再启动登录。
+#[allow(dead_code)]
 pub async fn start(
     _app: &AppHandle,
     _edition: String,
@@ -1766,6 +1768,7 @@ pub async fn start(
 ///
 /// 只给内嵌窗口一种方式，理由见模块头（系统浏览器模式下自定义协议深链
 /// 需要系统注册 `office-raccoon://`，那是官方客户端装的，装了才有）。
+#[allow(dead_code)]
 async fn start_raccoon(app: &AppHandle, proxy: Option<Value>) -> Result<serde_json::Value, String> {
     let started = start_provider_login("raccoon", proxy).await?;
     let login_state = started
@@ -1821,6 +1824,7 @@ async fn start_raccoon(app: &AppHandle, proxy: Option<Value>) -> Result<serde_js
 ///
 /// 前端已不提供网页登录入口（短信流程的隐藏窗口覆盖了同一页面），此函数
 /// 作为防御性保留（`start` 命令仍可能被老版本调用）。
+#[allow(dead_code)]
 async fn start_kuku(app: &AppHandle, mode: &str, proxy: Option<Value>) -> Result<serde_json::Value, String> {
     // 登录态由壳侧读登录窗口的 Cookie 存储交回（见 `submit_kuku_login`）——
     // 系统浏览器里壳读不到，登录完成网关等不到 Cookie。因此 external 模式
@@ -1886,6 +1890,7 @@ async fn start_kuku(app: &AppHandle, mode: &str, proxy: Option<Value>) -> Result
 /// `orcaterm://oauth_callback`，必须由**我们自己的窗口**拦下，因此只支持
 /// 内嵌窗口：系统浏览器里那一跳会被交给系统处理（装了官方 OrcaTerm 客户端
 /// 时被它接走，没装则是一个错误页），网关永远等不到 `session_id`。
+#[allow(dead_code)]
 async fn start_orcaterm(app: &AppHandle, mode: &str, proxy: Option<Value>) -> Result<serde_json::Value, String> {
     if mode == "external" {
         return Err(
@@ -1954,6 +1959,7 @@ async fn start_orcaterm(app: &AppHandle, mode: &str, proxy: Option<Value>) -> Re
 ///
 /// `mode`：内嵌窗口与系统浏览器都支持（回调打回本机网关，与浏览器在哪无关），
 /// 与 Qoder 同理；小浣熊那种「只有内嵌能收回调」的约束在这家不成立。
+#[allow(dead_code)]
 async fn start_catpaw(
     app: &AppHandle,
     mode: &str,
@@ -2076,6 +2082,7 @@ async fn open_external(
     Err(format!("已打开系统浏览器完成{edition_label}登录，但等待超时（5 分钟），请重试"))
 }
 
+#[allow(dead_code)]
 pub(crate) async fn run_cookie_login(
     app: &AppHandle,
     provider: &'static str,

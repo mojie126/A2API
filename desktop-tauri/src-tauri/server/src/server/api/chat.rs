@@ -68,7 +68,7 @@ use super::pipeline::{
 };
 
 /// POST /v1/chat/completions
-pub async fn chat_completions(
+pub(crate) async fn chat_completions(
     State(state): State<ServerState>,
     headers: HeaderMap,
     // R9：中间件放进请求扩展的「命中 Key 的限制」。`Option` 是刻意的 ——

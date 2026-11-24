@@ -124,7 +124,7 @@ async fn forward_chat(
 // ─── POST /v1/responses ─────────────────────────────────────
 
 /// POST /v1/responses
-pub async fn responses_endpoint(
+pub(crate) async fn responses_endpoint(
     State(state): State<ServerState>,
     headers: HeaderMap,
     // R9：中间件放进请求扩展的「命中 Key 的限制」（`None` = 不限制，见
@@ -364,7 +364,7 @@ pub async fn responses_endpoint(
 // ─── POST /v1/messages ──────────────────────────────────────
 
 /// POST /v1/messages
-pub async fn messages_endpoint(
+pub(crate) async fn messages_endpoint(
     State(state): State<ServerState>,
     headers: HeaderMap,
     // R9：同 responses_endpoint（`Option` + 取不到 = 不限制）

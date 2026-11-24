@@ -70,6 +70,7 @@ impl CatPawMaterial {
 
     /// 首片只接受严格完整原历史投影；不剥messageId/finished/reasoning、不合并或补消息。
     /// 新assistant投影和工具回灌匹配另片接；bool只作材料相等，不能恢复原Owner。
+    #[allow(dead_code)]
     pub(in crate::server::core::plugin_host::wasm) fn matches_history(&self, messages: &Value) -> Result<bool, proto::WireError> {
         check_budget(messages, MAX_BODY, &mut 0)?;
         let mut decoded_nodes = 0;
@@ -77,9 +78,11 @@ impl CatPawMaterial {
         Ok(messages.as_array().is_some_and(|messages| messages.as_slice() == self.messages.as_slice()))
     }
     /// 比较所有非历史字段，包括未知扩展与字段存在性，不据此判断发送或会话资格。
+    #[allow(dead_code)]
     pub(in crate::server::core::plugin_host::wasm) fn matches_constraints(&self, other: &Self) -> bool {
         self.model == other.model && self.parameters == other.parameters
     }
+    #[allow(dead_code)]
     pub(in crate::server::core::plugin_host::wasm) fn matches_body(&self, body: &Value) -> Result<bool, proto::WireError> {
         validate_body(body)?;
         let object = body.as_object().ok_or_else(invalid)?;

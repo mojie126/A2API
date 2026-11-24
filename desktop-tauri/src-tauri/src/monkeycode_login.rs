@@ -31,6 +31,7 @@ pub fn allowed(url: &url::Url, region: Region) -> bool {
     }
 }
 
+#[allow(dead_code)]
 pub async fn start(app: &AppHandle, region: Region, mode: &str, proxy: Option<Value>) -> Result<Value, String> {
     if mode == "external" {
         return Err(

@@ -188,10 +188,10 @@ impl Host {
             let stopped = tokio::select! {
                 biased;
                 _ = self.closing_deadline() => false,
-                result = async {
+                _ = async {
                     if self.options.wasm.is_some() { self.wait_wasm_idle().await; }
                     else { self.shutdown_native().await; }
-                } => { result; true },
+                } => true,
             };
             drop(serial);
             stopped

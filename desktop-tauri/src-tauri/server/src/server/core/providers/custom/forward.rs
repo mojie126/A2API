@@ -1,6 +1,9 @@
 //! 自定义上游的发送入口。相同协议交给原生分支，其他请求使用 Chat 转换链。
 //! 账号选路、重试与冷却由 provider_loop 持有；发送分支持有流式连接直至结束。
 
+// 上游保留的错误分类与重置时间辅助函数，当前走统一错误策略，保留以便同步上游。
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use axum::http::HeaderMap;

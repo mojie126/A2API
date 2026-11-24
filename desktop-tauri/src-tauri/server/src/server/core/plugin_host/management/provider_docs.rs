@@ -44,6 +44,7 @@ struct ProviderNotes {
 #[derive(Default, Deserialize)]
 struct PackNotes {
     #[serde(default)]
+    #[allow(dead_code)]
     schema: u32,
     #[serde(default)]
     description: Option<LocalizedText>,

@@ -136,7 +136,7 @@ impl Change {
 }
 
 /// 只在已认证管理configure的ready分支核对后构造；不提供JSON/摘要构造器。
-pub(in crate::server) struct Confirmation {
+pub(crate) struct Confirmation {
     operation: Arc<ConfirmationIdentity>,
     loaded: permission_install::Loaded,
     installed: permission_install::Installed,

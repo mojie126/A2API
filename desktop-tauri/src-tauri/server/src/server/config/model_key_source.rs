@@ -125,6 +125,7 @@ impl Source {
         Some(action())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn revocation(&self) -> CancellationToken {
         self.record.notification.clone()
     }

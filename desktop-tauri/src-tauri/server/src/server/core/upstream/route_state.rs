@@ -28,6 +28,9 @@
 //! 熔断打开期间直接跳过（除非全场只剩它是开的 —— 那时仍按「试一次」放行，
 //! 与并发挤占同一取舍：宁可打一次试试，也不把请求直接拒掉）。
 
+// 上游保留的退避/垫底备用接口，当前主路径未接线，保留以便同步上游。
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;

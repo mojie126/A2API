@@ -28,6 +28,7 @@
 //!
 //! 硬约束不变：持锁期间绝不做网络请求（见 super::mod 头部说明）。
 
+#[allow(dead_code)]
 mod task_guard;
 
 use std::path::{Path, PathBuf};

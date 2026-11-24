@@ -190,6 +190,7 @@ impl Drop for DeliveryGuard {
     }
 }
 
+#[allow(unused_assignments)]
 fn deliver(
     task: super::super::LoginTaskHandle,
     queued: QueuedCallback,

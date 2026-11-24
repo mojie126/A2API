@@ -909,6 +909,7 @@ pub(super) fn priority_of(account: &Value) -> Option<i64> {
 }
 
 /// 限额文案里的恢复时间片段：`（<时间> 恢复）`，空串表示没有明确恢复时间
+#[allow(dead_code)]
 pub(super) fn reset_hint(reset_text: &str) -> String {
     if reset_text.is_empty() {
         String::new()

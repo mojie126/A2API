@@ -2,13 +2,13 @@ use std::sync::{atomic::Ordering, Arc};
 
 use agent2api_provider_protocol::WireError;
 
-use crate::server::core::plugin_host::wasm::{
-    catpaw_output_unconfirmed as unconfirmed, CatPawOutputGuard as OutputGuard,
-    CatPawOutputSlot as OutputSlot,
-};
+use crate::server::core::plugin_host::wasm::catpaw_output_unconfirmed as unconfirmed;
 
 impl super::RequestTelemetry {
-    pub(crate) fn install_catpaw_output(&self, output: Arc<OutputSlot>) -> Result<(), WireError> {
+    pub(in crate::server) fn install_catpaw_output(
+        &self,
+        output: Arc<crate::server::core::plugin_host::wasm::CatPawOutputSlot>,
+    ) -> Result<(), WireError> {
         if self.catpaw_output_taken.load(Ordering::Acquire) { return Err(unconfirmed()); }
         let mut deferred = None;
         let result = (|| {
@@ -22,7 +22,9 @@ impl super::RequestTelemetry {
         result
     }
 
-    pub(crate) fn take_catpaw_output(&self) -> Result<Option<OutputGuard>, WireError> {
+    pub(in crate::server) fn take_catpaw_output(
+        &self,
+    ) -> Result<Option<crate::server::core::plugin_host::wasm::CatPawOutputGuard>, WireError> {
         if self.catpaw_output_taken.load(Ordering::Acquire) {
             return Err(unconfirmed());
         }

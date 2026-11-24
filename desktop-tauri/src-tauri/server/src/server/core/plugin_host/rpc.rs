@@ -168,6 +168,7 @@ pub struct RpcAdapter {
     web_tool_emulation: bool,
     image_generation: bool,
     account_user_agent: bool,
+    #[allow(dead_code)]
     sms_login: bool,
     stop_on_error: bool,
     image_editing: bool,

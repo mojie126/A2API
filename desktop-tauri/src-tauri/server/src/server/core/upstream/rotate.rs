@@ -39,6 +39,9 @@
 //! （`provider_loop::send_with_retry`），因为「重试几次、打什么日志」
 //! 是编排职责（架构文档 §4.3）。
 
+// 上游保留的备用轮转/限额判定，当前主路径未接线，保留以便同步上游。
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use serde_json::{json, Value};

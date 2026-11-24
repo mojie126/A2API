@@ -172,7 +172,7 @@ async fn host_starts_and_lists_providers() {
     assert!(adapter.supports_chat());
     assert!(adapter.is_stateful());
     assert!(adapter.supports_usage());
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -212,7 +212,7 @@ async fn build_chat_request_goes_through_rpc() {
         "插件实现的同步版应当拒绝，而不是返回另一份结果"
     );
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -243,7 +243,7 @@ async fn classify_error_goes_through_rpc() {
         "401 应当归为 TokenExpired，得到 {expired:?}"
     );
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -280,7 +280,7 @@ async fn reasoning_patch_goes_through_rpc() {
         other => panic!("期望 Skip，得到 {other:?}"),
     }
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -302,7 +302,7 @@ async fn refusal_markers_come_from_handshake() {
     assert_eq!(adapter.stream_refusal_finishes(), &["content_policy_violation"]);
     assert_eq!(adapter.stream_refusal_markers(), &["insufficient_quota"]);
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -329,7 +329,7 @@ async fn ensure_token_reads_the_account_through_callbacks() {
         .expect("插件应当从回调读到账号并给出 token");
     assert_eq!(token, "demo-token");
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -349,7 +349,7 @@ async fn missing_account_reports_not_found() {
     let result = adapter.ensure_access_token(&store, "missing").await;
     assert!(result.is_err(), "账号不存在时应当报错而不是返回空 token");
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 // ── 流式帧（head / chunk / credit / abort）──────────────────────
@@ -459,7 +459,7 @@ async fn conversation_streams_head_and_chunks() {
     assert!(text.contains("\"content\":\"你\""), "应当收到插件推来的正文帧：{text}");
     assert!(text.contains("[DONE]"), "流末尾要有终止帧：{text}");
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -498,7 +498,7 @@ async fn conversation_non_stream_aggregates_on_the_gateway() {
         .unwrap_or("");
     assert_eq!(content, "你好", "网关要把插件推来的帧聚合成完整正文：{body}");
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -547,7 +547,7 @@ async fn conversation_http_200_body_is_forwarded_without_hanging() {
     .expect("收流不应超时");
     assert!(collected.contains("rate limited"), "正文应当透传：{collected}");
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -596,5 +596,5 @@ async fn dropping_the_stream_aborts_the_plugin_call() {
         .is_ok();
     assert!(still_alive, "丢弃流之后宿主应当仍然可用");
 
-    host.shutdown().await;
+    let _ = host.shutdown().await;
 }

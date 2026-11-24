@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod kiro_exchange;
 pub(crate) use kiro_exchange::KiroCallSource;
 

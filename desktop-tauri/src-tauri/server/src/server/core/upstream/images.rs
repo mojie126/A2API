@@ -748,6 +748,7 @@ fn failure_from(payload: &Value, http_status: u16) -> ImageFailure {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn output_error(message: impl Into<String>) -> GatewayError {
     GatewayError::with_status(502, message).with_code("image_generation_error")
 }

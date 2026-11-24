@@ -22,6 +22,7 @@ pub(crate) mod client;
 // 一律返回「不支持」）。
 pub mod selfupdate;
 mod version;
+#[allow(dead_code)]
 pub(crate) mod website;
 
 use std::path::{Path, PathBuf};

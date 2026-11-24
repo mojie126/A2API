@@ -90,6 +90,7 @@ pub fn allowed(url: &url::Url) -> bool {
         })
 }
 
+#[allow(dead_code)]
 pub async fn start(app: &AppHandle, mode: &str, proxy: Option<Value>) -> Result<Value, String> {
     if mode == "external" {
         return Err("豆包工作网页登录只支持内嵌窗口；系统浏览器登录后请粘贴完整 Cookie。".into());

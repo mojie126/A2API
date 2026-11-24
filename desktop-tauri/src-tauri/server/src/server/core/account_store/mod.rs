@@ -102,6 +102,7 @@ pub mod codearts_accounts;
 pub mod atomcode_accounts;
 pub mod commandcode_accounts;
 pub mod custom_accounts;
+#[allow(dead_code)]
 pub(crate) mod credential_version;
 pub(crate) mod desktop_launch;
 mod hidden_accounts;
@@ -112,6 +113,7 @@ pub mod modelscope_accounts;
 pub mod monkeycode_accounts;
 pub mod officeace_accounts;
 pub mod orcaterm_accounts;
+#[allow(dead_code)]
 pub mod plugin_accounts;
 mod plugin_contract;
 mod plugin_identity;

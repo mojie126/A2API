@@ -458,6 +458,7 @@ pub(super) fn fallback_retry_advice(
 /// 一个已经算好的数）。改造前这句整句由适配器与两个兜底函数各自拼好，
 /// 措辞与现在一致，只是分隔符统一成「；」（原先瞬时错误与连接失败那两句用「，」）。
 #[cfg(test)]
+#[allow(dead_code)]
 fn retry_log_line(reason: &str, delay_ms: u64, used: usize, total: usize) -> String {
     format!("⚠️ {reason}；{} 秒后重试（第 {used}/{total} 次）", delay_ms / 1000)
 }
@@ -2672,6 +2673,7 @@ async fn send_with_retry(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 fn replay_blocked_failure(error: GatewayError) -> OutboundFailure {
     OutboundFailure {
         class: UpstreamErrorClass::Fatal {
@@ -2685,6 +2687,7 @@ fn replay_blocked_failure(error: GatewayError) -> OutboundFailure {
 /// 手动终止在 `send_with_retry` 里的返回形态（见 [`cancelled_error`] 的说明：
 /// 调用方按令牌判定，不读这里的 `class`）。
 #[cfg(test)]
+#[allow(dead_code)]
 fn cancelled_failure() -> OutboundFailure {
     OutboundFailure {
         class: UpstreamErrorClass::Fatal {
@@ -2704,6 +2707,7 @@ fn cancelled_failure() -> OutboundFailure {
 /// 错误文案直接用手动终止的原文 —— 它不会被当成传输失败重试（调用方在
 /// 传输失败分支的最前面查令牌）。
 #[cfg(test)]
+#[allow(dead_code)]
 async fn send_or_cancel(
     network: &mut super::network_fallback::Fallback,
     telemetry: &crate::server::core::upstream::usage::RequestTelemetry,

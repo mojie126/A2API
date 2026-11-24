@@ -74,8 +74,10 @@
 //! 也绝不 panic：所有 SQL 失败都以 `rusqlite::Result` 往上传，由调用方转成
 //! `AccountStoreError`（500）。
 
+#[allow(dead_code)]
 pub(super) mod credential_version;
 pub(super) mod stream_limits;
+#[allow(dead_code)]
 mod task_read;
 pub(crate) use task_read::{load_task_final, TaskReadError};
 

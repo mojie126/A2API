@@ -32,6 +32,9 @@
 //! `logging::log` 要往同一个库写 `logs` 表 —— 闭包里打日志会当场死锁。
 //! 日志一律在闭包之外打。
 
+// 上游保留的失败日志限频接口，当前由查询队列替代，保留以便同步上游。
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;

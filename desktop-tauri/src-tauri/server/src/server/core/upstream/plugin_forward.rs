@@ -40,10 +40,10 @@ pub(super) async fn forward(
         error_policy::attach(&mut error, &decision);
         error_policy::note(telemetry, &decision, None);
         if policy.suspend_account && !account.is_empty() {
-            crate::server::core::blocking::in_place(|| store.suspend_upstream_account(account, &policy.reason));
+            let _ = crate::server::core::blocking::in_place(|| store.suspend_upstream_account(account, &policy.reason));
         } else if decision.hard_stop && !account.is_empty() {
             if let Some(until) = policy.account_cooldown_until {
-                crate::server::core::blocking::in_place(|| store.cooldown_upstream_account(account, until, &policy.reason));
+                let _ = crate::server::core::blocking::in_place(|| store.cooldown_upstream_account(account, until, &policy.reason));
             }
         }
         if decision.hard_stop || policy.suspend_account { return Err(error); }

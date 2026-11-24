@@ -467,6 +467,7 @@ fn database(path: &Path) -> Result<rusqlite::Connection, proto::WireError> {
     Ok(db)
 }
 
+#[allow(dead_code)]
 pub(super) fn text<'a>(
     value: &'a Value,
     name: &str,

@@ -206,6 +206,7 @@ pub fn delete(db: &Db, id: &str) -> Result<(), GatewayError> {
     }).ok_or_else(locked)?
 }
 
+#[allow(dead_code)]
 pub fn storage_usage(db: &Db) -> Result<Value, GatewayError> {
     db.with(|conn| {
         maintain(conn, logging::now_ms())?;

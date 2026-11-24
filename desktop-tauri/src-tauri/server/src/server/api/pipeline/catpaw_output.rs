@@ -143,6 +143,7 @@ impl Stream for JsonStream {
     }
 }
 
+#[allow(dead_code)]
 pub(in crate::server::api) fn unsupported_response(telemetry: &Arc<RequestTelemetry>) -> Option<Response> {
     match telemetry.take_catpaw_output() {
         Ok(None) => None,

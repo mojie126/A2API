@@ -53,7 +53,7 @@ pub(super) struct ApprovalGuard {
 }
 
 /// 配置更新锁内取得的单次操作票据；不能重新读取当前代次为旧确认续命。
-pub(in crate::server) struct PendingConfirmation {
+pub(crate) struct PendingConfirmation {
     generation: u64,
     operation: Arc<ConfirmationIdentity>,
 }

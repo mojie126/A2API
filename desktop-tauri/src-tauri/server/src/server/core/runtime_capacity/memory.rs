@@ -75,6 +75,7 @@ impl Allocation {
         Ok(Self { budget })
     }
 
+    #[allow(dead_code)]
     pub fn bytes(&self) -> usize { self.budget.bytes() }
 
     pub fn shrink_to(&self, bytes: usize) { self.budget.shrink(self.budget.bytes().saturating_sub(bytes)); }

@@ -45,6 +45,7 @@ pub(crate) enum CodeArtsTransaction<T, E> {
 impl Db {
     /// 调用方已持原 AccountStore 锁；来源只核对原 Db 对象及私有 Arc，不重新 prepare。
     /// action 只能做同库、有界 SQL；不能出网、await、另起事务、重取外层锁或签发许可。
+    #[allow(dead_code)]
     pub(crate) fn codearts_slot_transaction<T, E>(
         &self,
         source: &CredentialSource,
