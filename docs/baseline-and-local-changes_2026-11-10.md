@@ -684,6 +684,13 @@
 
 验证：`cargo check --release -p agent2api-server --all-targets` 零告警；`cargo test --release -p agent2api-server --lib` 492 通过 / 11 忽略 / 0 失败（新增 4 条用例）
 
+### 2026-11-24（版本号对齐 3.5.1 与插件包 3.5.0）
+
+- A2API 六处版本号由 `3.5.0-beta.4` 升到 `3.5.1`（根 `package.json`、桌面 `package.json`、手机端 `package.json`、桌面与服务端 `Cargo.toml`、`tauri.conf.json`），`Cargo.lock` 与手机端 `package-lock.json` 同步
+- 插件仓库 `pack.json` 与 workspace `Cargo.toml` 由 `3.5.0-beta.2` 升到 `3.5.0`，`Cargo.lock` 同步；协议库依赖 tag 仍为 `v3.5.0-beta.2`（未引入错误分类字段，保持现行为）
+- 发布说明：新增 `docs/release-notes_3.5.1.md`（A2API）与 `docs/release-notes_3.5.0.md`（插件仓库），只列 fork 增量并引用官方同版本说明
+- 工作流校验未改：`fork-build.yml` 仍校验六处版本号一致与协议库 tag 在远端存在，插件 `dev-build.yml` 仍校验 `pack.json` 与 workspace 版本一致；上游把构建迁到独立仓库并加冒烟门禁，与本 fork 自建流程口径不同，不跟进
+
 ## 后续同步官方更新
 
 1. 在 `main` 执行 `git fetch origin --prune` 并快进到官方最新版本
