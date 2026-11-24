@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { isModalActive } from '@ui'
 import { t } from '../i18n'
 import { bridge, errorMessage, host, type ReplayRow, type RoutingWorkspace } from './routing-types'
 import { attemptState, isTraceRunning, requestKey, requestModel, traceAttempts } from './routing-trace-model'
@@ -71,7 +72,7 @@ export function useRoutingCanvasActivity(active: boolean, model: string, options
     let queued = false
     let sequence = 0
     const visible = () => alive && context.current.active && !context.current.paused && context.current.key === key
-      && !document.hidden && host().wbApp?.currentPage === 'routing'
+      && !document.hidden && !isModalActive() && host().wbApp?.currentPage === 'routing'
     const current = (id: number) => visible() && id === sequence
     const loadActivity = async (id: number) => {
       const rows: ReplayRow[] = []

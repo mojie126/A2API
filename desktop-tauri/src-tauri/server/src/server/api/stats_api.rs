@@ -278,7 +278,13 @@ fn checked_filter(params: &Params) -> Result<RequestQuery, Response> {
 ///
 /// 不带任何查询参数：它与时间档位无关（理由见存储层 `select_filter_options`）。
 pub async fn stats_request_filters(State(state): State<ServerState>) -> Response {
-    ok_json(state.request_stats().filter_options())
+    // 候选清单来自对整表明细的聚合去重，行数大时是真算；放阻塞线程池里跑，
+    // 免得每次筛选下拉刷新都占住一个 tokio 工作线程。
+    let stats = state.request_stats();
+    match tokio::task::spawn_blocking(move || stats.filter_options()).await {
+        Ok(value) => ok_json(value),
+        Err(error) => errors::management_error(500, format!("筛选选项读取任务失败: {error}")),
+    }
 }
 
 /// DELETE /api/stats/requests?mode=raw|all&model=&provider=&status=&start=&end=&all=
@@ -364,6 +370,9 @@ pub async fn clear_stats_requests(
 /// 不存在给 404 —— 正文只在**调试模式开启期间**的
 /// 请求上采集（关着时不写行，见 `api::pipeline::capture_raw_body`），
 /// 此外也可能已被清理过；两种情况都是正常状态，不是错误。
+///
+/// 读库与反序列化放进阻塞线程池：正文可能是整段多 MB 的原始报文，详情弹窗
+/// 打开即并发拉这一条，留在 tokio 工作线程上会拖慢同一时刻的其它面板请求。
 pub async fn stats_request_raw(
     State(state): State<ServerState>,
     Query(params): Query<Params>,
@@ -371,9 +380,11 @@ pub async fn stats_request_raw(
     let Some(id) = text_of(&params, "id") else {
         return errors::management_error(400, "缺少 id 参数");
     };
-    match state.request_stats().raw_body(&id) {
-        Some(value) => ok_json(value),
-        None => errors::management_error(404, format!("未找到该请求的原始报文（id: {id}）")),
+    let stats = state.request_stats();
+    match tokio::task::spawn_blocking(move || stats.raw_body(&id)).await {
+        Ok(Some(value)) => ok_json(value),
+        Ok(None) => errors::management_error(404, "未找到该请求的原始报文"),
+        Err(error) => errors::management_error(500, format!("原始报文读取任务失败: {error}")),
     }
 }
 

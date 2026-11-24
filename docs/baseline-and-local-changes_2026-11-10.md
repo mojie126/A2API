@@ -606,6 +606,65 @@
 
 高风险重叠目录：`core/plugin_host`、`core/account_store`、`core/upstream`、`core/providers`、`core/runtime_capacity`、`core/model_meta`、`request_stats`、`db`、`config`、`api/accounts.rs`、`api/session.rs`、`api/stats_api.rs`。这些路径上游改动最多，合并后逐项回归出口、插件安装、路由组并发、识图、云同步恢复、请求日志与构建产物，并运行 `cargo test --release -p agent2api-server` 与页面岛类型检查和构建。
 
+### 2026-11-24 上游 3.5.1 跟进调查
+
+上游已发布 `3.5.1`（`33f5e797`），本仓库为 `3.5.0-beta.4`。相对上次盘点（官方 `3.5.0`，`cc5d8b9b`）新增 27 个提交、1061 个文件（约 +6.1 万 / −4.2 万行），增量仍以手机端重写、模型计价、面板第三方登录、通知渠道与插件错误分类为主。逐文件核对后，值得跟随的是可靠性与性能修复，功能面仍按单独立项，不整包跟随。
+
+第一优先（缺陷与数据正确性，建议逐条手动合并）：
+
+- 数据库连接锁防重入（`00bfca65`）：`db/mod.rs` 新增线程本地持有栈 `ThreadLockGuard`，`with` / `with_mut` / `with_account_change` / `prepare_credential_source` / `commit_credential_source` / `plugin_state_transaction` 六处入口拦截同线程嵌套取锁，测试环境直接 panic 暴露调用点、生产环境安全降级返回 `None`；本地当前没有任何重入保护，同线程重入会自锁死等到超时
+- 挂起与冷却同时落库（`a4ea2c11`）：`error_policy_finish::persist_account_action` 把「挂起」与「冷却」合并为一个入口，`plugin_forward` 与 `provider_loop` 原先的 `if suspend … else if stop …` 分支互斥，账号既需挂起又需冷却时只落前者；本地两处仍是互斥写法
+- WorkBuddy 与 CatPaw 固定消息条数上限（`a6b551c7`、`c18c34ab`）：官方取消 `512` 条数护栏改由体积与节点上限约束，WorkBuddy 国内版正文上限提至 14 MiB 并支持 `body_resource` 正文通道；本地 `workbuddy_http.rs` 的 `MAX_MESSAGES = 2048` 与 `MAX_BODY = 8 MiB`、`catpaw_turn/input.rs` 的 `MAX_MESSAGES = 512` 均为本地补丁，上游方案更彻底，合并时须同时保留本地 2048 的放宽语义
+- 插件更新与缓存同步（`a4ea2c11`、`d98f21f6`）：脚本插件安装/更新成功后由 `updates::record_installed` 直接写入该条目的最新状态、卸载时 `remove_entry` 清理，替代原先 `wake(true)` 整轮强制重算；刷新期间若本地登记已变化则保留磁盘缓存结果，避免旧快照覆盖新装插件；安装 GitHub 插件时优先复用目录缓存的提交 SHA（`catalog::github_commit_for`），但更新与重装一律实时解析、绝不回退到旧缓存，防止静默装回旧提交后继续提示可更新
+- 单提供商插件启停归一（`a4ea2c11`）：包级 `enabled` 与唯一提供商子开关历史上可矛盾，读入、`set_pack_enabled`、`set_provider_enabled`、安装与脚本插件登记读写统一折合，避免打开包开关后被隐藏的子开关卡住
+- 凭证维护动态提前量（`d20e8501`）：新增 `maintenance_lead_ms`（维护间隔加 5 分钟缓冲）与适配器 `check_credentials_expiring_within`，解决默认 10 分钟间隔下各家 3～5 分钟临期窗口经常「上一轮嫌早、下一轮已过期」；转发按需续期仍走各家原窗口。同时 `refresh_checked` 的「记录未推进即失败」判定在本地被弱化为仅对声明过有效期的账号生效（`refresh_advanced`），合并时须保留本地这一豁免
+- 就绪闸门 1 毫秒时钟边界（`811a4f1d`）：官方把写侧改为注入时钟 `hold_at`；本仓库 2026-11-24 已用同一修法落地，无需再跟进
+- 余额多窗口排序与短窗归零（`a4ea2c11`）：`ratio_of` 按首见分组与 `5h / daily / weekly / monthly` 窗口序重排，并把「周/月额度耗尽但仍存在短窗」的组按 0 计；本地只按原顺序输出，额度耗尽的组会读成 0 剩余但缺少短窗说明
+
+第二优先（性能与内存，建议评估后合并）：
+
+- 请求日志轻量列表与按需详情（`26c38327`、`f0da2b5d`）：`RequestQuery` 新增 `view=list` 与 `RequestListRow`，列表查询跳过 `route`、`attempt_details`、`sensitive_hits` 与识别证据等大字段，详情走新接口 `/api/stats/requests/detail`；本地列表仍解码整行
+- 请求日志事件驱动与筛选缓存（`f0da2b5d`、`a4ea2c11`、`c445c90e`）：`panel_events` 新增 `notify_requests` / `subscribe_requests` 两个主题，写入点（收尾、起行、在途更新、清理）主动通知；新增 `request_stats/filters_cache.rs` 缓存模型、上游模型、提供商、客户端与 Key 的筛选候选，空闲时零轮询；本地仅有一个通用 `Change` 主题，请求页仍是 3 秒定时轮询
+- 日志查询与统计移入阻塞线程池（`b9c8fa05`）：`logs_api.rs` 的 `query_logs`、`stats_logs`、`download_logs` 与 `stats_api.rs` 的 `filter_options`、详情读取均改 `spawn_blocking`；本地 `logs_api.rs` 仍同步执行
+- 模型元数据启动预热（`aee0fb29`）：`model_meta::install` 在启动阶段直接读一次 `kv` 缓存并写入内存快照，读路径不再触碰数据库锁，避免历史费用回填等持锁链路重入；本地 `install` 只存句柄，首次访问才读库
+- 静态资源分档缓存（`a4ea2c11`）：入口页与 `sw.js` 改 `no-store` 且跳过 304，其余子资源保留 `no-cache` 与 ETag 304，并在服务入口页时给本地静态引用追加 `?v=<版本+指纹>`，破开反向代理与 CDN 的长 `max-age`；本地统一 `no-cache`
+- 请求统计聚合与 SQL 重写（`aee0fb29`、`c445c90e`）：`request_stats/aggregate.rs`、`sql.rs` 与 `report.rs` 的查询计划调整，含 `internal_retries` 由 `attempt_details` 内部统计
+- 签到记录复合索引（`b21f870c`）：新增 `（ts DESC, row_id DESC）` 索引，本地只有单列 `ts`
+- 余额查询队列策略与唤醒（`b9c8fa05`）：`usage_query/queue.rs` 引入 `Notify` 唤醒并按插件申报的并发与最小间隔调度；插件协议库 `v3.5.0` 未申报 `usage_query` 字段，收益取决于插件仓库后续版本，优先级最低
+
+第三优先（行为口径变化，需产品确认后再跟）：
+
+- 错误处理默认值与换号上限（`b9c8fa05`）：默认重发 3、换号由 5 提到 32，`MAX_SWITCHES = 100` 与 `MAX_ROUTE_ATTEMPTS = 100` 对齐；新增 `CooldownMode::Deprioritize`、`v1_default_rules` 到 `default_rules` 的未改动项迁移，以及「已识别请求错误与内容拒绝不再强制只返回错误」的校验放宽。本地为换号 5、`MAX_ROUTE_ATTEMPTS = 32`，整套改动依赖错误策略快照迁移，须整块评估
+- 会话粘滞失败解绑（`b9c8fa05`）：`StickySessions::forget` 按会话键、模型、候选与世代精确解绑，转发链路在重放保护、订阅、构造期失败、429、手动终止与重发预算耗尽等分支逐一调用；本地粘滞表没有解绑入口，失败候选会继续被粘住
+- 选路排队候选（`b9c8fa05`）：`plan_route` 把「账号可用但并发已满」的候选由 `blocked` 移入 `ordered` 队尾并标 `concurrency`，本地容量准入已有等槽位循环，改动只影响面板展示口径与候选顺延
+- 插件登录文件字段与短信人机验证契约（`b9c8fa05`）：`LoginMethodMetadata` 新增 `file`（字段、接受类型、字节上限、二进制标记）与 `login.sms.alicom4.v1` 能力校验；本地已有短信人机验证链路，字段校验可单独移植
+
+不跟进（与本 fork 取舍冲突或属功能级单独立项）：
+
+- 手机端全面重写、Android 与 iOS 安装包、Cloudflare R2 与 CDN 分发源（`b21f870c`、`c445c90e`、`aee0fb29`、`853c3648`）：fork 不使用官方分发通道
+- 模型计价与费用估算（`b21f870c` 起，`core/model_pricing`、`api/model_pricing.rs`、`schema_model_pricing.sql`）、面板 Google 与 GitHub 第三方登录（`core/panel_oauth`）、Webhook 与 Telegram 与 Bark 通知（`core/notifications`）、云同步 S3：功能级单独立项
+- CodeArts 续期迁回插件并删除网关侧登记与槽位（`e4d8e3f7`、`05bf6ddd`）：本地 `codearts_enrollment`、`codearts_slot`、`codearts_refresh` 是本地增强，`rpc_refresh` 与槽表须整体保留
+- 插件环境变量旁路删除（插件仓库 `eafa75c`：`CATPAW_COOKIE`、`RACCOON_TOKEN`、`WORKBUDDY_TOKEN`）：本地明确保留脚本与持续集成旁路
+- 插件错误分类与例外规则申报（`b21f870c` 网关侧 `plugin_host/error_rules.rs` 与插件仓库 `eafa75c` 协议字段）：依赖插件重新申报，且本地错误策略尚未按新版默认值迁移，随第三优先整套评估再定
+- ZCode 版本号改由官网 CDN 版本源定时同步（`26c38327`、`f0da2b5d`，`core/upstream_versions.rs`）：本地 `zcode_version_probe` 只在签到触发时探测同一站点更新日志，行为等价且不依赖官方接口，仅在官方版本源覆盖更多家时再评估
+- 工作流与发布脚本（`build.yml`、`scripts/prepare-release.mjs`、`release-plugins.mjs`、`sync-modelsdev.mjs`）：fork 保留自有 `fork-build.yml` 与草稿发布口径；仅 `rust-tests.yml` 移除旧原生测试插件联调（`cf13ae38`）可评估
+
+插件仓库（`Agent2Providers`）相对本地 `develop` 的上游 `crates/` 只有 3 个提交：官方 `694d5d9`（已于 2026-11-19 逐条吸收）、`f22828b`（大正文通道与 128 MiB 内存上限，纯 WASM 侧）、`eafa75c`（错误分类申报与旁路删除）。原生实现无需跟进的实体改动，仅协议库若升到 `v3.5.0` 会带入 `ErrorClassificationRule` 与 `DefaultErrorRule` 两个可选字段（`serde` 默认值，旧插件不受影响）。
+
+### 2026-11-24（请求详情弹窗加宽、尝试明细表截断与弹窗迟滞处理）
+
+- 缺陷一：尝试明细表按内容自适应列宽，提示列信息一多就把表格撑变形；结果列的错误摘要同样被压窄
+- 修复一：表格改 `table-fixed` 加 `colgroup` 固定七列比例（轮次 8%、提供商 15%、账号 14%、结果 22%、体积 9%、内部重试 9%、提示 23%），各列单行 `truncate` 并在单元格上给 `title`，悬停看全文；`attemptResult` 从返回元素改为返回文本与配色，供截断外层复用
+- 修复二：上游 3.5.1 删掉的「上游身份」列不再单独成列，User-Agent 并入「提示」列的悬停内容（`上游实际 User-Agent：{value}` 一行），保留本地原有的「这一轮实际发出的 UA」调试信息而不占列宽；网关侧该字段多数为空，独立列长期只是空白格
+- 修复三：弹窗宽度由 `min(920px, 100vw-48px)` 放宽到 `min(1120px, 100vw-48px)`，七列在默认窗口下有足够可读宽度，窄屏仍按视口兜底
+- 缺陷二：高负载下打开详情弹窗有迟滞感；请求日志页的自动刷新在弹窗打开期间照旧落屏，重绘下层让遮罩与弹窗重新合成
+- 修复四：`requests-page` 的自动轮询增加 `isModalActive()` 判据（与账号页、日志页同一判据，来自 ui-kit 的 `holdModalActive`），弹窗打开期间跳过整轮；同时在 `loadPanel` 的静默分支补同一判据，覆盖「请求发出后才打开弹窗」的窗口，响应回来不落屏
+- 修复五：详情弹窗打开即并发拉取的三条读库接口移入阻塞线程池——`stats_request_raw`（下游原文）、`debug_api::get_traffic`（上游调试报文，单条可达数百 KB）、`stats_request_filters`（筛选候选聚合）；此前它们直接占用 tokio 工作线程，高负载下与其它面板请求抢线程
+- 修复六：后台轮询统一接入弹窗判据 `isModalActive()`（ui-kit 的 `holdModalActive` 计数，全局生效）——本轮覆盖请求日志、报表、签到中心与 UMID 组件、插件页、WARP 设备面板、助手模型清单、提供商文档、路由页配置刷新与回放追踪、路由画布在途活动、请求回放工作台与请求列表、特殊路由命中列表；此前只有账号页、日志页与 `app.js` 的两处全局轮询有判据。弹窗自身的进度轮询（安装、恢复、清理、验证码状态、下载进度）保持不暂停，否则弹窗内容会停止更新
+- i18n：`上游实际 User-Agent：{value}` 补英、日、韩、葡译文，繁体由构建自动转换；移除「上游身份」孤儿键（五语 `requests.json`）
+- 复盘：本 fork 相比上游的本地增强全部保留——「上游身份」列背后的 UA 采集（`note_outbound_identity`）、客户端归属改写标记、请求日志悬停面板暂停、图片兼容标识、特殊路由切换清空选中态、WebDAV 恢复本地优先、WARP 出口与直连优先等均未触碰；上游删除该列仅因其占宽变形，本轮以「并入提示列悬停」的方式满足同一目标且不丢调试信息
+- 验证：服务端 `cargo check --release -p agent2api-server` 通过；页面岛 `tsc --noEmit` 无错误；`scan.mjs --check` 缺失键 0；词典重建与 `vite build` 通过
+
 ## 后续同步官方更新
 
 1. 在 `main` 执行 `git fetch origin --prune` 并快进到官方最新版本

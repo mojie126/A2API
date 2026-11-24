@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { isModalActive } from '@ui'
 import { api } from './plugins-shared'
 import type { PluginProviderDocumentation, ProviderDocsPayload } from '../../../ui-shared/provider-docs'
 
@@ -36,7 +37,7 @@ export function useProviderDocumentation() {
   React.useEffect(() => {
     alive.current = true
     const section = document.querySelector(PAGE_SELECTOR)
-    const visible = () => !document.hidden && section?.classList.contains('active') === true
+    const visible = () => !document.hidden && !isModalActive() && section?.classList.contains('active') === true
     const refreshVisible = () => { if (visible()) void load() }
     const app = (window as unknown as { wbApp?: AppRefresh }).wbApp
     const unsubscribe = app?.subscribeRefresh?.(() => {

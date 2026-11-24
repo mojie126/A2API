@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { isModalActive } from '@ui'
 import { loadModelOptions } from './assistant-tools'
 import { modelOptionsFrom, type ModelOption } from './assistant-models'
 import { callJson } from './assistant-state'
@@ -49,7 +50,7 @@ export function useAssistantModels(apiKey?: string) {
   React.useEffect(() => {
     mountedRef.current = true
     const refreshVisible = () => {
-      if (document.hidden || !document.querySelector('.page.active[data-page="assistant"]')) return
+      if (document.hidden || isModalActive() || !document.querySelector('.page.active[data-page="assistant"]')) return
       void refresh().catch(() => {})
     }
     const interval = window.setInterval(refreshVisible, 20_000)

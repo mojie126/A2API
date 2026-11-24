@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Button, Spinner } from '@ui'
+import { Button, isModalActive, Spinner } from '@ui'
 import { t } from '../i18n'
 import { bridgeApi, errorMessage, loadCenter, toast, type UmidState } from './checkin-store'
 
@@ -42,7 +42,7 @@ export function CheckinUmid(): React.ReactElement | null {
   }, [load])
 
   React.useEffect(() => {
-    const timer = window.setInterval(() => { void load() }, busy || state?.installing ? 3000 : 60_000)
+    const timer = window.setInterval(() => { if (!isModalActive()) void load() }, busy || state?.installing ? 3000 : 60_000)
     return () => window.clearInterval(timer)
   }, [busy, state?.installing, load])
 

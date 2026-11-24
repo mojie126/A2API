@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Button, Empty, InputGroup, InputGroupAddon, InputGroupInput, Spinner, Switch, cn } from '@ui'
+import { Button, Empty, InputGroup, InputGroupAddon, InputGroupInput, isModalActive, Spinner, Switch, cn } from '@ui'
 import { t } from '../i18n'
 import { bridge, errorMessage, host, type ReplayRow } from './routing-types'
 import type { FlowDetails, FlowModels, FlowQuery } from './routing-flow-types'
@@ -48,7 +48,7 @@ export function RoutingRequestList({ active, query, selectedKey, refreshToken, o
     }
     void load()
     const timer = window.setInterval(() => {
-      if (!document.hidden && host().wbApp?.currentPage === 'routing') void load()
+      if (!document.hidden && !isModalActive() && host().wbApp?.currentPage === 'routing') void load()
     }, 5000)
     return () => { alive = false; window.clearInterval(timer) }
   }, [active, modelWindow, refreshToken])
@@ -81,7 +81,7 @@ export function RoutingRequestList({ active, query, selectedKey, refreshToken, o
     }
     void load(false)
     const timer = window.setInterval(() => {
-      if (!document.hidden && host().wbApp?.currentPage === 'routing') void load(true)
+      if (!document.hidden && !isModalActive() && host().wbApp?.currentPage === 'routing') void load(true)
     }, 3000)
     return () => { alive = false; sequence.current++; window.clearInterval(timer) }
   }, [active, queryKey, offset, refreshToken])

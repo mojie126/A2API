@@ -88,7 +88,7 @@ const DEFAULT_TAB: TabKey = 'detail'
 type AttemptDetail = {
   provider?: string
   providerLabel?: string
-  /** 这一轮实际发给上游的 User-Agent（空 = 插件默认身份） */
+  /** 这一轮实际发给上游的 User-Agent（空 = 插件默认身份）；不单独成列，并入「提示」悬停 */
   userAgent?: string
   account?: string
   /** 上游状态码；null / 缺省 = 这次尝试没有结果记录 */
@@ -156,7 +156,7 @@ type TerminateState = 'idle' | 'pending' | 'accepted'
 /** 详情网格 / 尝试明细的单元格：同一口径只写一处 */
 const GRID_CELL = 'border-b border-hairline px-2.5 py-[7px] align-top'
 const ATTEMPT_CELL = 'border border-hairline px-2 py-1 align-top'
-const ATTEMPT_HEAD = 'border border-hairline bg-surface-2 px-2 py-1 text-[11.5px] tracking-normal'
+const ATTEMPT_HEAD = 'border border-hairline bg-surface-2 px-2 py-1 text-[11.5px] tracking-normal truncate'
 /** 静态读数跟着鼠标变色会让人以为能点，两处表都关掉行悬停底色 */
 const NO_HOVER = 'hover:[&>td]:bg-transparent'
 
@@ -391,35 +391,51 @@ function ModelCell({ row }: { row: RequestRow }) {
   )
 }
 
-/** 一次尝试的结果：有 error 即失败、有 status 即成功、两者皆无是未定论 */
-function attemptResult(item: AttemptDetail): React.ReactNode {
+/// 一次尝试的结果：有 error 即失败、有 status 即成功、两者皆无是未定论
+function attemptResult(item: AttemptDetail): { text: string; className: string } {
   const status = Number(item?.status)
   const hasStatus = item?.status !== null && item?.status !== undefined && Number.isFinite(status)
   const error = item?.error ? String(item.error) : ''
   if (error) {
-    const text = hasStatus
-      ? t('失败（{status}）：{error}', { status: String(status), error })
-      : t('失败：{error}', { error })
-    return <span className='break-words text-destructive'>{text}</span>
+    return {
+      text: hasStatus
+        ? t('失败（{status}）：{error}', { status: String(status), error })
+        : t('失败：{error}', { error }),
+      className: 'text-destructive',
+    }
   }
-  if (hasStatus) return <span className='text-success'>{t('成功（{status}）', { status: String(status) })}</span>
-  return <span className='text-muted-foreground'>{t('无结果记录')}</span>
+  if (hasStatus) return { text: t('成功（{status}）', { status: String(status) }), className: 'text-success' }
+  return { text: t('无结果记录'), className: 'text-muted-foreground' }
 }
 
 /**
  * 尝试明细：每次上游尝试一行（提供商 / 账号 / 结果 / 内部重试 / 提示）。数据形状见
- * 后端 AttemptDetail；明细比 attempts 短时如实说明（保头截断，列表弹层同一口径），
- * 重试链的原因与退避间隔进 title（一行放不下，也不该占一列宽度）。
+ * 后端 AttemptDetail；明细比 attempts 短时如实说明（保头截断，列表弹层同一口径）。
+ *
+ * ── 列宽与截断 ────────────────────────────────────────────────
+ * 固定列宽（`table-fixed` + colgroup），各列 `truncate` 单行显示、`title` 给出完整内容：
+ * 提示列承载的是提示语、错误策略说明与这一轮的 User-Agent（上游 3.5.1 把「上游身份」
+ * 独立列删掉，正是因为它让表格变宽变形），一行放不下时就截断、悬停看全文，表格不再
+ * 因内容多寡变形。重试链的原因与退避间隔同样进 title。
  */
 function AttemptsTable({ row }: { row: RequestRow }) {
   const details = Array.isArray(row.attemptDetails) ? row.attemptDetails : []
   if (!details.length) return <>-</>
   const attempts = Number(row.attempts) || 1
   return (
-    <Table className='text-[11.5px]'>
+    <Table className='table-fixed text-[11.5px]'>
+      <colgroup>
+        <col className='w-[8%]' />
+        <col className='w-[15%]' />
+        <col className='w-[14%]' />
+        <col className='w-[22%]' />
+        <col className='w-[9%]' />
+        <col className='w-[9%]' />
+        <col className='w-[23%]' />
+      </colgroup>
       <TableHeader>
         <TableRow className={NO_HOVER}>
-          {[t('轮次'), t('提供商'), t('上游身份'), t('账号'), t('结果'), t('体积'), t('内部重试'), t('提示')].map(label => (
+          {[t('轮次'), t('提供商'), t('账号'), t('结果'), t('体积'), t('内部重试'), t('提示')].map(label => (
             <TableHead key={label} className={ATTEMPT_HEAD}>{label}</TableHead>
           ))}
         </TableRow>
@@ -437,6 +453,9 @@ function AttemptsTable({ row }: { row: RequestRow }) {
             return `${String(retry?.reason || t('未知原因'))}${delay}`
           }).join('\n')
           const notice = [String(item?.notice ?? '').trim(), errorPolicyDescription(item?.errorPolicy, t)].filter(Boolean).join(' · ')
+          const userAgent = String(item?.userAgent ?? '').trim()
+          const noticeTitle = [notice, userAgent ? t('上游实际 User-Agent：{value}', { value: userAgent }) : '']
+            .filter(Boolean).join('\n') || undefined
           // 体积：上游那两道墙都按请求体字节判（413 / PARSE_REQUEST_DATA_EXCEPTION），
           const bodyRaw = Number(item?.bodyBytes)
           const bodyText = Number.isFinite(bodyRaw) && bodyRaw > 0
@@ -449,28 +468,32 @@ function AttemptsTable({ row }: { row: RequestRow }) {
           const bodyTitle = Number.isFinite(bodyRaw) && bodyRaw > 0
             ? t('实际发给上游 {bytes} 字节', { bytes: bodyRaw.toLocaleString() })
             : undefined
+          const providerText = providerName(item) || (item?.provider ? String(item.provider) : t('未知'))
+          const accountText = item?.account ? String(item.account) : '—'
+          const result = attemptResult(item)
           return (
             <TableRow key={index} className={NO_HOVER}>
-              <TableCell className={ATTEMPT_CELL}>{index + 1}</TableCell>
-              <TableCell className={ATTEMPT_CELL}>
-                {providerName(item) || (item?.provider ? String(item.provider) : t('未知'))}
+              <TableCell className={`${ATTEMPT_CELL} tabular-nums`}>{index + 1}</TableCell>
+              <TableCell className={ATTEMPT_CELL} title={providerText}><span className='block truncate'>{providerText}</span></TableCell>
+              <TableCell className={ATTEMPT_CELL} title={accountText}><span className='block truncate'>{accountText}</span></TableCell>
+              <TableCell className={ATTEMPT_CELL} title={result.text}>
+                <span className={`block truncate ${result.className}`}>{result.text}</span>
               </TableCell>
-              <TableCell className={`${ATTEMPT_CELL} break-all`}>{item?.userAgent || '—'}</TableCell>
-              <TableCell className={ATTEMPT_CELL}>{item?.account ? String(item.account) : '—'}</TableCell>
-              <TableCell className={ATTEMPT_CELL}>{attemptResult(item)}</TableCell>
               <TableCell className={`${ATTEMPT_CELL} whitespace-nowrap`} title={bodyTitle}>
                 {bodyText}
               </TableCell>
               <TableCell className={`${ATTEMPT_CELL} whitespace-nowrap`} title={retryTitle || undefined}>
                 {retries.length ? t('↻ {n} 次', { n: retries.length }) : '-'}
               </TableCell>
-              <TableCell className={ATTEMPT_CELL}>{notice || '—'}</TableCell>
+              <TableCell className={ATTEMPT_CELL} title={noticeTitle}>
+                <span className={`block truncate ${notice ? '' : 'text-muted-foreground'}`}>{notice || '—'}</span>
+              </TableCell>
             </TableRow>
           )
         })}
         {details.length < attempts ? (
           <TableRow className={NO_HOVER}>
-            <TableCell colSpan={8} className={`${ATTEMPT_CELL} text-muted-foreground`}>
+            <TableCell colSpan={7} className={`${ATTEMPT_CELL} text-muted-foreground`}>
               {t('另有 {missing} 次尝试未记录明细（只保留最早的 {kept} 条）', {
                 missing: attempts - details.length, kept: details.length,
               })}
@@ -727,8 +750,10 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
 
   return (
     <Dialog open onOpenChange={next => { if (!next) onClose() }}>
-      {/* 旧实现是 .modal-wide（min(920px, 100%)），这里覆盖 DialogContent 的默认宽度 */}
-      <DialogContent className='w-[min(920px,calc(100vw-48px))]'>
+      {/* 旧实现是 .modal-wide（min(920px, 100%)）；尝试明细有 7 列且含错误摘要，
+          920px 下提示列被挤到变形。加宽到 1120px，配合表内固定列宽与单元格截断，
+          窄屏仍用 calc(100vw-48px) 兜住 */}
+      <DialogContent className='w-[min(1120px,calc(100vw-48px))]'>
         <DialogHeader>
           <DialogTitle>{t('请求详情')}</DialogTitle>
         </DialogHeader>

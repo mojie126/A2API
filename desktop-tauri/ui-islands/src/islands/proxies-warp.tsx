@@ -8,7 +8,7 @@
 
 import * as React from 'react'
 import {
-  Badge, Button, Card, CardHeader, StatusDot, Table, TableBody, TableCell, TableHead,
+  Badge, Button, Card, CardHeader, isModalActive, StatusDot, Table, TableBody, TableCell, TableHead,
   TableHeader, TableRow, cn,
 } from '@ui'
 import { t } from '../i18n'
@@ -46,7 +46,8 @@ export function WarpPanel() {
 
   React.useEffect(() => {
     void load()
-    const timer = window.setInterval(() => void load(true), REFRESH_MS)
+    // 弹窗打开期间跳过静默轮询：设备清单重绘会让遮罩与弹窗重新合成
+    const timer = window.setInterval(() => { if (!isModalActive()) void load(true) }, REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [load])
 

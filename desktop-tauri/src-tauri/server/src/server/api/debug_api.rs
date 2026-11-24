@@ -91,17 +91,22 @@ pub async fn put_debug(State(_state): State<ServerState>, body: Bytes) -> Respon
 ///
 /// 找不到（开关没开过 / 已超出保留条数 / id 为空）时给 404：前端据此显示
 /// 「该请求没有保存原始报文」而不是空面板。
+///
+/// 读库与反序列化放进阻塞线程池：一条 SSE 响应可达数百 KB，详情弹窗打开即并发
+/// 拉这一条，留在 tokio 工作线程上会拖慢同一时刻的其它面板请求。
 pub async fn get_traffic(State(_state): State<ServerState>, Query(params): Query<Params>) -> Response {
     let id = params.id.trim();
     if id.is_empty() {
         return errors::management_error(400, "缺少 id");
     }
-    match debug_traffic::get(id) {
-        Some(entry) => ok_json(debug_traffic::detail_payload(&entry)),
-        None => errors::management_error(
+    let id_owned = id.to_string();
+    match tokio::task::spawn_blocking(move || debug_traffic::get(&id_owned)).await {
+        Ok(Some(entry)) => ok_json(debug_traffic::detail_payload(&entry)),
+        Ok(None) => errors::management_error(
             404,
             "该请求没有保存原始报文（调试模式当时未开启，或记录已超出保留条数）",
         ),
+        Err(error) => errors::management_error(500, format!("原始报文读取任务失败: {error}")),
     }
 }
 

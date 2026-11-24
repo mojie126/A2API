@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { mountOnPage } from '../island-lazy'
 import { createRoot } from 'react-dom/client'
-import { Badge, Button, Empty, SegmentedControl, Spinner, confirmDialog } from '@ui'
+import { Badge, Button, Empty, isModalActive, SegmentedControl, Spinner, confirmDialog } from '@ui'
 import { t } from '../i18n'
 import { AccountSettingsDialog } from './accounts-settings-dialog'
 import type { AccountSorting } from './accounts-shared'
@@ -103,7 +103,8 @@ export function RoutingPage() {
   // 草稿不会被轮询冲掉。页面不可见、不是路由页、有弹窗或正在保存时都跳过。
   React.useEffect(() => {
     const timer = window.setInterval(() => {
-      if (document.hidden || host().wbApp?.currentPage !== 'routing') return
+      // 本页弹窗已由 `modal` 挡住，这里再覆盖账号设置等其它入口打开的全局弹窗
+      if (document.hidden || isModalActive() || host().wbApp?.currentPage !== 'routing') return
       if (mode !== 'config' || editor.busy || editor.loading || modal || accountControl.busy || sortingSyncBusy) return
       void editor.refresh()
     }, 3000)
@@ -147,7 +148,7 @@ export function RoutingPage() {
     let alive = true
     let pending = false
     const timer = window.setInterval(async () => {
-      if (pending || document.hidden || host().wbApp?.currentPage !== 'routing') return
+      if (pending || document.hidden || isModalActive() || host().wbApp?.currentPage !== 'routing') return
       pending = true
       try {
         const next = await bridge().getRoutingTraceRequest({ id: selected.id, ts: selected.ts })

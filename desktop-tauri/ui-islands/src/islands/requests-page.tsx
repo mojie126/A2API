@@ -18,7 +18,7 @@ import {
 import { t } from '../i18n'
 import { SearchableSelect } from '../../../ui-shared/searchable-select'
 import { DATE_RANGES, dateRangeQuery, readCustomRange, saveCustomRange, validCustomRange } from '../../../ui-shared/date-range'
-import { Empty } from '@ui'
+import { Empty, isModalActive } from '@ui'
 import { ALL_CLIENTS, clientFilterValue, LogDateFilters, SourceLogFilters, sourceParams,
   type LogDates, type LogDrilldown, type SourceOption } from './requests/source-filters'
 import { RequestCell, headRow, isOk, isRunning, uniqueRowKeys, providerLabelOf, type RequestEntry, type VisibleColumn } from './requests/request-cells'
@@ -382,6 +382,9 @@ function RequestsPage() {
       // 请求已在途时用户才打开悬停面板：这一轮静默刷新同样不落屏，
       // 避免响应回来时替换锚点。面板收起后的下一轮会拿到最新数据。
       if (silent && shared().wbRequestHover?.isOpen?.()) return
+      // 同上，这条覆盖「请求发出后才打开详情弹窗」的窗口：静默刷新落屏会重绘
+      // 列表并让弹窗重新合成，高负载下表现为打开后迟滞。关闭后下一轮恢复。
+      if (silent && isModalActive()) return
       const next: PanelData = {
         entries: Array.isArray(result?.entries) ? result.entries : [],
         total: Number(result?.total) || 0,
@@ -464,6 +467,9 @@ function RequestsPage() {
     if (!auto.enabled || auto.ms <= 0) return
     const timer = window.setInterval(() => {
       if (document.hidden || shared().wbApp?.currentPage !== 'requests') return
+      // 详情弹窗打开期间暂停自动刷新：重绘下层会让遮罩与弹窗重新合成，高负载下
+      // 表现为「弹窗一开就迟缓」；弹窗关闭后下一轮自然恢复（与账号页 / 日志页同一判据）。
+      if (isModalActive()) return
       // 悬停面板开着时暂停这一轮：重绘会换掉锚点节点，用户正在读的浮层
       // 不应被自动刷新抢走。面板收起后下一轮自然恢复。
       if (shared().wbRequestHover?.isOpen?.()) return

@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { isModalActive } from '@ui'
 import { t } from '../i18n'
 import { bridge, errorMessage, host, type RoutingWorkspace, type StickyEntry } from './routing-types'
 
@@ -54,7 +55,7 @@ export function useRoutingReplay(active: boolean, workspaceModel?: string, pollW
     }
     void load(false)
     const timer = window.setInterval(() => {
-      if (!document.hidden && host().wbApp?.currentPage === 'routing') void load(true)
+      if (!document.hidden && !isModalActive() && host().wbApp?.currentPage === 'routing') void load(true)
     }, 5000)
     return () => { alive = false; sequence.current++; window.clearInterval(timer) }
   }, [active, currentModel, token, pollWorkspace])

@@ -154,7 +154,7 @@
   "上次同步：{time}（{action}）": "Última sincronização: {time} ({action})",
   "上次成功刷新的结果（存在本机数据库里）": "Resultado da última atualização bem-sucedida (guardado no banco local)",
   "上游 CLI 版本": "Versão da CLI upstream",
-  "上游实际 User-Agent：{value}": "",
+  "上游实际 User-Agent：{value}": "User-Agent real do upstream: {value}",
   "上游客户端版本": "Versão do cliente upstream",
   "上游按": "O upstream valida a identidade pela ",
   "上游按「结构」校验身份：三段必须各自成块，所以这里分开编辑三段（不能合成一段）。动态段里的运行值写成占位符，发请求时才替换：{cwd} 工作目录、{platform} 平台、{shell} shell、{os_version} 系统版本、{git} 是否 git 仓库、{provider} 提供方标识、{model} 模型名。清空某一段 = 那一段恢复官方原文。第三段发出时前面会自带一个空行（官方形状）。": "O upstream valida a identidade por “estrutura”: os três blocos precisam ser blocos separados, então os três são editados aqui individualmente (não é possível fundi-los em um só). Valores de execução no bloco dinâmico são escritos como placeholders e substituídos apenas no envio da requisição: {cwd} diretório de trabalho, {platform} plataforma, {shell} shell, {os_version} versão do sistema, {git} se é um repositório git, {provider} identificador do provedor, {model} nome do modelo. Limpar um bloco = aquele bloco volta ao texto oficial. O terceiro bloco é enviado com uma linha em branco na frente (o formato oficial).",

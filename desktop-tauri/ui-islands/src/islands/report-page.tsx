@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { mountOnPage } from '../island-lazy'
 import { createRoot } from 'react-dom/client'
-import { Badge, Empty, SegmentedControl, type SegmentedControlOption, PageHeader, PageTitle, PageDescription } from '@ui'
+import { Badge, Empty, isModalActive, SegmentedControl, type SegmentedControlOption, PageHeader, PageTitle, PageDescription } from '@ui'
 import {
   RANGES, DEFAULT_RANGE, RANGE_KEY, RANGE_LABEL, RANGE_OPTION_LABEL,
   CUSTOM_RANGE,
@@ -314,8 +314,9 @@ function ReportPage() {
   React.useEffect(() => {
     if (!auto.enabled || auto.ms <= 0) return
     const timer = window.setInterval(() => {
-      // 只在报表页可见时轮询，避免后台无谓请求
-      if (document.hidden || shared().wbApp?.currentPage !== 'overview') return
+      // 只在报表页可见时轮询，避免后台无谓请求；详情弹窗打开期间同样跳过，
+      // 重绘下层会让遮罩与弹窗重新合成（高负载下就是弹窗迟滞的来源）
+      if (document.hidden || isModalActive() || shared().wbApp?.currentPage !== 'overview') return
       // 上一轮还没回来就跳过这一拍（见 polling 的说明）
       if (polling || loadingRef.current > 0) return
       polling = true

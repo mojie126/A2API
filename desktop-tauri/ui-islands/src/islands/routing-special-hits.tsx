@@ -13,7 +13,7 @@
  */
 
 import * as React from 'react'
-import { Button, Card } from '@ui'
+import { Button, Card, isModalActive } from '@ui'
 import { t } from '../i18n'
 import { RouteIcon } from './routing-ui'
 import { requestRewrite } from './routing-exec-rewrite'
@@ -39,7 +39,7 @@ export function RoutingSpecialHits({ kind, refreshToken, onOpenReplay }: {
   React.useEffect(() => {
     let alive = true
     const page = document.querySelector('.page[data-page="routing"]')
-    const visible = () => !document.hidden && page?.classList.contains('active') === true
+    const visible = () => !document.hidden && !isModalActive() && page?.classList.contains('active') === true
     const load = createRefreshRequest(async isCurrent => {
       if (!alive || !visible()) return
       setLoading(true)

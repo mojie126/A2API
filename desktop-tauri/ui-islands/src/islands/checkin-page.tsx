@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { mountOnPage } from '../island-lazy'
 import { createRoot } from 'react-dom/client'
-import { Badge, Button, SegmentedControl, Spinner } from '@ui'
+import { Badge, Button, isModalActive, SegmentedControl, Spinner } from '@ui'
 import {
   loadCenter, loadRecords, patch, store, subscribe,
 } from './checkin-store'
@@ -84,7 +84,8 @@ function CheckinPage(): React.ReactElement {
     let running = store.center?.auto?.running === true
     const timer = window.setInterval(() => {
       const page = (window as unknown as { wbApp?: { currentPage?: string } }).wbApp?.currentPage
-      if (document.hidden || page !== 'checkin') return
+      // 弹窗打开期间跳过：签到面板重绘会让遮罩与弹窗重新合成（与账号页同一判据）
+      if (document.hidden || isModalActive() || page !== 'checkin') return
       const now = store.center?.auto?.running === true
       // 轮询只更新后台状态，不能把排程页正在编辑的草稿按旧快照清掉。
       // 插件任务（pluginTaskRunning）与旅行任务在跑时同样要刷新（上游 beta.2）
