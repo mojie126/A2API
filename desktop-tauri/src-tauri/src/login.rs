@@ -1417,7 +1417,13 @@ impl DynamicNavigation {
     fn matches_callback(&self, url: &url::Url) -> bool {
         url.username().is_empty() && url.password().is_none() && self.callbacks.iter().any(|target| {
             url.scheme() == target.scheme() && url.host_str().zip(target.host_str())
-                .is_some_and(|(host, target)| host.eq_ignore_ascii_case(target))
+                .is_some_and(|(host, target_host)| {
+                    // 回环地址的 localhost / 127.0.0.1 / [::1] 视为同一主机：
+                    // 授权地址登记与上游实际回调的写法不一定一致
+                    host.eq_ignore_ascii_case(target_host)
+                        || (url.scheme() == "http" && target.port().is_some()
+                            && is_loopback_host(host) && is_loopback_host(target_host))
+                })
                 && url.port_or_known_default() == target.port_or_known_default() && url.path() == target.path()
                 && url.fragment().is_none()
         })
@@ -1425,21 +1431,24 @@ impl DynamicNavigation {
 
     fn allows(&self, url: &url::Url) -> bool {
         if !url.username().is_empty() || url.password().is_some() { return false; }
+        if url.as_str() == "about:blank" { return true; }
         let Some(host) = url.host_str() else { return false; };
         match url.scheme() {
             "https" => self.hosts.is_empty() || self.hosts.iter().any(|item| {
                 host.eq_ignore_ascii_case(item) || host.to_ascii_lowercase().ends_with(&format!(".{item}"))
             }),
             // HTTP 只用于授权地址实际登记的回环 callback，或插件明确申报的
-            // 本机登录页；仅白名单写 localhost 不够。
-            "http" => matches!(host, "localhost" | "127.0.0.1" | "[::1]")
-                && (self.matches_callback(url) || self.matches_loopback_page(url))
-                && (self.hosts.is_empty() || self.hosts.iter().any(|item| {
-                    host.eq_ignore_ascii_case(item) || host.to_ascii_lowercase().ends_with(&format!(".{item}"))
-                })),
+            // 本机登录页；仅白名单写 localhost 不够
+            "http" => is_loopback_host(host)
+                && (self.matches_callback(url) || self.matches_loopback_page(url)),
             _ => false,
         }
     }
+}
+
+/// 回环主机的三种合法写法
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || matches!(host, "127.0.0.1" | "[::1]")
 }
 
 fn dumate_login_url(url: &url::Url) -> bool {
@@ -1526,13 +1535,19 @@ async fn run_dynamic_login(
             let seen = Arc::new(AtomicBool::new(false));
             let nav_seen = seen.clone();
             let capture_doubao = provider == "doubaowork";
-            let built = WebviewWindowBuilder::new(app, login_window_label(flow), WebviewUrl::External(auth))
+            // 华为云登录会在本窗口内跨域并自行完成回环回调，壳侧不截获回调，
+            // 也不把新开窗口拦掉
+            let direct_callback = provider == "codearts";
+            let app_for_popup = app.clone();
+            let window_label = login_window_label(flow);
+            let built = WebviewWindowBuilder::new(app, window_label.clone(), WebviewUrl::External(auth))
                 .data_directory(profile.as_ref().ok_or("登录环境不可用")?.path().to_path_buf())
                 .general_autofill_enabled(false)
                 .title(format!("登录 {} 账号", crate::server::core::providers::label_of(provider)))
                 .inner_size(1100.0, 820.0).min_inner_size(760.0, 560.0).center()
                 .on_navigation(move |url| {
                     if nav_policy.is_callback(url) {
+                        if direct_callback { return true; }
                         if !nav_seen.swap(true, Ordering::SeqCst) {
                             let state = nav_state.clone();
                             let callback = url.as_str().to_string();
@@ -1543,6 +1558,20 @@ async fn run_dynamic_login(
                     nav_policy.allows(url)
                 })
                 .on_new_window(move |url, _| {
+                    // 华为账号、IAM、企业联邦与第三方登录通过 window.open 或
+                    // target="_blank" 打开；直接拒绝会让这些入口静默无响应。
+                    // 这里把策略允许的目标改道到当前窗口打开，既保持单窗口与
+                    // 策略校验，也不放开未受控的新窗口
+                    if direct_callback && (policy.is_callback(&url)
+                        || (url.as_str() != "about:blank" && policy.allows(&url)))
+                    {
+                        let handle = app_for_popup.clone();
+                        let label = window_label.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Some(window) = handle.get_webview_window(&label) { let _ = window.navigate(url); }
+                        });
+                        return tauri::webview::NewWindowResponse::Deny;
+                    }
                     if capture_doubao && crate::doubaowork_login::allowed(&url) && policy.allows(&url) {
                         return tauri::webview::NewWindowResponse::Allow;
                     }
