@@ -566,6 +566,16 @@
 - 插件仓库 `dev-build.yml` 增加并发取消；原先独立占用一个任务的缓存清理改为 Linux 矩阵任务内的可选步骤，未勾选清理时不再为空任务启动运行器
 - 未改动任何自动触发条件，仍保持仅手动派发
 
+#### 构建阶段校验与草稿 Release 口径
+
+`fork-build.yml` 与插件仓库 `dev-build.yml` 的校验与发布规则都是 fork 自有流程，同步官方时必须整体保留：
+
+- 构建前（`prepare`）：重建前端产物后按 `git status --porcelain -- desktop-tauri/ui` 判同源，产物必须能被源码逐字节复现；校验六处版本号一致（根 `package.json`、`desktop-tauri/package.json`、桌面端与服务端 `Cargo.toml`、`tauri.conf.json`、手机端 `package.json`）；协议库 tag 只校验「在远端存在」，不要求与网关版本号一致；同 tag 已正式发布时发布标题改为 `v<版本>-r<运行序号>`
+- 构建产物：Windows 任务同时产出 `windows-nsis`（安装包）与 `windows-server-amd64`（服务端压缩包）；`windows-server-amd64` 仍是独立 artifact 名，由合并后的 Windows 任务上传，`release` 任务按名下载
+- Release 任务：校验附件恰好一个 `*.exe` 与一个 `*.zip`，多一个少一个都中止；发布说明取 `docs/release-notes_<版本>.md`，缺失时退回最小说明并只告警不中止；按 `updateOnlyUnreleased` 创建或更新**草稿**，不直接发布
+- 插件仓库：`build` 任务校验 `pack.json` 与 `Cargo.toml` 的包版本一致，按 `-target` 打包、配了 `AGENT2API_PLUGIN_KEY` 才签名（未配置时只告警、产物可选安装），上传 `pack-<三元组>`；`release` 任务按 `pack.json` 校验版本号字符合法，同 tag 草稿先删 Release 与 tag 再重建，已发布的同 tag 追加 `-r<运行序号>`，说明文件缺失时退回最小说明
+- 已知坑：删草稿必须先删 Release 再删 tag（`gh release delete --cleanup-tag` 会对已不存在的 tag 回 422）；这两个工作流必须保持仅 `workflow_dispatch`
+
 ### 2026-11-24（请求日志悬停面板暂停自动刷新）
 
 - 缺陷：请求日志自动刷新会重绘列表，用户正在查看的「切换路径」悬停面板随锚点节点一起被替换
@@ -592,7 +602,7 @@
 - 插件宿主：保留原生插件安装与运行；安装入口先取本机三元组再回退 WASM；插件更新源使用 fork 仓库；登录换码与账号请求走所选代理；8 MiB 工作线程栈；脚本插件运行时清理
 - 数据与同步：保留 schema v30 客户端身份、v31 协议、v32 出口方式与 IP，官方新版本顺延；数据库增量回收与 WAL 检查点参数；WebDAV 连接池与恢复时本地偏好优先；限额事件移出云同步并定期修剪；无有效期账号手动刷新按无需续期处理
 - 界面与交互：弹窗遮罩取消入场动画；请求日志悬停面板打开期间暂停自动刷新；ZCode 验证支持后台标签页；特殊请求路由切换清空选中态；更新检查可彻底关闭；AutoClaw 国际版入口停用；提示条禁用滑动手势
-- 构建与发布：构建工作流仅手动触发；`fork-build.yml` 合并 Windows 任务与并发取消；`build-desktop.ps1` 增量构建与前端指纹；发布说明只列 fork 增量
+- 构建与发布：构建工作流仅手动触发；`fork-build.yml` 合并 Windows 任务与并发取消；`build-desktop.ps1` 增量构建与前端指纹；发布说明只列 fork 增量；Release 阶段的前端同源、六处版本号、附件数量与草稿更新规则见「构建阶段校验与草稿 Release 口径」
 
 高风险重叠目录：`core/plugin_host`、`core/account_store`、`core/upstream`、`core/providers`、`core/runtime_capacity`、`core/model_meta`、`request_stats`、`db`、`config`、`api/accounts.rs`、`api/session.rs`、`api/stats_api.rs`。这些路径上游改动最多，合并后逐项回归出口、插件安装、路由组并发、识图、云同步恢复、请求日志与构建产物，并运行 `cargo test --release -p agent2api-server` 与页面岛类型检查和构建。
 
