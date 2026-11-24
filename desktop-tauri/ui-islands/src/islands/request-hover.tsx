@@ -497,6 +497,11 @@ function closePanel(): void {
   unmountPanel()
 }
 
+/** 面板是否正开着：自动刷新在打开期间暂停，用户看完再恢复。 */
+function isOpen(): boolean {
+  return Boolean(anchor && panelRoot)
+}
+
 /* ─── 整表重绘时的锚点迁移 ───────────────────── */
 /**
  * 列表整表重绘**前**调用（宿主在替换 `innerHTML` 之前）：定下锚点的处置意图。
@@ -653,6 +658,8 @@ type RequestHoverApi = {
   bind(options?: BindOptions): void
   /** 收起面板并拆掉宿主 */
   close(): void
+  /** 面板是否正开着：宿主据此暂停自动刷新，避免重绘抢走正在看的浮层 */
+  isOpen(): boolean
   /** 「重试」标签该不该出现 —— 判据在数据明细里，由本模块回答（见 hasProcessFacts） */
   hasProcessFacts(entry: unknown): boolean
   /** 整表重绘前：定下锚点的处置意图（迁移 / 收起） */
@@ -668,4 +675,4 @@ declare global {
   }
 }
 
-window.wbRequestHover = { bind, close: closePanel, hasProcessFacts, beforeListRedraw, afterListRedraw }
+window.wbRequestHover = { bind, close: closePanel, isOpen, hasProcessFacts, beforeListRedraw, afterListRedraw }
