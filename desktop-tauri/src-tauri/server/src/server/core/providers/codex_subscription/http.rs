@@ -209,6 +209,8 @@ pub(super) fn code(body: &Value) -> Option<String> {
     token_error_code(body).or_else(|| {
         body.pointer("/error/type")
             .and_then(Value::as_str)
+            .or_else(|| body.pointer("/detail/code").and_then(Value::as_str))
+            .or_else(|| body.pointer("/detail/type").and_then(Value::as_str))
             .filter(|value| {
                 !value.is_empty()
                     && value.len() <= 80
