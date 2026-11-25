@@ -56,11 +56,14 @@ export const AccountTableRow = React.memo(function AccountTableRow({ account, ra
       default: return null
     }
   }
-  return <TableRow ref={measure} data-index={index} aria-rowindex={displayRank} aria-busy={account.detailsLoaded === false}
+  // 连接数是进程内实时计数、与账号详情无关，详情未加载时照常显示；
+  // 其余列仍等详情就绪（勾选列给加载指示）
+  const lazy = account.detailsLoaded === false
+  return <TableRow ref={measure} data-index={index} aria-rowindex={displayRank} aria-busy={lazy}
     className={cn('acct-row', !isEnabled(account) && 'disabled', picked && 'selected')}
     data-id={account.id} data-provider={providerOf(account)} data-desktop={isDesktopAccount(account) ? '1' : undefined}>
     {columns.map(column => <TableCell key={column.key} className={`cell-${column.key} ta-${column.align}`}>
-      {account.detailsLoaded === false && column.key !== 'account'
+      {lazy && column.key !== 'account' && column.key !== 'connections'
         ? column.key === 'pick' ? <Spinner className='size-3.5' /> : null : cell(column.key)}
     </TableCell>)}
   </TableRow>

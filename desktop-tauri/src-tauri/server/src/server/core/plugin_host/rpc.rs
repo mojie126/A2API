@@ -1946,6 +1946,12 @@ impl ProviderAdapter for RpcAdapter {
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
                 .unwrap_or(default_message) };
+            // 领取数量并入文案：界面只渲染 `msg`，单个 `credit` 字段没有消费方，
+            // 拼进去才能让签到卡与提示直接看到「领了多少」（金额已含单位与符号）
+            let message = match report.credit.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+                Some(credit) if !message.contains(credit) => format!("{message}（{credit}）"),
+                _ => message.to_string(),
+            };
             let mut claim = serde_json::json!({
                 "success": success,
                 "alreadyCompleted": report.outcome == proto::CheckinOutcome::Done,
