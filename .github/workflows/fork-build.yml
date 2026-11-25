@@ -134,7 +134,7 @@ jobs:
           echo "value=$title" >> "$GITHUB_OUTPUT"
 
   windows:
-    name: Windows 桌面端与服务端
+    name: Windows 桌面端
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -160,8 +160,33 @@ jobs:
       - name: 构建 Windows 安装包
         run: npm --prefix desktop-tauri run build
 
-      # 服务端与桌面端共用同一个 target 目录：桌面端先编译时已完成大部分依赖编译，
-      # 这里只补服务端二进制，避免过去两个独立任务各自重编同一批依赖。
+      - name: 上传 Windows 安装包
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-nsis
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  # 服务端必须单独成 job，不能并入桌面端任务串行执行：
+  # `tauri build` 按 workspace 全成员解析依赖 feature 并集，随后单包
+  # `cargo build -p agent2api-server` 的并集少掉桌面专属特性（实测差 68 项），
+  # 同一 target 目录里的 crate 指纹随之全变，第二步会把上百个依赖重编一遍
+  # （2026-11-24 实测服务端步骤由 9 分钟涨到 16 分钟）。两个 job 各自命中
+  # rust 缓存、并行执行，桌面与服务端互不影响。
+  windows-server:
+    name: Windows 服务端
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-tauri/src-tauri -> ../../target
+
       - name: 构建 Windows 服务端
         working-directory: desktop-tauri/src-tauri
         run: cargo build --release -p agent2api-server --bin agent2api-server
@@ -181,13 +206,6 @@ jobs:
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/$name.zip" -Force
 
           Get-ChildItem dist | Format-Table Name, Length
-
-      - name: 上传 Windows 安装包
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-nsis
-          path: target/release/bundle/nsis/*.exe
-          if-no-files-found: error
 
       - name: 上传 Windows 服务端包
         uses: actions/upload-artifact@v7
@@ -264,6 +282,7 @@ jobs:
     needs:
       - prepare
       - windows
+      - windows-server
       - docker
     runs-on: ubuntu-latest
     permissions:
