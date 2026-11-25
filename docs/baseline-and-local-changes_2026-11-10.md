@@ -2,7 +2,7 @@
 
 本文汇总自 fork 以来本仓库的全部本地改动、官方基线增量、部署运行基线与可向上游提交的改动清单，整合并取代 2026-11-04、2026-11-05、2026-11-08 三份记录与 `models-dev-model-metadata-follow-up_2026-11-09.md` 跟进文档：2026-11-04 原文只存于本地对象库的提交 `aa108bc1`（performance 谱系未进 develop 祖先，其工作经 `e99f2031` 重新落地），2026-11-05 与 11-08 两份的官方基线与结论已全部并入本文，历史结论在本文中继续有效。
 
-> 当前状态与处置决策以 `docs/上游同步与本地改动总览_2026-11-24.md` 为准；本文保留逐日详细记录。
+> 当前状态与处置决策以 `docs/上游同步与本地改动总览_2026-11-25.md` 为准；本文保留逐日详细记录。
 
 ## 仓库与分支
 
@@ -699,6 +699,37 @@
 - 修复：`login.rs` 的 `DynamicNavigation` 对同一回环地址的 `localhost` / `127.0.0.1` / `[::1]` 视为同一主机做回调匹配，`http` 白名单不再要求主机同时出现在 `hosts` 表里，并放行 `about:blank`
 - 修复：CodeArts 的动态登录窗口在导航到回调地址时不再截获并关闭窗口，交由华为云页面自行完成回环回调；`window.open` 或 `target="_blank"` 打开且策略允许的目标改道到当前窗口打开，华为账号、IAM、企业联邦与第三方登录入口不再静默无响应
 - 未跟进：科搭服务端短信登录与二次阿里云滑块（官方 3.5.1 核心更新第 3 条）需要插件侧先实现 `login.sms.*` 与滑块申报，本 fork 原生科搭当前只有令牌、本机读取与微信扫码三种方式，留待插件侧补齐后整体接入
+
+### 2026-11-24（同步跟进上游 3.5.1 第二批：签到口径与登录可靠性）
+
+- ZCode 每日签到下架（`b21f870c`）：`CHECKIN_PROVIDERS` 从 19 家降至 17 家并移除 `zcode` 与 `zcode-intl`，`PROVIDERS_ADDED_IN` 移除版本 6 两项，`times::PROVIDER_TIMES` 去掉 19:01 两条；插件仓库同步把 ZCode 申报改为 `checkin: false`、`daily: false`、`modes` 为空，保留 `claims`、`plans` 与活动领取实现
+- 签到清单按申报过滤（`b9c8fa05`）：新增 `plugin_supports_daily_checkin`，`checkin_providers` 与 `available_checkin_providers` 按 `CheckinInfo.daily` 过滤，`extend_plugin_providers_once` 同时清理 `pluginProvidersSeen` 中已明确关闭每日签到的插件家
+- Trae 托管登录（`e4d8e3f7`）：回调 `loginHost` 改子域白名单（`trae.cn`、`trae.com.cn` 及子域），参数上限 8192 提到 32 KiB 并容忍 CR/LF/TAB 与重复等值键，`authCodeInfo` 兼容字符串包裹与 `Code` 字段；响应解析容忍 `Code`、`Result`、`success` 为 null，新增时长字段 `TokenExpireDuration` 与 `ExpiresIn` 推导到期时间，并接受两个既有国内 ClientID
+- 小浣熊凭据清洗（`e4d8e3f7`）：新增 `sanitize_record` 判定 IAM 令牌、空值与 `refreshToken == accessToken` 为不可续期，清理脏 `refreshToken` 与 `hasRefreshToken` / `canRefresh`；`to_raccoon_public_account` 改用有效判据，启动迁移与账号导入后各跑一次，导出时同样清洗并以 `pluginSecret` 为权威来源
+- 短信登录（`e4d8e3f7`）：发送失败时非限流分支同样推进重试时刻，未发出时清空手机号，并补发起、已发送、需人机验证、失败与成功五处日志
+- 本地增强核对：ZCode 活动领取入口、原生插件安装与三元组回退、WARP 出口池、路由组并发、识图原图直转、客户端归属、WebDAV 本地优先均保持原样
+
+### 2026-11-25（签到数量、连接数显示修复与第二优先性能项）
+
+- 签到领取数量可见：`plugin_host/rpc.rs` 把插件 `CheckinReport.credit` 并入结果行 `msg`（界面只渲染 `msg`）；WorkBuddy 国内版成功领取且无金额时补读 `checkin-activity-status` 的 `daily_credit`；CodeArts `Run` 增 `gained` 只计本次新确认到账并汇总积分
+- 百度搭子「当月已签」：`signInDays` 按今天（北京时间）月份前缀过滤并去重
+- 账号页连接数：`detailsLoaded === false` 时不再清空该列（进程内实时计数，与详情无关）
+- 日志查询阻塞线程池：`query_logs`（含账号上下文补全）、`stats_logs`、`download_logs` 改 `spawn_blocking`，失败记日志并回 500
+- 筛选候选缓存：新增 `request_stats/filters_cache.rs`，按 `query_cache_generation`、`request_revision` 与 `PRAGMA data_version` 核对复用，短窗 15 秒直读、活跃流量最长 5 分钟重算；记账侧标脏，`clear_requests` 失效
+- 模型元数据预热：`model_meta::install` 启动即读缓存装载，读路径不再持库锁
+- 签到记录复合索引：schema `v34` 增 `(ts DESC, row_id DESC)`
+- 静态资源分档缓存：入口页与 `sw.js` 改 `no-store, no-cache, must-revalidate` 且不回 304；子资源保留 ETag，服务 HTML 时给本地引用追加 `?v=<版本+长度+mtime>`
+- 网页工具调用解析器：支持前置正文与多块累积（`Output::Calls { text, calls }`）、代码围栏剥离；校验码不匹配明确失败；`stream` 未完成判定补 `CLOSE`
+- 模型 Key 权威门：`with_current` / `authenticate_key` 改阻塞加锁，门内只克隆 Arc；新增 `is_failed` / `republish_from_db` 与 `update_inner` 起始处自愈
+- 选路排队候选：`plan_route` 把可用但并发已满的候选移入 `ordered` 队尾并标 `concurrency`，不可用的仍进 `blocked`
+- 文档：A2API 保持 `3.5.1`（与官方同版本），增量并入 `docs/release-notes_3.5.1.md` 的 11-25 追加段；插件保持 `3.5.0`，写入其 11-25 追加段
+- 验证：服务端零告警、单测 **509 通过 / 11 忽略**（新增静态资源缓存 3 项、网页工具解析器 6 项、选路排队 1 项）；插件仓库零告警、单测 **80 通过**；页面岛 `tsc --noEmit` 无错误并重建产物；手机端产物重建
+
+### 2026-11-25（Codex 订阅图片通道补齐）
+
+- 官方 3.5.1 核心更新第 1 条「Codex 订阅接入 `gpt-image-2`」此前本地缺失，按本地结构移植（`b9c8fa05`）：新增 `codex_subscription/images.rs` 承载 `/v1/images/generations` 与 `/v1/images/edits`；模型目录固定注入 `gpt-image-2` 并标注图片能力；`request::authorized_tokens` 与 `request::build_headers` 抽为公共函数；`ChatRequestPlan::images` 承载图片端点；图片模型禁止走对话；冷却只约束自身图片模型不与文字连坐
+- 文档口径复审：修正提交归属（线程池与筛选缓存 `26c38327`、模型 Key 阻塞锁 `b21f870c`、`?v=` 指纹 `a4ea2c11`、短信重试 `e4d8e3f7`）；更正云同步 S3 早有实现；补记桌面热切换、客户端配置页预热与骨架屏、AutoClaw 活动按项领取、小浣熊对话链路 200901 四项未跟
+- 验证：服务端零告警、单测 **513 通过 / 11 忽略**（新增 Codex 图片 4 项）
 
 ## 后续同步官方更新
 
