@@ -1,5 +1,5 @@
 //! Trae /authorize 查询材料的严格解析。只供真实IPv4接收器调用，不是管理提交入口。
-//! 无官方state，不虚构state；拒绝refreshToken路径、重复键、冲突别名及无授权噪音。
+//! 无官方state，不虚构state；拒绝refreshToken路径、冲突重复键及无授权噪音，等值重复键放行。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,16 +12,33 @@ pub(super) enum Input {
     Code(Zeroizing<String>),
     Denied,
 }
-const ORIGINS: &[&str] = &[
-    "https://api.trae.cn",
-    "https://api.trae.com.cn",
-    "https://www.trae.cn",
-];
+
+/// 回调 `loginHost` 的合法来源：只认杭州 Trae 官方域及其子域
+fn valid_trae_host(raw: &str) -> bool {
+    let candidate = if raw.starts_with("https://") || raw.starts_with("http://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let Ok(url) = url::Url::parse(&candidate) else {
+        return false;
+    };
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    host == "trae.cn"
+        || host == "trae.com.cn"
+        || host.ends_with(".trae.cn")
+        || host.ends_with(".trae.com.cn")
+}
 
 pub(super) fn parse(query: &str) -> Result<Input, GatewayError> {
     if query.is_empty()
         || query.len() > 32 * 1024
-        || query.contains('\\')
         || query
             .chars()
             .any(|ch| ch.is_control() || ch.is_whitespace())
@@ -47,15 +64,22 @@ pub(super) fn parse(query: &str) -> Result<Input, GatewayError> {
     for (key, value) in url::form_urlencoded::parse(bytes) {
         if key.is_empty()
             || key.len() > 128
-            || value.len() > 8192
+            || value.len() > 32 * 1024
             || params.0.len() >= 64
             || key.chars().any(char::is_control)
-            || value.chars().any(char::is_control)
+            || value
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
             || key.contains('\u{fffd}')
             || value.contains('\u{fffd}')
-            || params.0.contains_key(key.as_ref())
         {
             return Err(invalid());
+        }
+        if let Some(existing) = params.0.get(key.as_ref()) {
+            if existing != value.as_ref() {
+                return Err(invalid());
+            }
+            continue;
         }
         params.0.insert(key.into_owned(), value.into_owned());
     }
@@ -106,15 +130,8 @@ pub(super) fn parse(query: &str) -> Result<Input, GatewayError> {
             "consoleHost",
         ],
     )?;
-    if !host.is_empty() {
-        let host = if host.starts_with("https://") {
-            host.to_string()
-        } else {
-            format!("https://{host}")
-        };
-        if !ORIGINS.contains(&host.trim_end_matches('/')) {
-            return Err(invalid());
-        }
+    if !host.is_empty() && !valid_trae_host(host) {
+        return Err(invalid());
     }
     let code = code
         .filter(|code| {
@@ -155,24 +172,55 @@ fn unique<'a>(
 /// 只接受AuthCodeInfo直接对象的已证授权码字段。任意wrapper/error/result内部code
 /// 不是授权码来源；没有该包装的证据就拒绝，不能靠递归搜字符串“兼容”。
 fn auth_code_info(value: &Value, code: &mut Option<Zeroizing<String>>) -> Result<(), GatewayError> {
-    const FIELDS: &[&str] = &["authCode", "auth_code", "AuthCode", "AuthCodeToken", "code"];
+    const FIELDS: &[&str] = &[
+        "authCode",
+        "auth_code",
+        "AuthCode",
+        "AuthCodeToken",
+        "authorization_code",
+        "AuthorizationCode",
+        "code",
+        "Code",
+    ];
+    if let Some(inner_str) = value.as_str() {
+        let parsed = parse_json(inner_str)?;
+        return auth_code_info_object(&parsed, code, FIELDS);
+    }
+    auth_code_info_object(value, code, FIELDS)
+}
+
+fn auth_code_info_object(
+    value: &Value,
+    code: &mut Option<Zeroizing<String>>,
+    candidate_fields: &[&str],
+) -> Result<(), GatewayError> {
     let fields = value
         .as_object()
-        .filter(|fields| !fields.is_empty() && fields.len() <= FIELDS.len())
+        .filter(|fields| !fields.is_empty() && fields.len() <= 32)
         .ok_or_else(invalid)?;
-    for (key, value) in fields {
-        if !FIELDS.contains(&key.as_str()) {
+    let mut found_in_object = false;
+    for key in candidate_fields {
+        let Some(value) = fields.get(*key) else {
+            continue;
+        };
+        let Some(raw_text) = value.as_str() else {
+            continue;
+        };
+        if raw_text.is_empty() {
+            continue;
+        }
+        if matches!(*key, "code" | "Code") && raw_text == "0" {
+            continue;
+        }
+        if raw_text.len() > 8192
+            || raw_text.trim() != raw_text
+            || raw_text
+                .chars()
+                .any(|ch| ch.is_control() || ch.is_whitespace())
+        {
             return Err(invalid());
         }
-        let text = value
-            .as_str()
-            .filter(|text| {
-                !text.is_empty()
-                    && text.len() <= 8192
-                    && text.trim() == *text
-                    && !text.chars().any(|ch| ch.is_control() || ch.is_whitespace())
-            })
-            .ok_or_else(invalid)?;
+        let text = raw_text;
         if code
             .as_ref()
             .is_some_and(|previous| previous.as_str() != text)
@@ -182,6 +230,10 @@ fn auth_code_info(value: &Value, code: &mut Option<Zeroizing<String>>) -> Result
         if code.is_none() {
             *code = Some(Zeroizing::new(text.to_string()));
         }
+        found_in_object = true;
+    }
+    if !found_in_object {
+        return Err(invalid());
     }
     Ok(())
 }
@@ -249,4 +301,46 @@ fn parse_json(text: &str) -> Result<Value, GatewayError> {
 
 fn invalid() -> GatewayError {
     GatewayError::bad_request("Trae 官方回调参数无效、冲突或没有唯一授权码，未受理")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trae_host_allows_official_domains_and_subdomains() {
+        for host in [
+            "trae.cn",
+            "www.trae.cn",
+            "api.trae.com.cn",
+            "https://console.trae.cn",
+            "https://api.trae.com.cn/",
+        ] {
+            assert!(valid_trae_host(host), "{host} 应被接受");
+        }
+    }
+
+    #[test]
+    fn trae_host_rejects_lookalikes_and_insecure() {
+        for host in [
+            "trae.cn.evil.com",
+            "evil-trae.cn",
+            "http://trae.cn",
+            "https://trae.cn@evil.com",
+            "https://",
+        ] {
+            assert!(!valid_trae_host(host), "{host} 应被拒绝");
+        }
+    }
+
+    #[test]
+    fn duplicate_equal_parameters_are_accepted() {
+        let parsed = parse("authCode=abc&authCode=abc&loginHost=trae.cn");
+        assert!(matches!(parsed, Ok(Input::Code(_))));
+    }
+
+    #[test]
+    fn duplicate_conflicting_parameters_are_rejected() {
+        assert!(parse("authCode=abc&authCode=def").is_err());
+    }
 }

@@ -90,9 +90,40 @@ struct ImportStats {
     imported_ids: Vec<String>,
 }
 
+/// 导出时优先从 `pluginSecret` 读取凭据，避免顶层镜像为空或陈旧
+fn export_tokens(record: &StoredAccount) -> (String, String) {
+    if let Some(secret) = record.get("pluginSecret").and_then(Value::as_object) {
+        let access = crate::server::core::account_store::raccoon_accounts::first_non_empty(
+            secret,
+            &["accessToken", "access_token", "token", "access", "session", "oauth_access_token"],
+        );
+        let refresh_keys: &[&str] = if record.provider() == "copilot-subscription" {
+            &["refreshToken", "refresh_token"]
+        } else {
+            &["refreshToken", "refresh_token", "refresh"]
+        };
+        let refresh = crate::server::core::account_store::raccoon_accounts::first_non_empty(
+            secret,
+            refresh_keys,
+        );
+        (access, refresh)
+    } else {
+        (record.access_token(), record.refresh_token())
+    }
+}
+
 /// 单条账号记录 → 导出形态：原样输出全部业务字段，剔除 rateLimits（本机运行时
 /// 限额标记）与下划线内部字段。
 fn to_export_record(record: &StoredAccount) -> Value {
+    // 小浣熊的无效 refreshToken 不导出，避免换机后带着脏凭据导入
+    let mut cleaned;
+    let record = if record.provider() == crate::server::core::account_store::RACCOON_PROVIDER_ID {
+        cleaned = record.clone();
+        crate::server::core::account_store::raccoon_accounts::sanitize_record(&mut cleaned);
+        &cleaned
+    } else {
+        record
+    };
     let mut item = Map::new();
     for (key, value) in record.fields() {
         if key.starts_with('_') || key == "rateLimits" {
@@ -103,8 +134,7 @@ fn to_export_record(record: &StoredAccount) -> Value {
         item.insert(key.clone(), value.clone());
     }
     // 统一形状：token 与代理即使缺失也显式给出，方便导入端与用户核对
-    let access_token = record.access_token();
-    let refresh_token = record.refresh_token();
+    let (access_token, refresh_token) = export_tokens(record);
     item.insert("accessToken".to_string(), Value::String(access_token));
     item.insert("refreshToken".to_string(), Value::String(refresh_token));
     item.insert("proxy".to_string(), record.proxy());
@@ -215,6 +245,7 @@ pub fn import_accounts(store: &AccountStore, payload: &Value) -> Result<Value, A
         }
 
         crate::server::core::account_store::codearts_accounts::migrate_limiters(&mut state.accounts);
+        crate::server::core::account_store::raccoon_accounts::clean_dirty_refresh_tokens(&mut state.accounts);
         store.save_locked(&state, guard)?;
         let failed = stats.failures.len();
         // errors 顺序：失败 → 跳过 → 定义警告（跳过项带 skipped 标记、定义警告带

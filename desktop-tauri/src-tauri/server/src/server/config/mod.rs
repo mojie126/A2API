@@ -1338,6 +1338,21 @@ where
     update_inner(mutate, false)
 }
 
+/// 从库重读配置并重建 Key 权威；仅在 Key 源处于失败态时动作
+///
+/// 调用方必须已持 CONFIG_UPDATE_LOCK。库不可用时不覆盖内存态（与
+/// `read_raw` 的降级取向相反：这里是恢复路径，不能拿旧文件去顶替库里那份）
+fn recover_key_source_locked() {
+    if !model_key_source::is_failed() {
+        return;
+    }
+    let Some(db) = db() else { return };
+    let Some((raw, migrated)) = sql::read_snapshot(&db) else { return };
+    let raw = if migrated { raw } else { merge_legacy(raw) };
+    let snapshot = build(raw);
+    model_key_source::republish_from_db(&snapshot, false);
+}
+
 fn update_inner<F>(mutate: F, publish_when_unsaved: bool) -> bool
 where
     F: FnOnce(&mut RuntimeConfig),
@@ -1346,6 +1361,9 @@ where
     // 读改写必须串行，否则两个模型的独立配置会互相覆盖。
     let _update_guard = plugin_task_grants::update_lock();
     if CONFIG_UPDATE_LOCK.is_poisoned() { model_key_source::fail_closed(); }
+    // Key 源曾被判失败（一次发布失败留下的失败态）时，先从库重读并重建权威，
+    // 否则之后每次鉴权都拿不到 Source、表现为所有网关 Key 401
+    recover_key_source_locked();
     let Some(mut next) = plugin_task_grants::write_snapshot() else {
         model_key_source::fail_closed();
         return false;

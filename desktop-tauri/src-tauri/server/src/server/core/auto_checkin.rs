@@ -88,20 +88,13 @@ pub fn default_time() -> String {
 ///     见 `providers::modelscope::checkin`。两个站点各打各的网页站，令牌不通用
 ///     （打错得 401）。链路依据是 CPA 的 `modelscope-ratelimit` 插件源码，
 ///     2026-10 实测复核。
-///   - **ZCode 国内版 / 国际版**：签到 = **领当天那份赠送套餐**。上游每天下发
-///     一份带日期段的新套餐（`zcode-v3-start-plan-<日期>` 这类），在客户端里
-///     点一下就领，那一动作就是本家的签到；同一期再领回 `1003 already claimed`，
-///     所以「今天领过没」不需要本地记账（见 `providers::zcode::checkin`）。
-///     ⚠️ 窗口是**每天 19:00 开启**（官方公告：19:00 起可领，23:00 至次日 09:00
-///     可用），所以它的生效时刻在 `times::PROVIDER_TIMES` 里钉的是 19:01 ——
-///     跟其它家一起在 00:01 去签只会拿到「窗口没开」。
-///     ⚠️ 领取验证按需交给已连接的管理界面；无可用界面或验证未完成返回
-///     `captcha`，不记已领取，也不归入等待活动的自动重试。
+///   - **ZCode 国内版 / 国际版**：上游每日赠送套餐活动已下架，两个 id 已从本清单
+///     移除，仅保留活动福利入口供偶发活动使用，不再参与每日签到
 ///
 /// 这是「有签到或每日活跃任务」的清单，不是「有积分概念」的清单：CatPaw 有积分
 /// 查询但没有签到，因此不在此列 —— 它的账号在批量签到里被算作 `skipped`。
 /// 加一家之前先确认它的签到链路真的存在（一个点了必然报错的复选框比没有更糟）。
-pub const CHECKIN_PROVIDERS: [&str; 19] = [
+pub const CHECKIN_PROVIDERS: [&str; 17] = [
     "workbuddy",
     "workbuddy-intl",
     "raccoon",
@@ -137,10 +130,6 @@ pub const CHECKIN_PROVIDERS: [&str; 19] = [
     // check_in），实测 +100 积分/号/天。幂等靠客户端（idempotencyKey + 上游
     // 的 `claimedToday` 预检），见 `lobsterai::checkin` 的模块头。
     "lobsterai",
-    // ZCode 两地：签到 = 领当天那份赠送套餐（见上面那条说明）。
-    // 两个地区各打各的站点、令牌不通用，因此两个 id 分开登记。
-    "zcode",
-    "zcode-intl",
 ];
 
 /// 缺省的签到提供商集合（全选 = **已知**清单，不是「此刻可用」清单）。
@@ -151,6 +140,19 @@ pub const CHECKIN_PROVIDERS: [&str; 19] = [
 /// 界面渲染用 [`available_checkin_providers`]。
 pub fn default_providers() -> Vec<String> {
     checkin_providers()
+}
+
+/// 某个已安装插件当前是否实际声明支持每日签到。
+///
+/// 优先看 `CheckinInfo.daily`（显式声明 `daily: false` 的活动插件不进每日签到），
+/// 未声明 `CheckinInfo` 的旧插件回落到 `capabilities.checkin`
+pub(crate) fn plugin_supports_daily_checkin(id: &str) -> bool {
+    if let Some(declared) = crate::server::core::plugin_host::checkin_of(id) {
+        return declared.daily;
+    }
+    crate::server::core::providers::adapter::adapter_by_id(id)
+        .and_then(|adapter| adapter.plugin_checkin_capability())
+        == Some(true)
 }
 
 /// 当前**实际可用**的签到提供商清单：内置常量表 + 已装入且申报了签到能力的插件家。
@@ -172,28 +174,42 @@ pub fn default_providers() -> Vec<String> {
 /// 界面渲染（签到中心分组、范围复选框）一律用
 /// [`available_checkin_providers`]。
 pub fn checkin_providers() -> Vec<String> {
-    let mut list: Vec<String> = CHECKIN_PROVIDERS.iter().map(|id| id.to_string()).collect();
+    let mut list: Vec<String> = CHECKIN_PROVIDERS
+        .iter()
+        .filter(|id| {
+            !crate::server::core::plugin_host::serves_provider(id)
+                || plugin_supports_daily_checkin(id)
+        })
+        .map(|id| id.to_string())
+        .collect();
     for id in crate::server::core::plugin_host::installed_ids() {
         if list.iter().any(|known| known == &id) {
             continue;
         }
-        let supported = crate::server::core::providers::adapter::adapter_by_id(&id)
-            .and_then(|adapter| adapter.plugin_checkin_capability())
-            == Some(true);
-        if supported {
+        if plugin_supports_daily_checkin(&id) {
             list.push(id);
         }
     }
-    for id in raw_object()
+    let seen = raw_object()
         .get("pluginProvidersSeen")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-    {
-        if !list.iter().any(|known| known == id) {
-            list.push(id.to_string());
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    for id in seen {
+        if list.iter().any(|known| known == &id) {
+            continue;
         }
+        // 已运行且明确关闭每日签到的插件不再沿用历史缓存（避免下架后仍留空条目），
+        // 仅在插件未加载或停用时保留范围设置
+        if crate::server::core::plugin_host::serves_provider(&id)
+            && !plugin_supports_daily_checkin(&id)
+        {
+            continue;
+        }
+        list.push(id);
     }
     list
 }
@@ -216,7 +232,10 @@ pub fn checkin_providers() -> Vec<String> {
 pub fn available_checkin_providers(_store: &AccountStore) -> Vec<String> {
     checkin_providers()
         .into_iter()
-        .filter(|id| crate::server::core::plugin_host::serves_provider(id))
+        .filter(|id| {
+            crate::server::core::plugin_host::serves_provider(id)
+                && plugin_supports_daily_checkin(id)
+        })
         .collect()
 }
 /// ── 为什么需要一个版本号（而不是读的时候无条件补齐）───────────
@@ -233,8 +252,8 @@ pub const PROVIDERS_VERSION: i64 = 6;
 /// 的存量兼容规则跟着 `qoder` 带上，不在这里重复登记）。
 /// 版本 3 = 智谱清言；版本 4 = ModelScope 的两个站点与 AtomCode；
 /// 版本 5 = LobsterAI（两条 provider PR 各自用了一个号，合起来取并集）；
-/// 版本 6 = ZCode 的两个站点（签到 = 领当天赠送套餐）。
-const PROVIDERS_ADDED_IN: [(&str, i64); 9] = [
+/// 版本 6 曾用于 ZCode 两站点，现已因每日赠送套餐活动下架从签到清单移除
+const PROVIDERS_ADDED_IN: [(&str, i64); 7] = [
     ("officeace", 2),
     ("codearts", 2),
     ("chatglm", 3),
@@ -242,8 +261,6 @@ const PROVIDERS_ADDED_IN: [(&str, i64); 9] = [
     ("modelscope-intl", 4),
     ("atomcode", 4),
     ("lobsterai", 5),
-    ("zcode", 6),
-    ("zcode-intl", 6),
 ];
 
 /// 版本 `version` 之后才加入清单的家（按注册顺序）。空数组 = 这一版没有新家，
