@@ -241,13 +241,14 @@ fn stamp_local_assets(html: &[u8], ui_dir: &Path) -> Vec<u8> {
             }
         };
         let url = &tail[url_start..url_end];
+        // 只输出到属性值末尾为止：`tail` 是「属性名起至文档末尾」，若在这里
+        // 连同 `tail[url_end..]` 一起输出，`rest` 再处理同一段会把剩余内容
+        // 重复并且逐轮叠加（实测登录页 21 KB 被放大到 91 KB，脚本插入多次形成
+        // 多个 React root，页面卡顿且控件重复）
+        output.push_str(&tail[..url_start]);
         match stamped_url(ui_dir, url) {
-            Some(stamped) => {
-                output.push_str(&tail[..url_start]);
-                output.push_str(&stamped);
-                output.push_str(&tail[url_end..]);
-            }
-            None => output.push_str(&tail[..url_end]),
+            Some(stamped) => output.push_str(&stamped),
+            None => output.push_str(url),
         }
         rest = &tail[url_end..];
     }
@@ -404,6 +405,23 @@ mod tests {
         let html = br#"<div data-href="css/app.css"></div><link href="css/app.css?v=1">"#;
         let out = String::from_utf8(stamp_local_assets(html, &dir)).expect("utf8");
         assert_eq!(out, String::from_utf8_lossy(html), "自定义属性与已带查询串不应改写");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 多个本地资源连续出现时，每个标签只出现一次且改写次数与标签数一致
+    ///
+    /// 回归：早先命中一个本地资源就把剩余整段连同 `?v=` 一起输出、`rest` 又
+    /// 从同处继续，剩余 HTML 被重复并且逐轮叠加，页面放大数倍后脚本插入多次
+    #[test]
+    fn rewrites_each_local_reference_exactly_once() {
+        let dir = fixture("multi");
+        let html = br#"<link href="css/app.css"><script src="missing.js"></script><link href="css/app.css"></head><body></body></html>"#;
+        let out = String::from_utf8(stamp_local_assets(html, &dir)).expect("utf8");
+        assert_eq!(out.matches("css/app.css?v=").count(), 2, "两个本地引用各改一次: {out}");
+        assert_eq!(out.matches("<link").count(), 2, "标签不应复制: {out}");
+        assert_eq!(out.matches("missing.js").count(), 1, "缺失文件保持单个: {out}");
+        assert_eq!(out.matches("</body>").count(), 1, "尾部不应重复: {out}");
+        assert!(out.ends_with("</body></html>"), "末尾结构与源一致: {out}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

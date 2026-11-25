@@ -731,6 +731,13 @@
 - 文档：A2API 保持 `3.5.1`（与官方同版本），增量并入 `docs/release-notes_3.5.1.md` 的 11-25 追加段；插件保持 `3.5.0`，写入其 11-25 追加段
 - 验证：服务端零告警、单测 **509 通过 / 11 忽略**（新增静态资源缓存 3 项、网页工具解析器 6 项、选路排队 1 项）；插件仓库零告警、单测 **80 通过**；页面岛 `tsc --noEmit` 无错误并重建产物；手机端产物重建
 
+### 2026-11-25（修复 Web UI 静态资源改写导致页面重复）
+
+- 现象：网页端（Docker/Web UI）刷新控件重复十几份、页面卡顿，桌面端正常
+- 根因：`static_files.rs::stamp_local_assets` 命中第一个本地资源后，把「属性值之后到文档末尾」整段随 `?v=` 一起输出，`rest` 又从同一位置继续，剩余 HTML 被重复并逐轮叠加；实测登录页 21835 字节被放大到 91860 字节，`islands/ui.js` 插入多次，形成多个 React root 与多份 `startAccountEvents`，后者各持一份 store 互相覆盖导致连接数不刷新
+- 处置：只输出到属性值末尾，`rest` 独占剩余部分；新增 `rewrites_each_local_reference_exactly_once` 回归测试
+- 验证：修复后登录页 21957 字节（仅多出指纹），脚本引用各 1 次
+
 ### 2026-11-25（Codex 订阅图片通道补齐）
 
 - 官方 3.5.1 核心更新第 1 条「Codex 订阅接入 `gpt-image-2`」此前本地缺失，按本地结构移植（`b9c8fa05`）：新增 `codex_subscription/images.rs` 承载 `/v1/images/generations` 与 `/v1/images/edits`；模型目录固定注入 `gpt-image-2` 并标注图片能力；`request::authorized_tokens` 与 `request::build_headers` 抽为公共函数；`ChatRequestPlan::images` 承载图片端点；图片模型禁止走对话；冷却只约束自身图片模型不与文字连坐
