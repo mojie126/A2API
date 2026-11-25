@@ -104,7 +104,7 @@ function Frame() {
   </Sidebar>
   return <AppFrame className='shell' data-navigation-open={open ? 'true' : undefined}>
     {narrow ? <Sheet open={open} onOpenChange={setOpen}>
-      <SheetContent side='left' keepMounted showHandle={false} showCloseButton={false}
+      <SheetContent side='left' keepMounted pauseBackground={open} showHandle={false} showCloseButton={false}
         aria-label={t('主导航')} className='w-[min(280px,86vw)] rounded-none border-0 p-0'>
         <SheetClose render={<Button variant='ghost' size='icon' className='absolute right-2 top-2 z-10' />} aria-label={t('关闭菜单')}>✕</SheetClose>
         {sidebar}

@@ -90,6 +90,12 @@ type SheetContentProps = DialogPrimitive.Popup.Props & {
    * （登录引擎的容器、发码冷却）时需要它。
    */
   keepMounted?: boolean
+  /**
+   * 打开期间是否暂停后台轮询（`data-modal-active`），默认 true。
+   * 与 `keepMounted` 配合时必须传实际的打开状态，否则常驻的 Portal 会一直
+   * 按住各面板的定时刷新与实时事件。
+   */
+  pauseBackground?: boolean
 }
 
 function SheetContent({
@@ -99,13 +105,18 @@ function SheetContent({
   showHandle = true,
   side = 'bottom',
   keepMounted = false,
+  pauseBackground = true,
   ...props
 }: SheetContentProps) {
   const centered = side === 'center'
   const right = side === 'right'
   const left = side === 'left'
   // 弹窗打开期间标记 `<html data-modal-active>`，各定时轮询据此暂停。
-  React.useEffect(() => holdModalActive(), [])
+  // `keepMounted` 时关闭后仍在 DOM 里，标记跟随 `pauseBackground` 而不是挂载。
+  React.useEffect(() => {
+    if (!pauseBackground) return
+    return holdModalActive()
+  }, [pauseBackground])
   return (
     <SheetPortal keepMounted={keepMounted}>
       <SheetOverlay />

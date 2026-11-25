@@ -97,6 +97,14 @@ type DialogContentProps = DialogPrimitive.Popup.Props & {
    */
   keepMounted?: boolean
   /**
+   * 打开期间是否暂停后台轮询（`data-modal-active`），默认 true。
+   *
+   * 与 `keepMounted` 配合时必须传实际的打开状态：Portal 保持挂载时组件不会
+   * 卸载，按挂载计数的弹窗标记会一直留在 `<html>` 上，把各面板的定时刷新与
+   * 实时事件全部按住（连接数不更新、请求日志停在加载文案）。
+   */
+  pauseBackground?: boolean
+  /**
    * 嵌在另一层弹窗里时也画自己那层遮罩，默认 false。
    *
    * Base UI 的嵌套约定是「子层不画遮罩」，好让父层干净地留在后面（见 DialogBackdrop
@@ -115,12 +123,18 @@ function DialogContent({
   children,
   showCloseButton = true,
   keepMounted = false,
+  pauseBackground = true,
   overlayForceRender = false,
   ...props
 }: DialogContentProps) {
   // 弹窗打开期间标记 `<html data-modal-active>`，各定时轮询据此暂停：
   // 轮询重绘下层会让遮罩重新合成，高负载下这就是弹窗卡顿的主要来源。
-  React.useEffect(() => holdModalActive(), [])
+  // `keepMounted` 时 Portal 关闭后仍在 DOM 里，所以标记必须跟随 `pauseBackground`
+  // （实际打开状态），不能只按挂载累加。
+  React.useEffect(() => {
+    if (!pauseBackground) return
+    return holdModalActive()
+  }, [pauseBackground])
   return (
     <DialogPortal keepMounted={keepMounted}>
       <DialogOverlay forceRender={overlayForceRender} />

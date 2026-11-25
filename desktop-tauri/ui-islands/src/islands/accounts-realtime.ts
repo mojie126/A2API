@@ -9,7 +9,7 @@ import { syncBalancesSnapshot } from './accounts-usage'
 import { syncConnections } from './accounts-data'
 import { refreshProxyPool } from './proxy-pool-cache'
 import { shared, type AccountRecord } from './accounts-shared'
-import { isModalActive } from '@ui/lib/modal-activity'
+import { isModalActive, onModalActiveChange } from '@ui/lib/modal-activity'
 
 let started = false
 let stop: (() => void) | undefined
@@ -69,6 +69,9 @@ export function startAccountEvents(): void {
       return
     }
     if (stop) return
+    // 进页先取一次连接数：不依赖 SSE 首帧与 fallback 的 60 秒窗口，
+    // 否则首屏在建立订阅前始终是空读数
+    void syncConnections()
     stop = subscribePanelEvents({
       open: signal => requestDirect(PANEL_EVENTS_PATH, { method: 'GET', signal }),
       changed: enqueue,
@@ -76,8 +79,16 @@ export function startAccountEvents(): void {
       connection: status => { setAccountEventsConnected(status === 'connected') },
     })
   }
+  // 弹窗关闭后立即恢复：门控期间 SSE 仍在线但 enqueue 不消费，关闭那一刻
+  // 没有新事件，不主动补一次就会一直停在旧读数上
+  const resume = (active: boolean) => {
+    if (active || !visible()) return
+    activate()
+    enqueue({ accounts: false, balances: false, usage: false, connections: false, proxies: false })
+  }
   window.addEventListener('wb:page', activate)
   document.addEventListener('visibilitychange', activate)
+  onModalActiveChange(resume)
   activate()
 }
 

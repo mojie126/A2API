@@ -221,7 +221,7 @@ function AddAccountModal({
       if (!next) backToPick()
     }}>
       <AddAccountProxyProvider>
-        <DialogContent keepMounted overlayForceRender className={isDeepseek
+        <DialogContent keepMounted pauseBackground={state.step === 'form'} overlayForceRender className={isDeepseek
           ? 'compact-login-dialog acct-add-form-dialog w-[min(540px,calc(100vw-48px))]'
           : 'acct-add-form-dialog w-[min(760px,calc(100vw-48px))]'}>
           <DialogHeader>

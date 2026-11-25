@@ -41,7 +41,7 @@ function ResponsiveSheet({
   }, [onOpenChange])
   if (!narrow) return <Inline data-slot='responsive-sheet-inline' className={inlineClassName}>{children}</Inline>
   return <Sheet open={open} onOpenChange={onOpenChange}>
-    <SheetContent side={side} keepMounted showHandle={false} className={contentClassName}>
+    <SheetContent side={side} keepMounted pauseBackground={open} showHandle={false} className={contentClassName}>
       <SheetHeader><SheetTitle>{title}</SheetTitle>{actions}</SheetHeader>
       <SheetBody className={cn('gap-4 [&>*]:w-full [&>*]:min-w-0 [&>*]:max-w-none', bodyClassName)}>{children}</SheetBody>
     </SheetContent>

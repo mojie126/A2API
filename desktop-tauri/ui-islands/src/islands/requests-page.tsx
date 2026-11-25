@@ -445,8 +445,10 @@ function RequestsPage() {
           || null
       },
     })
-    void loadPanel({ silent: true })
-    void refreshFilterOptions()
+    // 首屏加载不走静默：静默分支在弹窗 / 悬停面板活动时直接返回、失败也不落错误，
+    // 一旦被挡就没有第二次机会（`loaded` 一直 false，页面停在「正在加载请求日志…」）。
+    // 非静默同时承担筛选候选的首次拉取，下面不必再单独调一次。
+    void loadPanel()
     return () => { handle = null }
   }, [loadPanel, applyFilters, applyRange, applyRunningOnly])
 
