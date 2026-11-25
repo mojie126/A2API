@@ -651,6 +651,8 @@ pub fn plan_route(
     meta: &PlanMeta<'_>,
 ) -> RoutePlan {
     let mut ordered: Vec<Value> = Vec::new();
+    // 可用但并发已满的候选：排到 ordered 队尾，标 `concurrency`
+    let mut queued: Vec<PlanEntry> = Vec::new();
     let mut blocked: Vec<PlanEntry> = Vec::new();
     for account in accounts {
         let Some(id) = account_id(account) else { continue };
@@ -693,15 +695,9 @@ pub fn plan_route(
             ));
             continue;
         }
-        if at_concurrency_limit(account, &id, counts) {
-            let running = counts.get(&id).copied().unwrap_or(0);
-            let reason = match concurrency_limit_of(account) {
-                Some(limit) => format!("并发已满（{running}/{limit}），等一个在途回落再参与"),
-                None => format!("并发已满（{running}），等一个在途回落再参与"),
-            };
-            blocked.push(entry("concurrency", reason));
-            continue;
-        }
+        // 并发已满 ≠ 不可用：先继续判完可用性（权限 / 凭证 / 熔断），都通过才收入
+        // 队尾排队等槽位；不通过仍按各自原因进 blocked，与原来一致
+        let concurrency_blocked = at_concurrency_limit(account, &id, counts);
         if super::plugin_host::wasm::catalog::route_allowed(account, &keys.for_account(account)) == Some(false) {
             blocked.push(entry("model-permission", "当前账号没有该模型的使用权限".into()));
             continue;
@@ -712,6 +708,19 @@ pub fn plan_route(
         }
         if meta.open.contains(&id) {
             blocked.push(entry("breaker", "连续失败保护中，到保护结束后才允许重新尝试".to_string()));
+            continue;
+        }
+        if concurrency_blocked {
+            let running = counts.get(&id).copied().unwrap_or(0);
+            let reason = match concurrency_limit_of(account) {
+                Some(limit) => format!(
+                    "并发已满（{running} 个在途已达上限 {limit}），排队等一个槽位空出来 —— 前面的候选都发不出去时它接着上"
+                ),
+                None => format!(
+                    "并发已满（{running} 个在途已达上限），排队等一个槽位空出来 —— 前面的候选都发不出去时它接着上"
+                ),
+            };
+            queued.push(entry("concurrency", reason));
             continue;
         }
         ordered.push(account.clone());
@@ -849,11 +858,12 @@ pub fn plan_route(
         })
         .collect();
 
-    RoutePlan {
-        ordered: ordered_entries,
-        blocked,
-        sticky_hit,
-    }
+    // 排队候选接在可用候选之后：容量准入会把它们留给「前面的都发不出去」时顺延使用，
+    // 面板上也据此显示「并发已满、排队等槽位」而不是「不可用」
+    let mut queued = queued;
+    queued.sort_by(|left, right| compare_by_priority(&left.account, &right.account));
+    let ordered: Vec<PlanEntry> = ordered_entries.into_iter().chain(queued).collect();
+    RoutePlan { ordered, blocked, sticky_hit }
 }
 
 /// 粘性 TTL（毫秒）：转发选路与队列端点共用的换算（StickyMode → 时长）。
@@ -1192,4 +1202,50 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+    use serde_json::json;
 
+    fn account(id: &str, provider: &str, priority: i64) -> Value {
+        json!({ "id": id, "name": id, "provider": provider, "priority": priority,
+                "enabled": true, "hasCredentials": true })
+    }
+
+    fn meta<'a>(numbers: &'a HashMap<String, i64>, open: &'a std::collections::HashSet<String>,
+                limiter: &'a std::collections::HashSet<String>) -> PlanMeta<'a> {
+        PlanMeta { strategy: RouteStrategy::Provider, sunk: numbers, resting: numbers, open,
+                   limiter_blocked: limiter, cursor: None, provider_cursors: None, sticky_account: None }
+    }
+
+    /// 可用但并发已满的账号排在队尾并标 concurrency；不可用的慢账号仍进 blocked
+    #[test]
+    fn busy_usable_account_queues_at_tail_while_unusable_busy_stays_blocked() {
+        let mut busy_ok = account("busy_ok", "A", 100);
+        busy_ok["maxConcurrent"] = json!(1);
+        let idle = account("idle", "A", 110);
+        let mut busy_no_cred = account("busy_no_cred", "A", 90);
+        busy_no_cred["maxConcurrent"] = json!(1);
+        busy_no_cred["hasCredentials"] = json!(false);
+        let mut busy_breaker = account("busy_breaker", "A", 95);
+        busy_breaker["maxConcurrent"] = json!(1);
+
+        let accounts = vec![busy_ok, idle, busy_no_cred, busy_breaker];
+        let keys = CooldownKeys::new("");
+        let counts = HashMap::from([
+            ("busy_ok".to_string(), 1usize),
+            ("busy_no_cred".to_string(), 1usize),
+            ("busy_breaker".to_string(), 1usize),
+        ]);
+        let numbers = HashMap::new();
+        let open: std::collections::HashSet<String> = ["busy_breaker".to_string()].into_iter().collect();
+        let limiter: std::collections::HashSet<String> = Default::default();
+        let plan = plan_route(&accounts, &keys, &counts, &[], 1_700_000_000_000, &meta(&numbers, &open, &limiter));
+        let ordered_ids: Vec<&str> = plan.ordered.iter().map(|entry| entry.id.as_str()).collect();
+        assert_eq!(ordered_ids, vec!["idle", "busy_ok"]);
+        assert_eq!(plan.ordered[1].state, "concurrency");
+        let blocked_ids: Vec<&str> = plan.blocked.iter().map(|entry| entry.id.as_str()).collect();
+        assert!(blocked_ids.contains(&"busy_no_cred"));
+        assert!(blocked_ids.contains(&"busy_breaker"));
+    }
+}
