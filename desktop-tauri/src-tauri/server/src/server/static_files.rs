@@ -13,13 +13,18 @@
 //!   · 注入的桥接脚本只在 index.html 上发生，其它原样透出。
 //!
 //! ── 缓存 ────────────────────────────────────────────────────
-//! 文件带 ETag（程序版本 + 修改时间 + 大小），`Cache-Control` 为 `no-cache`：
-//! 浏览器可以存下来，但每次使用前必须回源校验。文件没变时回 304、不传正文；
-//! 部署新 `ui/` 后 mtime 变化、ETag 随之变化，浏览器立刻拿到新版 —— 既不会
-//! 出现「发新版后页面引用了旧 js」，也不必每次打开都重下几 MB。
+//! 分两档处理，既保证网页端升级后立即加载新版前端，也兼顾局域网直连的 304 速度：
+//!   · 入口页（`.html`）与 Service Worker（`sw.js`）：响应 `Cache-Control:
+//!     no-store, no-cache, must-revalidate` 且**不回 304**，保证浏览器、CDN 与
+//!     反向代理每次都拿到最新的页面清单与资源版本；
+//!   · 其余子资源（`.js` / `.css` / 图标 / 清单等）：带 ETag 与 `Cache-Control:
+//!     no-cache, must-revalidate`，支持 If-None-Match 304 秒开；同时在服务 `.html`
+//!     时为页面引用的本地静态资源自动追加 `?v=<版本+文件指纹>` 查询串 —— 即使前方
+//!     CDN 给 `.js` / `.css` 覆盖了长 `max-age`，新版入口页给出的 `?v=` 也会命中
+//!     全新缓存键，杜绝「后端已升级、前端仍读旧版」。
 //! 压缩由 `compression` 中间件统一处理，这里只声明 `Vary: Accept-Encoding`。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::http::{header, Request, Response, StatusCode};
@@ -27,8 +32,10 @@ use axum::response::Response as AxumResponse;
 
 use crate::server::errors;
 
-/// 可以缓存，但每次使用前都要回源校验（详见模块头的「缓存」段）。
-const CACHE_CONTROL: &str = "no-cache";
+/// 入口页与 Service Worker：禁存旧副本并跳过 304，确保更新后立刻切到新版
+const CACHE_CONTROL_ENTRYPOINT: &str = "no-store, no-cache, must-revalidate";
+/// 其余静态资源：每次校验，允许同版本 ETag 304 复用（跨版本由 HTML 注入 `?v=` 破除 CDN 缓存）
+const CACHE_CONTROL_ASSET: &str = "no-cache, must-revalidate";
 /// 同一路径的正文随客户端是否接受 gzip 而不同，缓存必须按这个头分桶。
 const VARY: &str = "Accept-Encoding";
 
@@ -58,7 +65,7 @@ pub async fn serve(request: Request<Body>, ui_dir: PathBuf) -> AxumResponse {
     let Some(file_path) = resolve_file(&ui_dir, &path) else {
         return not_found(request).await;
     };
-    read_response(&file_path, if_none_match.as_deref()).await
+    read_response(&ui_dir, &file_path, if_none_match.as_deref()).await
 }
 
 /// 把 URL 路径解析到 `ui/` 内的具体文件（`None` = 不存在 / 非法）。
@@ -105,22 +112,43 @@ fn resolve_file(ui_dir: &PathBuf, url_path: &str) -> Option<PathBuf> {
     None
 }
 
+/// 入口页与 Service Worker 不回 304、禁存旧副本；其余资源按 ETag 协商
+fn is_entrypoint_file(file_path: &Path) -> bool {
+    file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("index.html")
+                || name.to_ascii_lowercase().ends_with(".html")
+                || name.eq_ignore_ascii_case("sw.js")
+        })
+}
+
+fn cache_control_for(entrypoint: bool) -> &'static str {
+    if entrypoint {
+        CACHE_CONTROL_ENTRYPOINT
+    } else {
+        CACHE_CONTROL_ASSET
+    }
+}
+
 /// 读文件并组装响应；读失败（权限等）按 404 处理（不区分 404/403，
 /// 面板资源缺失的唯一正确动作就是「当它不存在」）。
 ///
-/// ETag 命中时直接回 304，不读文件正文 —— 这是「第二次打开面板不再重下
-/// 几 MB 资源」的关键路径。
-async fn read_response(file_path: &PathBuf, if_none_match: Option<&str>) -> AxumResponse {
+/// 子资源 ETag 命中时直接回 304，不读文件正文 —— 这是「第二次打开面板不再重下
+/// 几 MB 资源」的关键路径；入口页与 `sw.js` 永不 304（见模块头）。
+async fn read_response(ui_dir: &Path, file_path: &PathBuf, if_none_match: Option<&str>) -> AxumResponse {
     let metadata = match tokio::fs::metadata(file_path).await {
         Ok(metadata) => metadata,
         Err(_) => return errors::not_found_response("GET", "static"),
     };
+    let entrypoint = is_entrypoint_file(file_path);
     let etag = etag_of(&metadata);
-    if if_none_match.is_some_and(|value| etag_matches(value, &etag)) {
+    if !entrypoint && if_none_match.is_some_and(|value| etag_matches(value, &etag)) {
         return Response::builder()
             .status(StatusCode::NOT_MODIFIED)
             .header(header::ETAG, &etag)
-            .header(header::CACHE_CONTROL, CACHE_CONTROL)
+            .header(header::CACHE_CONTROL, cache_control_for(entrypoint))
             .header(header::VARY, VARY)
             .body(Body::empty())
             .unwrap_or_else(|_| errors::not_found_response("GET", "static"));
@@ -131,12 +159,18 @@ async fn read_response(file_path: &PathBuf, if_none_match: Option<&str>) -> Axum
             return errors::not_found_response("GET", "static");
         }
     };
+    let is_html = file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("html"));
     let is_index = file_path
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name == "index.html");
     let body = if is_index {
-        inject_web_shim(&bytes)
+        stamp_local_assets(&inject_web_shim(&bytes), ui_dir)
+    } else if is_html {
+        stamp_local_assets(&bytes, ui_dir)
     } else {
         bytes
     };
@@ -144,7 +178,7 @@ async fn read_response(file_path: &PathBuf, if_none_match: Option<&str>) -> Axum
     let response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime)
-        .header(header::CACHE_CONTROL, CACHE_CONTROL)
+        .header(header::CACHE_CONTROL, cache_control_for(entrypoint))
         .header(header::ETAG, &etag)
         .header(header::VARY, VARY)
         .header(header::CONTENT_LENGTH, body.len())
@@ -183,6 +217,108 @@ fn etag_matches(header: &str, etag: &str) -> bool {
         let item = item.trim();
         item == "*" || item.strip_prefix("W/").unwrap_or(item).trim() == target
     })
+}
+
+/// 给 HTML 里引用的**本地**静态资源追加 `?v=<版本+指纹>` 查询串。
+///
+/// 只处理 `href` / `src` 指向的同源相对路径（`/` 开头或同级相对路径），
+/// 跳过外链、`data:`、已带查询串与锚点的写法；找不到对应文件时保持原样。
+fn stamp_local_assets(html: &[u8], ui_dir: &Path) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(html) else {
+        return html.to_vec();
+    };
+    let mut output = String::with_capacity(text.len() + 512);
+    let mut rest = text;
+    while let Some(index) = find_attr(rest) {
+        let (before, tail) = rest.split_at(index);
+        output.push_str(before);
+        let (url_start, url_end) = match attribute_value(tail) {
+            Some(bounds) => bounds,
+            None => {
+                output.push_str(tail);
+                rest = "";
+                break;
+            }
+        };
+        let url = &tail[url_start..url_end];
+        match stamped_url(ui_dir, url) {
+            Some(stamped) => {
+                output.push_str(&tail[..url_start]);
+                output.push_str(&stamped);
+                output.push_str(&tail[url_end..]);
+            }
+            None => output.push_str(&tail[..url_end]),
+        }
+        rest = &tail[url_end..];
+    }
+    output.push_str(rest);
+    output.into_bytes()
+}
+
+/// 找下一个 `href="` / `src="`（单双引号都认），返回属性名起始下标。
+///
+/// 属性名前必须是分隔符（空白 / `<`），避免把 `data-href`、`x-src` 一类
+/// 自定义属性当成资源引用。
+fn find_attr(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let boundary = index == 0 || matches!(bytes[index - 1], b' ' | b'\t' | b'\n' | b'\r' | b'<');
+        if boundary {
+            for name in [b"href".as_slice(), b"src".as_slice()] {
+                if bytes[index..].starts_with(name) {
+                    let after = index + name.len();
+                    if matches!(bytes.get(after), Some(b'=')) {
+                        return Some(index);
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+/// 取属性值在 `tail`（从属性名开始）里的下标区间
+fn attribute_value(tail: &str) -> Option<(usize, usize)> {
+    let bytes = tail.as_bytes();
+    let eq = bytes.iter().position(|byte| *byte == b'=')?;
+    let mut start = eq + 1;
+    while matches!(bytes.get(start), Some(b' ' | b'\t')) {
+        start += 1;
+    }
+    let quote = *bytes.get(start)?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let value_start = start + 1;
+    let value_end = value_start + bytes[value_start..].iter().position(|byte| *byte == quote)?;
+    Some((value_start, value_end))
+}
+
+/// 把一个本地静态资源 URL 换成带 `?v=` 的形态；不该处理时返回 `None`
+fn stamped_url(ui_dir: &Path, url: &str) -> Option<String> {
+    if url.is_empty()
+        || url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("//")
+        || url.starts_with("data:")
+        || url.starts_with('#')
+        || url.contains('?')
+        || url.contains('#')
+    {
+        return None;
+    }
+    let trimmed = url.trim_start_matches("./").trim_start_matches('/');
+    if trimmed.is_empty() || !trimmed.contains('.') {
+        return None;
+    }
+    let candidate = ui_dir.join(trimmed);
+    let metadata = std::fs::metadata(&candidate).ok()?;
+    let stamp = etag_of(&metadata);
+    // ETag 形如 `W/"版本-长度-时间"`，去掉包围的 `W/"` 与 `"` 作为查询串
+    let value = stamp.trim_start_matches("W/\"").trim_end_matches('"');
+    Some(format!("{url}?v={value}"))
 }
 
 /// 把网页端桥接注入 index.html：`<head>` 开标签后插一段内联脚本，
@@ -236,4 +372,48 @@ async fn not_found(request: Request<Body>) -> AxumResponse {
     let method = request.method().as_str().to_string();
     let path = request.uri().path().to_string();
     errors::not_found_response(&method, &path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 每个用例独立目录：测试并行执行，共用一个目录会被另一用例的清理删掉
+    fn fixture(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("a2api-static-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("css")).expect("fixture dir");
+        std::fs::write(dir.join("css/app.css"), b"body{}").expect("fixture css");
+        dir
+    }
+
+    #[test]
+    fn stamps_local_assets_and_leaves_external_untouched() {
+        let dir = fixture("stamp");
+        let html = br#"<link href="css/app.css"><link href="https://cdn.example/x.css"><script src="missing.js"></script>"#;
+        let out = String::from_utf8(stamp_local_assets(html, &dir)).expect("utf8");
+        assert!(out.contains("css/app.css?v="), "{out}");
+        assert!(out.contains("https://cdn.example/x.css\""), "{out}");
+        assert!(out.contains("src=\"missing.js\""), "不存在的文件保持原样: {out}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn does_not_touch_custom_attributes_or_existing_queries() {
+        let dir = fixture("skip");
+        let html = br#"<div data-href="css/app.css"></div><link href="css/app.css?v=1">"#;
+        let out = String::from_utf8(stamp_local_assets(html, &dir)).expect("utf8");
+        assert_eq!(out, String::from_utf8_lossy(html), "自定义属性与已带查询串不应改写");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn entrypoint_files_skip_validation() {
+        assert!(is_entrypoint_file(Path::new("index.html")));
+        assert!(is_entrypoint_file(Path::new("login.html")));
+        assert!(is_entrypoint_file(Path::new("sw.js")));
+        assert!(!is_entrypoint_file(Path::new("islands/ui.js")));
+        assert_eq!(cache_control_for(true), CACHE_CONTROL_ENTRYPOINT);
+        assert_eq!(cache_control_for(false), CACHE_CONTROL_ASSET);
+    }
 }

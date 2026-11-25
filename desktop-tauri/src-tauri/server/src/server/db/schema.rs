@@ -360,7 +360,10 @@ pub fn is_reserved(key: &str) -> bool {
 ///
 /// ── 版本 33：`account_usage_records` 补用量诊断列（`schema_usage_diagnostics.sql`）──
 /// 官方 beta.2 的 v30 与本地 v30（客户端出入站身份三列）撞号，顺延到 33。
-pub const SCHEMA_VERSION: i64 = 33;
+///
+/// ── 版本 34：签到记录补 `(ts DESC, row_id DESC)` 复合索引（`schema_checkin_records_index.sql`）──
+/// 记录页按同序排序分页，单列 `ts` 索引在这条查询上仍要走一遍排序。
+pub const SCHEMA_VERSION: i64 = 34;
 
 /// CodeArts 未开放发送槽的封闭 DDL；只在其原连接耐久事务内按需建立空表。
 /// 尚未登记启动迁移或可信首次纳管，不改 user_version，也不因建表补任何 Ready 行。
@@ -1139,6 +1142,8 @@ fn apply_version(
         32 => conn.execute_batch(V32_SCHEMA),
         // v33：account_usage_records 补用量诊断列（官方 beta.2 的 v30 顺延，见 SCHEMA_VERSION）
         33 => conn.execute_batch(include_str!("schema_usage_diagnostics.sql")),
+        // v34：签到记录补 (ts DESC, row_id DESC) 复合索引，对齐记录页的排序口径
+        34 => conn.execute_batch(include_str!("schema_checkin_records_index.sql")),
         _ => Ok(()),
     }
 }

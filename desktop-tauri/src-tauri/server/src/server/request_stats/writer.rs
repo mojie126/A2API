@@ -40,6 +40,14 @@ impl RequestStats {
 
     pub(crate) fn record_with_limiter(&self, entry: NewRequestEntry, limiter_event: Option<LimiterEvent<'_>>) {
         let record = entry.normalize();
+        // 记账时轻量核对筛选候选是否出现新枚举值：只读内存快照，不碰数据库与统计锁
+        self.filters_cache.note_written(
+            &record.client_model,
+            &record.upstream_model,
+            &record.provider,
+            &record.source.client,
+            &record.source.api_key.filter_value(),
+        );
         let bounds = self.retention_bounds();
         let maintain = self.should_maintain();
         let outcome = {
@@ -98,6 +106,14 @@ impl RequestStats {
         if id.is_empty() {
             return;
         }
+        // 起行同样可能带进新的客户端 / Key / 模型名，标脏让下一次下拉重算
+        self.filters_cache.note_written(
+            client_model,
+            "",
+            "",
+            &source.client,
+            &source.api_key.filter_value(),
+        );
         let bounds = self.retention_bounds();
         let maintain = self.should_maintain();
         let guard = self.guard();
@@ -128,6 +144,8 @@ impl RequestStats {
         if id.is_empty() {
             return;
         }
+        // 在途进度会刷新上游模型名与提供商：同样核对下拉候选是否出现新值
+        self.filters_cache.note_written("", &progress.upstream_model, &progress.provider, "", "");
         let guard = self.guard();
         let _ = self.with_conn_mut(&guard, |conn| sql::update_running_progress(conn, id, progress));
     }

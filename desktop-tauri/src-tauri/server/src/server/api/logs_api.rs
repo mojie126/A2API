@@ -142,12 +142,23 @@ pub async fn query_logs(State(state): State<ServerState>, Query(params): Query<P
 
     let query = match log_query(&params) { Ok(query) => query, Err(response) => return response };
 
-    let mut result = store.query(&query);
-    for entry in &mut result.entries { fill_usage_context(state.store(), entry); }
-    for group in &mut result.groups {
-        fill_usage_context(state.store(), &mut group.entry);
-        for entry in &mut group.entries { fill_usage_context(state.store(), entry); }
-    }
+    // 日志查询与账号上下文补全是同步读库：移入阻塞线程池，避免高负载下占住 tokio 工作线程
+    let accounts = state.store().clone();
+    let result = match tokio::task::spawn_blocking(move || {
+        let mut result = store.query(&query);
+        for entry in &mut result.entries { fill_usage_context(&accounts, entry); }
+        for group in &mut result.groups {
+            fill_usage_context(&accounts, &mut group.entry);
+            for entry in &mut group.entries { fill_usage_context(&accounts, entry); }
+        }
+        result
+    }).await {
+        Ok(value) => value,
+        Err(error) => {
+            logging::log("[Logs]", &format!("❌ 日志查询任务失败: {error}"));
+            return raw_json(json!({ "success": false, "error": "日志查询失败" }));
+        }
+    };
     let mut data = match serde_json::to_value(&result) {
         Ok(value) => value,
         Err(error) => {
@@ -167,7 +178,14 @@ pub async fn stats_logs(State(_state): State<ServerState>) -> Response {
         Ok(store) => store,
         Err(response) => return response,
     };
-    let mut data = match serde_json::to_value(store.stats()) {
+    let stats = match tokio::task::spawn_blocking(move || store.stats()).await {
+        Ok(value) => value,
+        Err(error) => {
+            logging::log("[Logs]", &format!("❌ 日志统计任务失败: {error}"));
+            return raw_json(json!({ "success": false, "error": "日志统计失败" }));
+        }
+    };
+    let mut data = match serde_json::to_value(stats) {
         Ok(value) => value,
         Err(error) => {
             logging::log("[Logs]", &format!("❌ 日志统计序列化失败: {error}"));
@@ -252,7 +270,17 @@ pub async fn download_logs(State(_state): State<ServerState>, Query(params): Que
         Err(response) => return response,
     };
     let query = match log_query(&params) { Ok(query) => query, Err(response) => return response };
-    let body = if params.is_empty() { store.to_jsonl() } else { store.to_jsonl_where(&query) };
+    // 导出可能拼出很大的 JSONL，同样移入阻塞线程池
+    let empty = params.is_empty();
+    let body = match tokio::task::spawn_blocking(move || {
+        if empty { store.to_jsonl() } else { store.to_jsonl_where(&query) }
+    }).await {
+        Ok(text) => text,
+        Err(error) => {
+            logging::log("[Logs]", &format!("❌ 日志导出任务失败: {error}"));
+            return raw_json(json!({ "success": false, "error": "日志导出失败" }));
+        }
+    };
     let filename = format!("workbuddy-logs-{}.jsonl", file_stamp());
 
     let mut response = Response::builder()

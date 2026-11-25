@@ -34,6 +34,8 @@ impl RequestStats {
     /// 只清两侧报文，或同时清理请求明细；无筛选删除明细时重置日报。
     pub fn clear_requests(&self, filter: &RequestQuery, raw_only: bool) -> Option<ClearResult> {
         let plan = sql::FilterPlan::of(filter);
+        // 删除会改变下拉候选清单（raw_only 其实不动明细，但统一标脏最稳），下一次拉取重算
+        self.filters_cache.invalidate();
         self.with_conn_mut(&self.guard(), |conn| {
             let tx = conn.transaction()?;
             let raw = sql::delete_raw_matching(&tx, &plan)?;

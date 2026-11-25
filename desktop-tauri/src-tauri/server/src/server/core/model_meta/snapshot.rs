@@ -212,8 +212,18 @@ static DB: OnceLock<Option<Db>> = OnceLock::new();
 ///
 /// 收 `Option<Db>` 与 `catalog_cache::install` 同一形态：库打不开时也照常调用，
 /// 那时只读内嵌快照（功能仍在，只是拿不到刷新结果）。
+///
+/// 启动时就装载一次快照：首次访问本来要持数据库连接锁读缓存，而这条读路径会
+/// 出现在「历史费用回填」等已持锁的链路里 —— 预装后读路径只碰内存。
 pub fn install(db: Option<Db>) {
+    let cached = db.as_ref().and_then(read_cache_from);
     let _ = DB.set(db);
+    let loaded = cached.unwrap_or_else(load_builtin);
+    let lock = SNAPSHOT.get_or_init(|| RwLock::new(None));
+    match lock.write() {
+        Ok(mut slot) => *slot = Some(Arc::new(loaded)),
+        Err(poisoned) => *poisoned.into_inner() = Some(Arc::new(loaded)),
+    }
 }
 
 fn db() -> Option<Db> {
@@ -299,9 +309,11 @@ fn snapshot() -> Arc<Snapshot> {
 
 /// 首次装载：库里的刷新结果优先，没有（或坏了）才用内嵌快照。
 fn load() -> Snapshot {
-    if let Some(cached) = read_cache() {
-        return cached;
-    }
+    read_cache().unwrap_or_else(load_builtin)
+}
+
+/// 内嵌快照的装载（库缓存不可用时用）。
+fn load_builtin() -> Snapshot {
     // 内嵌快照是构建产物，解析不了属于「发版坏了」；这时给一份空索引而不是
     // panic —— 模型清单本身照常工作，只是所有键都回到「未声明」。
     match parse(EMBEDDED, "builtin") {
@@ -478,7 +490,11 @@ pub fn normalize_name(name: &str) -> Option<String> {
 
 /// 读库里的刷新结果（库不可用 / 没写过 / 值坏了 → `None`，由调用方回落地板）。
 fn read_cache() -> Option<Snapshot> {
-    let db = db()?;
+    read_cache_from(&db()?)
+}
+
+/// 从给定库句柄读缓存（`install` 预热阶段库句柄还没装进静态槽位时用它）
+fn read_cache_from(db: &Db) -> Option<Snapshot> {
     // 只读一次库（整份就是一个键），解析放在闭包外做 —— 闭包里不能打日志，
     // 而解析失败的 verbose 要在闭包外补
     let text = db.with(read_text).flatten();

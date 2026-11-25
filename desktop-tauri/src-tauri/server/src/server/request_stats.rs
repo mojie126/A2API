@@ -81,6 +81,7 @@ mod record;
 mod report;
 mod cache_report;
 mod counts;
+mod filters_cache;
 mod model_recency;
 mod routing;
 mod trace;
@@ -228,6 +229,8 @@ pub struct RequestStats {
     last_maintenance_ms: AtomicI64,
     model_recency: Arc<model_recency::ModelRecency>,
     counts: counts::CountsCache,
+    /// 筛选候选清单缓存（见 `filters_cache` 的模块头）
+    filters_cache: filters_cache::FilterOptionsCache,
 }
 
 impl RequestStats {
@@ -269,6 +272,7 @@ impl RequestStats {
             last_maintenance_ms: AtomicI64::new(0),
             model_recency: Arc::new(model_recency::ModelRecency::default()),
             counts: counts::CountsCache::default(),
+            filters_cache: filters_cache::FilterOptionsCache::new(),
         }
     }
 
@@ -561,27 +565,38 @@ impl RequestStats {
     /// 前端据此只保留「全部」选项，筛选器退化成不可用但界面不报错；
     /// 与 `query_requests` 的空表降级同一取向（少一个功能好过整页失败）。
     pub fn filter_options(&self) -> Value {
-        let loaded = {
-            let guard = self.guard();
-            self.with_conn(&guard, |conn| {
-                let (models, providers) = sql::select_filter_options(conn, MAX_FILTER_OPTIONS)?;
-                let sources = sql::source_filter_options(conn, MAX_FILTER_OPTIONS)?;
-                Ok((models, providers, sources))
-            })
-        };
-        let (models, providers, mut sources) = loaded.unwrap_or((Vec::new(), Vec::new(), json!({})));
-        if let Some(clients) = sources["clients"].as_array_mut() {
-            for client in clients {
-                client["label"] = json!(crate::server::core::client::display_name(
-                    client["value"].as_str().unwrap_or(""), client["label"].as_str().unwrap_or(""),
-                ));
-            }
+        // 先在库锁外读内存快照：命中短窗缓存时完全不进库
+        let database = crate::server::db::query_cache_generation();
+        let requests = self.db.as_ref().map_or(0, Db::request_revision);
+        if let Some(cached) = self.filters_cache.read_fast(database, requests) {
+            return cached;
         }
-        let providers: Vec<Value> = providers
-            .into_iter()
-            .map(|id| json!({ "id": id, "label": provider_label(&id) }))
-            .collect();
-        json!({ "models": models, "providers": providers, "clients": sources["clients"], "apiKeys": sources["apiKeys"] })
+        let guard = self.guard();
+        let database = crate::server::db::query_cache_generation();
+        let requests = self.db.as_ref().map_or(0, Db::request_revision);
+        if let Some(cached) = self.filters_cache.read_fast(database, requests) {
+            return cached;
+        }
+        // 候选清单来自对整表的分组去重；命中缓存时连连接都不取
+        let loaded = self.with_conn(&guard, |conn| {
+            self.filters_cache.read_or_compute(conn, database, requests, MAX_FILTER_OPTIONS, |conn| {
+                let (models, providers) = sql::select_filter_options(conn, MAX_FILTER_OPTIONS)?;
+                let mut sources = sql::source_filter_options(conn, MAX_FILTER_OPTIONS)?;
+                if let Some(clients) = sources["clients"].as_array_mut() {
+                    for client in clients {
+                        client["label"] = json!(crate::server::core::client::display_name(
+                            client["value"].as_str().unwrap_or(""), client["label"].as_str().unwrap_or(""),
+                        ));
+                    }
+                }
+                let providers: Vec<Value> = providers
+                    .into_iter()
+                    .map(|id| json!({ "id": id, "label": provider_label(&id) }))
+                    .collect();
+                Ok(json!({ "models": models, "providers": providers, "clients": sources["clients"], "apiKeys": sources["apiKeys"] }))
+            })
+        });
+        loaded.unwrap_or_else(|| json!({ "models": [], "providers": [], "clients": [], "apiKeys": [] }))
     }
 
     /// 存储概况（排障与报表页脚用）
