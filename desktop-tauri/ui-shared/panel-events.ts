@@ -22,7 +22,7 @@ export type PanelEventOptions = {
 const allChanges = (): PanelChanges => ({ accounts: true, balances: true, usage: true, connections: true, proxies: true })
 const fields: Array<keyof PanelRevisions> = ['accounts', 'balances', 'usage', 'connections', 'proxies']
 
-async function readEvents(response: Response, signal: AbortSignal, receive: (event: string, data: string) => void) {
+export async function readSseEvents(response: Response, signal: AbortSignal, receive: (event: string, data: string) => void) {
   const reader = response.body?.getReader()
   if (!reader) throw new Error('实时通知响应为空')
   const decoder = new TextDecoder()
@@ -146,7 +146,7 @@ export function subscribePanelEvents(options: PanelEventOptions): () => void {
         await response.body?.cancel().catch(() => {})
         throw new Error('实时通知连接不可用')
       }
-      await readEvents(response, source.signal, receive)
+      await readSseEvents(response, source.signal, receive)
     } catch { /* 断线不清空页面；下一次连接补读最新数据。 */ }
     finally {
       if (controller !== source) return

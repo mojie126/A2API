@@ -17,12 +17,10 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::Notify;
 
 use super::storage::{Package, PackageSource};
 
@@ -46,16 +44,6 @@ struct Entry {
 struct Cache {
     checked_at: i64,
     packages: BTreeMap<String, Entry>,
-}
-
-struct Worker {
-    wake: Notify,
-    force: AtomicBool,
-}
-
-fn worker() -> &'static Worker {
-    static WORKER: OnceLock<Worker> = OnceLock::new();
-    WORKER.get_or_init(|| Worker { wake: Notify::new(), force: AtomicBool::new(false) })
 }
 
 fn path() -> std::path::PathBuf {
@@ -82,14 +70,46 @@ pub(super) fn snapshot() -> Value {
     json!({ "checkedAt": cached.checked_at, "updates": items })
 }
 
-/// 叫醒后台：`force` = 忽略间隔，立刻去问一次。
-pub(super) fn wake(force: bool) {
-    if force {
-        worker().force.store(true, Ordering::Release);
+fn save_cache(cached: &Cache) {
+    if let Ok(bytes) = serde_json::to_vec(cached) {
+        if let Err(error) = super::storage::atomic_write(&path(), &bytes) {
+            crate::server::logging::verbose("[PluginUpdates]", &format!("保存更新检查结果失败：{error}"));
+        }
     }
-    worker().wake.notify_one();
 }
 
+fn installed_latest_label(package: &Package) -> String {
+    match &package.source {
+        Some(PackageSource::Github { commit, .. }) if commit.len() >= 12 => commit[..12].to_string(),
+        _ => package.version.clone(),
+    }
+}
+
+/// 安装或更新成功后，立即把该条目的本地更新状态写为最新，避免完成后界面仍残留旧提示。
+pub(super) async fn record_installed(package: &Package, installed_latest: bool) {
+    let entry = if installed_latest {
+        Entry { latest: installed_latest_label(package), available: false, error: None }
+    } else {
+        let mut distribution = None;
+        match tokio::time::timeout(Duration::from_secs(8), check_entry(package, &mut distribution)).await {
+            Ok(entry) => entry,
+            Err(_) => Entry { error: Some("检查插件最新版本超时".into()), ..Entry::default() },
+        }
+    };
+    let mut cached = cache();
+    cached.packages.insert(package.id.clone(), entry);
+    save_cache(&cached);
+}
+
+/// 卸载成功后同步移除对应的缓存条目。
+pub(super) async fn remove_entry(id: &str) {
+    let mut cached = cache();
+    if cached.packages.remove(id).is_some() {
+        save_cache(&cached);
+    }
+}
+
+/// 后台每小时醒一次，到点按 `REFRESH_MS` 判断是否真去问上游。
 pub(super) fn spawn() {
     static STARTED: AtomicBool = AtomicBool::new(false);
     if STARTED.swap(true, Ordering::AcqRel) {
@@ -97,12 +117,8 @@ pub(super) fn spawn() {
     }
     crate::spawn_task(async {
         loop {
-            let force = worker().force.swap(false, Ordering::AcqRel);
-            let _ = refresh(force).await;
-            tokio::select! {
-                _ = worker().wake.notified() => {},
-                _ = tokio::time::sleep(Duration::from_secs(3600)) => {},
-            }
+            let _ = refresh(false).await;
+            tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     });
 }
@@ -133,35 +149,43 @@ async fn refresh_inner(force: bool) {
     if !force && now.saturating_sub(cache().checked_at) < REFRESH_MS {
         return;
     }
+    // 检查期间登记可能被安装 / 更新 / 卸载改动；本轮结果基于旧快照，写回会覆盖
+    // 即时写入的新状态，所以收尾时对比一次，变了就保留磁盘上的缓存结果
+    let before = serde_json::to_string(&registry.packages).unwrap_or_default();
     // 懒加载：只有真的装了 magpie 分发源的包，才去拉那份索引（几 MB）。
     let mut distribution: Option<Result<Value, String>> = None;
     let mut packages = BTreeMap::new();
     for package in &registry.packages {
-        let entry = match &package.source {
-            Some(PackageSource::Local { .. }) => Entry { latest: package.version.clone(), ..Entry::default() },
-            Some(PackageSource::Magpie { .. }) => {
-                if distribution.is_none() {
-                    distribution = Some(super::distribution::index().await);
-                }
-                match distribution.as_ref().expect("上一行刚填过") {
-                    Ok(index) => magpie_entry(index, package),
-                    Err(error) => Entry { error: Some(error.clone()), ..Entry::default() },
-                }
-            }
-            Some(PackageSource::Github { repository, reference, commit, .. }) => {
-                github_entry(repository, reference, commit).await
-            }
-            // 没有 source = npm 装的
-            None => npm_entry(&package.name, &package.version).await,
-        };
+        let entry = check_entry(package, &mut distribution).await;
         packages.insert(package.id.clone(), entry);
     }
-    // 只保留还在装的插件：卸载 / 换来源后旧条目不再有意义。
-    let cached = Cache { checked_at: now, packages };
-    if let Ok(bytes) = serde_json::to_vec(&cached) {
-        if let Err(error) = super::storage::atomic_write(&path(), &bytes) {
-            crate::server::logging::verbose("[PluginUpdates]", &format!("保存更新检查结果失败：{error}"));
+    let unchanged = super::storage::read()
+        .map(|current| serde_json::to_string(&current.packages).unwrap_or_default() == before)
+        .unwrap_or(false);
+    if !unchanged {
+        return;
+    }
+    save_cache(&Cache { checked_at: now, packages });
+}
+
+/// 按来源问一次上游的最新版；`distribution` 由调用方复用，避免同批多包重复拉索引。
+async fn check_entry(package: &Package, distribution: &mut Option<Result<Value, String>>) -> Entry {
+    match &package.source {
+        Some(PackageSource::Local { .. }) => Entry { latest: package.version.clone(), ..Entry::default() },
+        Some(PackageSource::Magpie { .. }) => {
+            if distribution.is_none() {
+                *distribution = Some(super::distribution::index().await);
+            }
+            match distribution.as_ref().expect("上一行刚填过") {
+                Ok(index) => magpie_entry(index, package),
+                Err(error) => Entry { error: Some(error.clone()), ..Entry::default() },
+            }
         }
+        Some(PackageSource::Github { repository, reference, commit, .. }) => {
+            github_entry(repository, reference, commit).await
+        }
+        // 没有 source = npm 装的
+        None => npm_entry(&package.name, &package.version).await,
     }
 }
 

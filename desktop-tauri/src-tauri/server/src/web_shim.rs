@@ -2369,6 +2369,8 @@ pub fn shim_js() -> &'static str {
       }));
     },
     getStatsRequests: function (query) { return call('GET', '/api/stats/requests' + toQuery(query)); },
+    // 单条请求的完整详情（轻量列表未返回的重试链 / 敏感词 / 选路快照）
+    getStatsRequestDetail: function (query) { return call('GET', '/api/stats/requests/detail' + toQuery(query)); },
     getStatsRequestFilters: function () { return call('GET', '/api/stats/requests/filters'); },
     clearStatsRequests: function (query) { return call('DELETE', '/api/stats/requests' + toQuery(query)); },
     // 按 id 取单条请求的原始正文（详情弹窗「预览对话」的数据源；找不到给 404）

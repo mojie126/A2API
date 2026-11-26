@@ -48,9 +48,8 @@ pub(super) fn begin(action: &str, target: Value) -> Result<(), String> {
 
 pub(super) fn finished(result: Result<(), String>) {
     super::icons::wake(false);
-    // 装了／更了／卸了之后可更新状态必须重算：自动检查的间隔是 6 小时，不强制的话
-    // 刚更新完的插件会顶着一小时前的旧结论继续显示「可更新」（点进去才发现没有）。
-    super::updates::wake(true);
+    // 可更新状态由调用方在成功分支就地写入（`updates::record_installed` /
+    // `remove_entry`）；这里不再整轮强制重算，避免检查期间的旧快照覆盖即时结果。
     if let Ok(mut value) = state().lock() {
         value["active"] = json!(false);
         value["updatedAt"] = json!(crate::server::logging::now_ms());
@@ -109,7 +108,7 @@ pub fn install(
                 package.settings_schema = previous.settings_schema.clone();
                 package.provider_aliases = previous.provider_aliases.clone();
                 package.disabled_providers = previous.disabled_providers.clone();
-                *previous = package;
+                *previous = package.clone();
             } else {
                 if let Some(aliases) = after.identities.get(&package.id) {
                     package.provider_aliases = aliases.clone();
@@ -118,12 +117,21 @@ pub fn install(
                 if after.packages.len() >= 64 {
                     return Err("最多安装 64 个脚本插件".into());
                 }
-                after.packages.push(package);
+                after.packages.push(package.clone());
             }
-            switch(before, after, executable, None).await
+            switch(before, after, executable, None).await?;
+            Ok(package)
         }
         .await;
-        finished(result);
+        let finish_result = match result {
+            Ok(package) => {
+                // 安装 / 更新完成后立即写入该条目的最新状态，替代整轮强制重算
+                super::updates::record_installed(&package, false).await;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
+        finished(finish_result);
     });
     Ok(operation())
 }
@@ -191,6 +199,7 @@ pub fn change(
         _ => return Err("未知的脚本插件操作".into()),
     }
     begin(&action, target)?;
+    let remove_id = (action == "remove").then(|| id.clone());
     crate::spawn_task(async move {
         let result = async {
             let executable = if after.packages.iter().any(|package| package.enabled) {
@@ -201,6 +210,11 @@ pub fn change(
             switch(before, after, executable, (action == "reload").then_some(id.as_str())).await
         }
         .await;
+        if result.is_ok() {
+            if let Some(id) = remove_id {
+                super::updates::remove_entry(&id).await;
+            }
+        }
         finished(result);
     });
     Ok(operation())

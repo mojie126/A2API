@@ -519,11 +519,19 @@ impl RequestStats {
         // limit 夹在 [1, MAX_LIMIT]：前端传 0 或十万都不该让接口躺平
         let limit = filter.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
         let plan = sql::FilterPlan::of(filter);
+        enum PageRows {
+            Full(Vec<RequestEntry>),
+            List(Vec<record::RequestListRow>),
+        }
         let loaded = {
             let guard = self.guard();
             self.with_conn_mut(&guard, |conn| {
                 let tx = conn.transaction()?;
-                let entries = sql::select_page_desc(&tx, &plan, filter.offset, limit)?;
+                let page_rows = if filter.list_only {
+                    PageRows::List(sql::select_page_list_desc(&tx, &plan, filter.offset, limit)?)
+                } else {
+                    PageRows::Full(sql::select_page_desc(&tx, &plan, filter.offset, limit)?)
+                };
                 let external = tx.pragma_query_value(None, "data_version", |row| row.get(0))?;
                 let version = counts::Version {
                     requests: self.db.as_ref().map_or(0, Db::request_revision),
@@ -532,22 +540,48 @@ impl RequestStats {
                 };
                 let (total, matched, running) = self.counts.read(&tx, version, &plan)?;
                 tx.commit()?;
-                Ok((total, matched, running, entries))
+                Ok((total, matched, running, page_rows))
             })
         };
-        let (total, matched, running, entries) = loaded.unwrap_or((0, 0, 0, Vec::new()));
-        // 每行经 `entry_json` 补两个派生字段：`providerLabel`（id → label 的换算；
-        // 换算处与汇总的 providers 数组同一个函数，两处名字必然一致）与
-        // `phaseElapsedMs`（在途行「当前阶段已持续多久」，读取那一刻现算 ——
-        // 理由见那个函数的说明）。汇总是**反序列化回 Value**，不是另一套结构：
-        // 契约字段仍由 record.rs 的 serde 注解决定，这里只加不删
-        let rows: Vec<Value> = entries.iter().map(entry_json).collect();
+        let (total, matched, running, page_rows) = loaded.unwrap_or((0, 0, 0, PageRows::Full(Vec::new())));
+        // 每行经 `entry_json` / `list_entry_json` 补派生字段：`providerLabel`（id → label
+        // 的换算；换算处与汇总的 providers 数组同一个函数，两处名字必然一致）与
+        // `phaseElapsedMs`（在途行「当前阶段已持续多久」，读取那一刻现算）。
+        // 汇总是**反序列化回 Value**，不是另一套结构：契约字段仍由 record.rs 的 serde 注解决定
+        let rows: Vec<Value> = match page_rows {
+            PageRows::Full(entries) => entries.iter().map(entry_json).collect(),
+            PageRows::List(entries) => entries.iter().map(report::list_entry_json).collect(),
+        };
         json!({
             "entries": rows,
             "total": total,
             "matched": matched,
             "running": running,
         })
+    }
+
+    /// 按 `rowId` 或 `id`（可带 `ts` 缩小范围）读取单条请求的完整详情。
+    ///
+    /// 列表接口在 `view=list` 下不返回重试链、敏感词与完整选路快照，详情弹窗
+    /// 打开时靠这个接口补齐；不存在的行返回 `None`（路由层转 404）。
+    pub fn request_detail(&self, row_id: Option<i64>, id: Option<&str>, ts: Option<i64>) -> Option<Value> {
+        let loaded = {
+            let guard = self.guard();
+            self.with_conn(&guard, |conn| match row_id.filter(|value| *value > 0) {
+                Some(row_id) => sql::select_detail_by_row_id(conn, row_id),
+                None => match id.map(str::trim).filter(|value| !value.is_empty()) {
+                    Some(id) => sql::select_detail_by_id(conn, id, ts),
+                    None => Ok(None),
+                },
+            })
+        };
+        let (row_id, entry) = loaded??;
+        let mut value = entry_json(&entry);
+        if let Some(object) = value.as_object_mut() {
+            object.insert("rowId".to_string(), json!(row_id));
+            object.insert("detailsLoaded".to_string(), Value::Bool(true));
+        }
+        Some(value)
     }
 
     /// 筛选下拉的候选清单：明细里出现过的模型名与 provider（各按出现次数降序）。
@@ -615,13 +649,17 @@ impl RequestStats {
     pub fn prune(&self) {
         let bounds = self.retention_bounds();
         let guard = self.guard();
-        let _ = self.with_conn_mut(&guard, |conn| {
+        let ok = self.with_conn_mut(&guard, |conn| {
             let tx = conn.transaction()?;
             sql::delete_expired_requests(&tx, bounds.requests_ms)?;
             retention::trim_requests(&tx, bounds.request_count)?;
             daily::delete_daily_before(&tx, &bounds.daily_key)?;
             tx.commit()
-        });
+        }).is_some();
+        if ok {
+            self.filters_cache.invalidate();
+            crate::server::core::panel_events::notify_requests();
+        }
         // 显式裁剪（启动 / 改保留期）之后重置节拍：下一次记账从新的一批开始。
         self.maintenance_writes.store(0, Ordering::Relaxed);
         self.last_maintenance_ms.store(now_ms(), Ordering::Relaxed);
@@ -733,14 +771,18 @@ impl RequestStats {
             self.with_conn_mut(&guard, remap_model_days)
         };
         match outcome {
-            Some(changed) if !changed.is_empty() => logging::log(
-                "[Stats]",
-                &format!(
-                    "🔁 已按上游真名重算 {} 天的模型用量（此前按请求名 / 映射别名累计）：{}",
-                    changed.len(),
-                    changed.join("、")
-                ),
-            ),
+            Some(changed) if !changed.is_empty() => {
+                self.filters_cache.invalidate();
+                crate::server::core::panel_events::notify_requests();
+                logging::log(
+                    "[Stats]",
+                    &format!(
+                        "🔁 已按上游真名重算 {} 天的模型用量（此前按请求名 / 映射别名累计）：{}",
+                        changed.len(),
+                        changed.join("、")
+                    ),
+                );
+            }
             Some(_) => {}
             // Err（已由 with_conn_mut 打控制台日志）与库不可用都在这一支：
             // 标记没写，下次启动自然再试，订正不会因此丢

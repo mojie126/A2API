@@ -10,16 +10,20 @@ export function ErrorRuleEditor({ rule, providers, t, exception, onClose, onSave
   const [draft, setDraft] = React.useState(() => structuredClone(rule))
   const [statuses, setStatuses] = React.useState(rule.statuses.join(', '))
   const [error, setError] = React.useState('')
-  const inputProblem = draft.kind === 'bad_request' || draft.kind === 'content'
   const patch = (next: Partial<ErrorRule>) => setDraft(current => {
     const updated = { ...current, ...next }
-    if (updated.kind === 'bad_request' || updated.kind === 'content') { updated.action = 'return_error'; updated.cooldown = 'none' }
     if (updated.kind !== 'auth' && updated.action === 'refresh_then_switch') updated.action = 'switch_account'
     if (updated.fallbackCapSeconds < updated.fallbackSeconds) updated.fallbackCapSeconds = updated.fallbackSeconds
     return updated
   })
-  const actions = Object.entries(actionLabels(t)).filter(([value]) => (!inputProblem || value === 'return_error') && (draft.kind === 'auth' || value !== 'refresh_then_switch')).map(([value, label]) => ({ value: value as ErrorAction, label }))
-  const modes: { value: CooldownMode; label: string }[] = [{ value: 'upstream', label: t('优先上游时间') }, { value: 'fixed', label: t('固定冷却时间') }, { value: 'protection', label: t('使用失败保护') }, { value: 'none', label: t('不冷却') }]
+  const actions = Object.entries(actionLabels(t))
+    .filter(([value]) => (value !== 'return_error' || draft.action === 'return_error') && (draft.kind === 'auth' || value !== 'refresh_then_switch'))
+    .map(([value, label]) => ({ value: value as ErrorAction, label }))
+  const modes: { value: CooldownMode; label: string }[] = [
+    { value: 'upstream', label: t('优先上游时间') }, { value: 'fixed', label: t('固定冷却时间') },
+    { value: 'protection', label: t('使用失败保护') }, { value: 'deprioritize', label: t('优先级调到最低') },
+    { value: 'none', label: t('不冷却') },
+  ]
   const save = () => {
     if (!draft.name.trim()) { setError(t('请填写规则名称。')); return }
     const values = statuses.split(/[,，\s]+/).filter(Boolean)
@@ -44,17 +48,21 @@ export function ErrorRuleEditor({ rule, providers, t, exception, onClose, onSave
         <ErrorToggle label={t('启用规则')} checked={draft.enabled} onChange={enabled => patch({ enabled })} />
       </> : <Badge variant='outline' shape='tag'>{rule.statuses.join(', ') || t('提供商已识别')}</Badge>}
       <Field><FieldLabel>{t('遇到错误时')}</FieldLabel><ErrorChoice label={t('错误处置方式')} value={draft.action} options={actions} onChange={action => patch({ action })} /></Field>
-      <div className='re-form-grid'><Field><FieldLabel>{t('冷却方式')}</FieldLabel><ErrorChoice label={t('冷却方式')} value={draft.cooldown} options={modes} disabled={inputProblem} onChange={cooldown => patch({ cooldown })} /></Field>
-        <Field><FieldLabel>{t('影响范围')}</FieldLabel><ErrorChoice label={t('冷却影响范围')} value={draft.scope} disabled={inputProblem}
+      <div className='re-form-grid'><Field><FieldLabel>{t('冷却方式')}</FieldLabel><ErrorChoice label={t('冷却方式')} value={draft.cooldown} options={modes} onChange={cooldown => patch({ cooldown })} /></Field>
+        <Field><FieldLabel>{t('影响范围')}</FieldLabel><ErrorChoice label={t('冷却影响范围')} value={draft.scope}
           options={Object.entries(scopeLabels(t)).map(([value, label]) => ({ value: value as CooldownScope, label }))} onChange={scope => patch({ scope })} /></Field></div>
       {draft.scope !== 'auto' ? <p className='re-note'>{t('已确认的共享限制范围不能缩小；指定范围只会扩大影响。')}</p> : null}
-      {draft.cooldown === 'upstream' || draft.cooldown === 'fixed' ? <div className='re-inset'>
-        <ErrorNumber label={draft.cooldown === 'upstream' ? t('上游未给时间时') : t('固定冷却时长')} unit={t('秒')} value={draft.fallbackSeconds} min={1} max={86400} onChange={fallbackSeconds => patch({ fallbackSeconds })} />
-        <ErrorToggle label={t('连续失败延长冷却')} description={t('只延长自行估算的时间，不修改上游明确的额度重置时间。')} checked={draft.exponential} onChange={exponential => patch({ exponential })} />
-        {draft.exponential ? <ErrorNumber label={t('自行估算的冷却上限')} unit={t('秒')} value={draft.fallbackCapSeconds} min={draft.fallbackSeconds} max={86400} onChange={fallbackCapSeconds => patch({ fallbackCapSeconds })} /> : null}
+      {draft.cooldown === 'upstream' || draft.cooldown === 'fixed' || draft.cooldown === 'deprioritize' ? <div className='re-inset'>
+        <ErrorNumber label={draft.cooldown === 'upstream' ? t('上游未给时间时') : draft.cooldown === 'deprioritize' ? t('降级保留时长') : t('固定冷却时长')}
+          unit={t('秒')} value={draft.fallbackSeconds} min={1} max={86400} onChange={fallbackSeconds => patch({ fallbackSeconds })} />
+        <ErrorToggle label={draft.cooldown === 'deprioritize' ? t('连续失败延长降级') : t('连续失败延长冷却')}
+          description={draft.cooldown === 'deprioritize' ? t('连续失败时按比例延长降级时间，成功一次后清除。') : t('只延长自行估算的时间，不修改上游明确的额度重置时间。')}
+          checked={draft.exponential} onChange={exponential => patch({ exponential })} />
+        {draft.exponential ? <ErrorNumber label={draft.cooldown === 'deprioritize' ? t('最长降级时长') : t('自行估算的冷却上限')}
+          unit={t('秒')} value={draft.fallbackCapSeconds} min={draft.fallbackSeconds} max={86400} onChange={fallbackCapSeconds => patch({ fallbackCapSeconds })} /> : null}
       </div> : null}
       {draft.cooldown === 'fixed' ? <p className='re-warning'>{t('固定时间也不能早于上游明确要求的恢复时间。')}</p> : null}
-      <p className='re-note'><ErrorIcon name='shield' />{t('已经输出、任务结果不确定、验证或风控拒绝仍会停止；例外规则不能绕过安全限制或已识别的请求错误。')}</p>
+      <p className='re-note'><ErrorIcon name='shield' />{t('已经输出、任务结果不确定、本机校验或风控安全边界仍会停止；其余错误均支持冷却或降级处理。')}</p>
       {error ? <p role='alert' className='re-warning'>{error}</p> : null}
     </DialogBody><DialogFooter><Button variant='outline' onClick={onClose}>{t('取消')}</Button><Button onClick={save}>{t('应用')}</Button></DialogFooter>
   </DialogContent></Dialog>

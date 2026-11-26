@@ -27,9 +27,30 @@ const MODAL_EVENT = 'wb:modal-active'
 
 let modalCount = 0
 
-/** 当前是否有全屏弹窗打开（供非 React 侧的经典脚本查询） */
+/**
+ * 真实打开中的全屏弹窗：Base UI 的 Popup 在打开时挂 `data-open`，
+ * 关闭后变成 `data-closed`（keepMounted 时内容仍在 DOM 里）。
+ */
+const OPEN_MODAL_SELECTOR = [
+  '[data-slot="dialog-content"][data-open]',
+  '[data-slot="sheet-content"][data-open]',
+  '[data-slot="alert-dialog-content"][data-open]',
+].join(',')
+
+/**
+ * 当前是否有全屏弹窗打开（供非 React 侧的经典脚本查询）。
+ *
+ * 以**弹窗自身的 `data-open` 属性**为唯一事实来源：组件是否挂载、计数是否
+ * 归零都与「用户眼前是否真有弹窗」无关（`keepMounted` 的弹窗关闭后组件仍在，
+ * 历史上有过一次 sync 失败也会让计数停在正数）。只看计数会把各面板的实时
+ * 刷新与轮询永久按住 —— 账号页连接数、路由在途、请求日志都不再更新。
+ * 没有打开中的弹窗时顺带把计数归零，让后续弹窗的开关重新对齐。
+ */
 export function isModalActive(): boolean {
-  return modalCount > 0
+  if (typeof document === 'undefined') return modalCount > 0
+  if (document.querySelector(OPEN_MODAL_SELECTOR)) return true
+  modalCount = 0
+  return false
 }
 
 /**
@@ -58,7 +79,7 @@ export function onModalActiveChange(listener: (active: boolean) => void): () => 
 }
 
 function sync(): void {
-  if (typeof document === 'undefined') return
+  if (typeof document === 'undefined' || !document.documentElement) return
   const root = document.documentElement
   const active = modalCount > 0
   if (active) root.setAttribute(MODAL_ACTIVE_ATTRIBUTE, '')

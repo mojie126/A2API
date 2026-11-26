@@ -20,7 +20,7 @@ pub enum ErrorAction { SwitchAccount, RetryThenSwitch, RefreshThenSwitch, Switch
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CooldownMode { Upstream, Fixed, Protection, None }
+pub enum CooldownMode { Upstream, Fixed, Protection, Deprioritize, None }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,6 +54,9 @@ pub struct ErrorRule {
 fn all_providers() -> String { "*".into() }
 fn enabled() -> bool { true }
 
+/// 换账号上限的上界：与转发层 `MAX_ROUTE_ATTEMPTS` 对齐。
+pub const MAX_SWITCHES: u64 = 100;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ErrorSettings {
@@ -78,7 +81,10 @@ pub struct ErrorSettings {
 impl Default for ErrorSettings {
     fn default() -> Self {
         Self {
-            resends: 3, switches: 5, interval_seconds: 5, wait_budget_seconds: 30, cooldown_floor_seconds: 30,
+            resends: super::DEFAULT_RETRY_COUNT as u64,
+            switches: super::DEFAULT_RETRY_SWITCH_COUNT as u64,
+            interval_seconds: super::DEFAULT_RETRY_INTERVAL_SECONDS as u64,
+            wait_budget_seconds: 30, cooldown_floor_seconds: 30,
             backoff: true, backoff_seconds: 30, backoff_cap_seconds: 300, sink: true, sink_seconds: 1800,
             breaker: false, breaker_failures: 5, breaker_seconds: 60, breaker_successes: 2,
             rules: default_rules(), overrides: Vec::new(),
@@ -86,7 +92,8 @@ impl Default for ErrorSettings {
     }
 }
 
-pub fn default_rules() -> Vec<ErrorRule> {
+/// 上一版（规则 v1）的默认值：只用于识别「用户没改过的旧规则」并迁移到 v2。
+pub fn v1_default_rules() -> Vec<ErrorRule> {
     use CooldownMode::*;
     use ErrorAction::*;
     use ErrorKind::*;
@@ -107,10 +114,33 @@ pub fn default_rules() -> Vec<ErrorRule> {
     ]
 }
 
+/// 当前默认值（规则 v2）：可重试的错误先换账号 / 提供商，
+/// 不适合冷却的错误把优先级调到最低而不是直接返回。
+pub fn default_rules() -> Vec<ErrorRule> {
+    use CooldownMode::*;
+    use ErrorAction::*;
+    use ErrorKind::*;
+    let rule = |kind: ErrorKind, name: &str, statuses: &[u16], action, cooldown, fallback_seconds, exponential, scope| ErrorRule {
+        id: kind.id().into(), name: name.into(), kind, statuses: statuses.to_vec(), code: String::new(), provider: "*".into(),
+        model: String::new(), enabled: true, action, cooldown, fallback_seconds, exponential, fallback_cap_seconds: 1800, scope,
+    };
+    vec![
+        rule(RateLimit, "请求限流", &[429], SwitchAccount, Upstream, 60, false, CooldownScope::Auto),
+        rule(Quota, "额度耗尽", &[429], SwitchAccount, Upstream, 600, true, CooldownScope::Auto),
+        rule(Auth, "登录失效", &[401], RefreshThenSwitch, Fixed, 300, true, CooldownScope::Account),
+        rule(Balance, "余额不足", &[402], SwitchAccount, Upstream, 600, false, CooldownScope::Account),
+        rule(Transient, "连接或服务异常", &[408, 500, 502, 503, 504], RetryThenSwitch, Protection, 60, false, CooldownScope::Auto),
+        rule(Unsupported, "能力不支持", &[501], SwitchProvider, Deprioritize, 1800, false, CooldownScope::Auto),
+        rule(BadRequest, "请求有误", &[400, 413, 422], SwitchProvider, Deprioritize, 1800, false, CooldownScope::Auto),
+        rule(Content, "内容被拒绝", &[], SwitchProvider, Deprioritize, 1800, false, CooldownScope::Provider),
+        rule(Unknown, "其他错误", &[], SwitchAccount, Deprioritize, 1800, false, CooldownScope::Auto),
+    ]
+}
+
 impl ErrorSettings {
     pub fn validate(&self) -> Result<(), String> {
         let bounds = [
-            (self.resends, 0, 10, "原账号重发次数"), (self.switches, 0, 10, "换账号上限"),
+            (self.resends, 0, 10, "原账号重发次数"), (self.switches, 0, MAX_SWITCHES, "换账号上限"),
             (self.interval_seconds, 0, 300, "重发间隔"), (self.wait_budget_seconds, 0, 300, "累计等待上限"),
             (self.cooldown_floor_seconds, 1, 60, "最短冷却"), (self.backoff_seconds, 1, 3600, "首次失败休息"),
             (self.backoff_cap_seconds, self.backoff_seconds, 3600, "最长失败休息"), (self.sink_seconds, 30, 3600, "降低优先级时长"),
@@ -120,11 +150,11 @@ impl ErrorSettings {
         for (value, min, max, name) in bounds {
             if !(min..=max).contains(&value) { return Err(format!("{name}必须是 {min}–{max} 的整数")); }
         }
-        if self.rules.len() != 9 || self.overrides.len() > 100 { return Err("全局错误规则必须完整，提供商例外最多 100 条".into()); }
+        if self.rules.len() != 9 || self.overrides.len() > 200 { return Err("全局错误规则必须完整，提供商例外最多 200 条".into()); }
         let mut ids = std::collections::HashSet::new();
         let mut kinds = std::collections::HashSet::new();
         for (rule, global) in self.rules.iter().map(|rule| (rule, true)).chain(self.overrides.iter().map(|rule| (rule, false))) {
-            for (text, max, name) in [(&rule.id, 80, "规则标识"), (&rule.name, 100, "规则名称"), (&rule.provider, 256, "提供商"), (&rule.model, 256, "模型"), (&rule.code, 256, "业务码")] {
+            for (text, max, name) in [(&rule.id, 128, "规则标识"), (&rule.name, 100, "规则名称"), (&rule.provider, 256, "提供商"), (&rule.model, 256, "模型"), (&rule.code, 256, "业务码")] {
                 if text.len() > max || text.chars().any(char::is_control) || text.trim() != text { return Err(format!("{name}包含空白、控制字符或超过长度上限")); }
             }
             if rule.id.is_empty() || rule.name.is_empty() || rule.provider.is_empty() || !ids.insert(&rule.id) { return Err("规则标识、名称或提供商为空，或规则标识重复".into()); }
@@ -136,10 +166,7 @@ impl ErrorSettings {
             if rule.kind != ErrorKind::Auth && rule.action == ErrorAction::RefreshThenSwitch {
                 return Err("仅登录失效规则可以使用凭证续期".into());
             }
-            if matches!(rule.kind, ErrorKind::BadRequest | ErrorKind::Content) && (rule.action != ErrorAction::ReturnError || rule.cooldown != CooldownMode::None) {
-                return Err("已识别的请求错误和内容拒绝不能设置为重复发送、换号或账号冷却".into());
-            }
-            if rule.kind == ErrorKind::Unknown && !rule.enabled { return Err("其他错误的兜底规则不能关闭".into()); }
+            if rule.kind == ErrorKind::Unknown && global && !rule.enabled { return Err("其他错误的兜底规则不能关闭".into()); }
         }
         Ok(())
     }

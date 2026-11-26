@@ -674,11 +674,12 @@ pub const KEY_RETRY_INTERVAL_SECONDS: &str = "retryIntervalSeconds";
 
 /// 同一账号的原地重发次数默认值：失败后再试 3 次（连同首发共 4 次发送）
 pub const DEFAULT_RETRY_COUNT: i64 = 3;
-/// 换账号的次数默认值：失败后最多换 5 个账号。
+/// 换账号的次数默认值：失败后最多换 32 个账号，
+/// 上限与转发层的路线尝试预算（`MAX_ROUTE_ATTEMPTS`）对齐。
 ///
 /// 比原地重发那档更宽是刻意的：换号的成本主要在「等到下一个可用账号」，
 /// 而一个账号失败往往说明它这份额度确实不通，多换几个比快速失败更符合预期。
-pub const DEFAULT_RETRY_SWITCH_COUNT: i64 = 5;
+pub const DEFAULT_RETRY_SWITCH_COUNT: i64 = 32;
 /// 重试间隔默认值：5 秒
 pub const DEFAULT_RETRY_INTERVAL_SECONDS: i64 = 5;
 

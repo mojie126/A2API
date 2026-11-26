@@ -42,3 +42,19 @@ pub(crate) fn notify(change: Change) {
 pub(crate) fn subscribe() -> watch::Receiver<Revisions> {
     channel().subscribe()
 }
+
+fn requests_channel() -> &'static watch::Sender<u64> {
+    static REQUESTS: OnceLock<watch::Sender<u64>> = OnceLock::new();
+    REQUESTS.get_or_init(|| watch::channel(0).0)
+}
+
+/// 请求日志写入 / 清理后通知按需订阅的页面，空闲时不必定时轮询数据库。
+pub(crate) fn notify_requests() {
+    requests_channel().send_modify(|revision| {
+        *revision = revision.wrapping_add(1);
+    });
+}
+
+pub(crate) fn subscribe_requests() -> watch::Receiver<u64> {
+    requests_channel().subscribe()
+}

@@ -28,7 +28,8 @@ impl ErrorDecision {
     pub fn refreshes(&self) -> bool { !self.hard_stop && self.action == ErrorAction::RefreshThenSwitch }
     pub fn switches(&self) -> bool { !self.hard_stop && self.action != ErrorAction::ReturnError }
     pub fn skips_provider(&self) -> bool { self.scope == CooldownScope::Provider || self.action == ErrorAction::SwitchProvider }
-    pub fn cooldown(&self) -> bool { self.rule.cooldown != CooldownMode::None && !self.hard_stop }
+    pub fn deprioritizes(&self) -> bool { !self.hard_stop && self.rule.cooldown == CooldownMode::Deprioritize }
+    pub fn cooldown(&self) -> bool { !self.hard_stop && !matches!(self.rule.cooldown, CooldownMode::None | CooldownMode::Deprioritize) }
     pub(crate) fn cooldown_rule(&self, settings: &config::ErrorSettings) -> Option<ErrorRule> {
         if !self.cooldown() { return None; }
         let mut rule = self.rule.clone();
@@ -66,7 +67,6 @@ pub(crate) fn decide_with(snapshot: &config::ErrorPolicySnapshot, provider: &str
     };
     let account_model = matches!(code.as_str(), "account_model_unavailable" | "account_model_permissions_unknown" | "model_not_available_for_account");
     let hard_stop = explicit_stop || evidence::hard_stop(status, &code)
-        || matches!(kind, ErrorKind::BadRequest | ErrorKind::Content)
         || local && status == 501 && !account_model && !matches!(code.as_str(), "unsupported" | "no_method" | "not_implemented"
             | "route_not_supported" | "subscription_sharing_route_not_supported" | "subscription_sharing_unsupported_capability");
     let mut action = if hard_stop { ErrorAction::ReturnError } else { rule.action };
@@ -143,9 +143,18 @@ pub(crate) fn note(telemetry: &super::usage::RequestTelemetry, decision: &ErrorD
         ErrorAction::RefreshThenSwitch => "续期一次，失败再换号", ErrorAction::SwitchProvider => "跳过提供商",
         ErrorAction::ReturnError => "直接返回错误",
     };
+    let time_source = if decision.deprioritizes() {
+        "sink"
+    } else if !decision.cooldown() {
+        "none"
+    } else if decision.reset_at.is_some() {
+        "upstream"
+    } else {
+        "fallback"
+    };
     telemetry.note_error_policy(json!({ "ruleId": decision.rule.id, "ruleName": decision.rule.name,
         "kind": decision.kind, "action": decision.action, "scope": decision.scope,
-        "resetAt": decision.reset_at, "timeSource": if !decision.cooldown() { "none" } else if decision.reset_at.is_some() { "upstream" } else { "fallback" },
+        "resetAt": decision.reset_at, "timeSource": time_source,
         "exception": decision.exception, "reason": reason.unwrap_or(action) }));
 }
 

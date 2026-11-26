@@ -114,6 +114,11 @@ type ProviderFields = { provider?: string; providerLabel?: string }
  * 一律按空值兜。
  */
 type RequestRow = {
+  /** 物理行号：轻量列表用它补详情（同一 id 可能重复） */
+  rowId?: number
+  id?: string
+  /** false / 缺键 = 列表只带了摘要，打开弹窗时再拉完整行 */
+  detailsLoaded?: boolean
   ts?: number | string | null
   status?: number | string | null
   error?: unknown
@@ -169,8 +174,9 @@ const NO_HOVER = 'hover:[&>td]:bg-transparent'
  * 自己独占的 wbRequestDetail（见文件末尾）。
  */
 type SharedWindow = {
-  /** 三个接口：getStatsRequestRaw / getDebugTraffic 找不到都给 404，终止不在进行中也 404 */
+  /** 四个接口：详情 / 原始正文 / 调试报文找不到都给 404，终止不在进行中也 404 */
   workbuddyDesktop?: {
+    getStatsRequestDetail?: (query: { rowId?: number; id?: string; ts?: number }) => Promise<unknown>
     getStatsRequestRaw(id: string): Promise<unknown>
     getDebugTraffic(id: string): Promise<unknown>
     terminateStatsRequest(id: string): Promise<unknown>
@@ -418,8 +424,9 @@ function attemptResult(item: AttemptDetail): { text: string; className: string }
  * 独立列删掉，正是因为它让表格变宽变形），一行放不下时就截断、悬停看全文，表格不再
  * 因内容多寡变形。重试链的原因与退避间隔同样进 title。
  */
-function AttemptsTable({ row }: { row: RequestRow }) {
+function AttemptsTable({ row, loading }: { row: RequestRow; loading?: boolean }) {
   const details = Array.isArray(row.attemptDetails) ? row.attemptDetails : []
+  if (loading && !details.length) return <span className='text-muted-foreground'>{t('正在加载明细…')}</span>
   if (!details.length) return <>-</>
   const attempts = Number(row.attempts) || 1
   return (
@@ -528,7 +535,8 @@ export function RequestRoutePane({ row }: { row: RequestRow & { route: RouteDeci
 
 /* ─── 标签 ①：请求详情（数据全部来自 row）────── */
 
-export function RequestDetailPane({ row }: { row: RequestRow | null }) {
+export function RequestDetailPane({ row, loadingDetail = false }: { row: RequestRow | null; loadingDetail?: boolean }) {
+  if (!row && loadingDetail) return <Empty text={t('正在加载请求详情…')} />
   // 列表在点开前恰好刷新过：行对象按 id 反查不到。详情标签只吃 row，
   // 没有可显示的数据 —— 说清原因让用户关掉重开，比一片空字段诚实
   if (!row) return <Empty text={t('列表数据已刷新，请重试（关闭后重新打开这条详情）')} />
@@ -589,10 +597,12 @@ export function RequestDetailPane({ row }: { row: RequestRow | null }) {
             </div>
           ) : '—'}
         </Field>
-        <Field label={t('尝试明细')}><AttemptsTable row={row} /></Field>
+        <Field label={t('尝试明细')}><AttemptsTable row={row} loading={loadingDetail} /></Field>
         <Field label={t('敏感词')}>
           {/* 命中标签（与列表「敏」标签同一套紫，这里展开写词与次数） */}
-          {Array.isArray(row.sensitiveHits) && row.sensitiveHits.length ? (
+          {loadingDetail && !Array.isArray(row.sensitiveHits) ? (
+            <span className='text-muted-foreground'>{t('正在加载明细…')}</span>
+          ) : Array.isArray(row.sensitiveHits) && row.sensitiveHits.length ? (
             <span className='inline-flex flex-wrap gap-1.5'>
               {row.sensitiveHits.map((hit, index) => (
                 <Badge key={index} variant='sensitive' shape='tag'>
@@ -618,6 +628,11 @@ type RequestDetailProps = {
 }
 
 function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
+  // 轻量列表行只带落屏字段：详情弹窗打开后按 rowId / id 拉一次完整行，
+  // 重试链、敏感词、完整选路快照都从这次响应补进来
+  const [detailRow, setDetailRow] = React.useState<RequestRow | null>(row)
+  const needsDetail = Boolean(row ? row.detailsLoaded === false && (row.rowId || id) : id)
+  const [detailLoading, setDetailLoading] = React.useState(needsDetail)
   const [active, setActive] = React.useState<TabKey>(DEFAULT_TAB)
   const [raw, setRaw] = React.useState<RawState>(null)
   const [debug, setDebug] = React.useState<DebugState>(null)
@@ -632,6 +647,31 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
 
   /** 迟到的响应判定：不是最新一代（或已卸载）就丢弃 */
   const isStale = React.useCallback(() => !aliveRef.current || token !== seq, [token])
+
+  /** 轻量列表行的详情补齐：失败时保留已加载的基础读数，不干扰其余标签 */
+  async function loadDetail() {
+    const getDetail = api().getStatsRequestDetail
+    if (typeof getDetail !== 'function') {
+      setDetailLoading(false)
+      return
+    }
+    try {
+      const rowId = Number(row?.rowId)
+      const ts = Number(row?.ts)
+      const query: { rowId?: number; id?: string; ts?: number } = {}
+      if (Number.isFinite(rowId) && rowId > 0) query.rowId = rowId
+      if (id) query.id = id
+      if (Number.isFinite(ts) && ts > 0) query.ts = ts
+      if (!query.rowId && !query.id) return
+      const response = await getDetail(query)
+      if (isStale() || !isPlainObject(response)) return
+      setDetailRow(previous => ({ ...(previous || {}), ...(response as RequestRow), detailsLoaded: true }))
+    } catch {
+      // 详情补齐失败不弹错：行内已有的基础读数仍可看
+    } finally {
+      if (!isStale()) setDetailLoading(false)
+    }
+  }
 
   /** 下游原文（标签 ②）：404 与失败收敛为同一个空态（原因对用户是同一件事） */
   async function loadRaw() {
@@ -675,9 +715,10 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
     }
   }
 
-  // 打开即并行拉两个数据源（旧实现的 open() 同样是打头就发两条）
+  // 打开即并行拉详情、下游原文与调试报文
   React.useEffect(() => {
     aliveRef.current = true
+    if (needsDetail) void loadDetail()
     if (id) { void loadRaw(); void loadDebug() }
     else { setRaw('gone'); setDebug('gone') }
     return () => { aliveRef.current = false }
@@ -697,7 +738,7 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
   /** 切换标签：只切显示，不发请求、不重建 pane */
   function switchTab(next: TabKey) {
     if (next === 'raw' && !isPlainObject(debug)) return // 标签还没出现，点不到就不用防
-    if (next === 'route' && !hasRoute(row)) return
+    if (next === 'route' && !hasRoute(detailRow)) return
     if (next === active) return
     const body = bodyRef.current
     if (body) scrollTops.current[active] = body.scrollTop
@@ -713,7 +754,7 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
    * 展示原因并放开按钮。
    */
   async function handleTerminate() {
-    if (!id || !isRunning(row)) return
+    if (!id || !isRunning(detailRow)) return
     const ask = shared().wbConfirm?.ask
     if (!ask) return
     // 危险操作走自绘确认弹窗（原生 confirm 在 Tauri WebView 里不弹窗，见 app.js）
@@ -740,7 +781,7 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
   }
 
   const showRaw = isPlainObject(debug)
-  const showRoute = hasRoute(row)
+  const showRoute = hasRoute(detailRow)
   // 选项集合只在「原始报文 / 路由回放是否可用」翻转时换引用，免得每次渲染都换数组把
   // 分段控件的测量 effect 打醒
   const tabOptions = React.useMemo(
@@ -766,9 +807,9 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
           {/* 四个 pane 常驻（用 hidden 切显示，不卸载）：切换标签时 pane 的 DOM 与展开态
               原样保留，滚动位置由上面的 layout effect 还原。pane 不标 role="tabpanel" ——
               分段控件是 radiogroup 语义（不是 tablist），孤立的 tabpanel 是残缺结构 */}
-          <section hidden={active !== 'detail'}><RequestDetailPane row={row} /></section>
+          <section hidden={active !== 'detail'}><RequestDetailPane row={detailRow} loadingDetail={detailLoading} /></section>
           {showRoute ? (
-            <section hidden={active !== 'route'}><RequestRoutePane row={row} /></section>
+            <section hidden={active !== 'route'}><RequestRoutePane row={detailRow as RequestRow & { route: RouteDecision }} /></section>
           ) : null}
           <section hidden={active !== 'preview'}><PreviewPane state={raw} /></section>
           {showRaw ? (
@@ -781,7 +822,7 @@ function RequestDetail({ id, row, token, onClose }: RequestDetailProps) {
           <span className='min-w-0 text-[11.5px] text-muted-foreground'>{hint}</span>
           <div className='mr-auto' />
           {/* 终止只在行仍进行中时出现（旧实现用 hidden 切，这里条件渲染） */}
-          {isRunning(row) ? (
+          {isRunning(detailRow) ? (
             <Button variant='destructive' disabled={terminate !== 'idle'}
               onClick={() => { void handleTerminate() }} title={t('断开上游连接，明细记为「请求已被手动终止」')}>
               {t('终止请求')}

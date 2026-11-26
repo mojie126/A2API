@@ -885,6 +885,9 @@ const BRIDGE_JS: &str = r#"
     // 筛选条件是可选对象，复用上面 toQuery 的「空值跳过」语义：
     // 清空的输入框不该变成 `?model=` 这种永不命中的条件
     getStatsRequests: query => call('GET', '/api/stats/requests' + toQuery(query)),
+    // 单条请求的完整详情：列表在 view=list 下不返回重试链 / 敏感词 / 选路快照，
+    // 详情弹窗按 rowId 或 id 补齐；读不到给 404，前端保留已加载的基础读数
+    getStatsRequestDetail: query => call('GET', '/api/stats/requests/detail' + toQuery(query)),
     // 筛选下拉的候选清单（出现过的模型 / 提供商）。不带参数、不随筛选变化 ——
     // 它只在进页面时拉一次（理由见 api::stats_api::stats_request_filters）。
     // 读不到时前端只保留「全部」选项，不弹错（筛选器退化成不可用，列表照常）

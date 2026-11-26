@@ -25,6 +25,8 @@ import { RequestCell, headRow, isOk, isRunning, uniqueRowKeys, providerLabelOf, 
 import { getStore as getAccountsStore, subscribe as subscribeAccounts } from './accounts-store'
 import { phaseOf, phaseLabelOf, phaseElapsedText, phaseBadgeHtml, phaseElapsedLineHtml } from './requests/request-phase'
 import { PageAutoRefresh, pageRefreshStore, usePageAutoRefresh } from './page-auto-refresh'
+import { requestDirect } from './assistant-api'
+import { subscribeScopedLiveRefresh, type ScopedRefreshController } from '../../../ui-shared/page-live-refresh'
 
 type RequestQueryResult = {
   entries?: RequestEntry[]; total?: number; matched?: number
@@ -247,6 +249,8 @@ function queryParams(): string {
   const params = filterParams()
   params.set('offset', String(current.offset))
   params.set('limit', String(current.size))
+  // 列表只取落屏所需列，重试链 / 敏感词 / 完整选路快照由详情接口按需补
+  params.set('view', 'list')
   return params.toString()
 }
 
@@ -335,6 +339,7 @@ function RequestsPage() {
 
   const afterRedrawRef = React.useRef(false)
   const loadingRef = React.useRef(0)
+  const liveRef = React.useRef<ScopedRefreshController | null>(null)
 
   const applyFilters = React.useCallback((patch: Partial<Filters>): Filters => {
     current.filters = { ...current.filters, ...patch }
@@ -408,6 +413,7 @@ function RequestsPage() {
       }
     } finally {
       loadingRef.current -= 1
+      liveRef.current?.markLoaded()
     }
   }, [applyOffset, paint, paintError, restoreSavedFilters])
 
@@ -466,20 +472,30 @@ function RequestsPage() {
   }, [headSignature])
 
   React.useEffect(() => {
-    if (!auto.enabled || auto.ms <= 0) return
-    const timer = window.setInterval(() => {
-      if (document.hidden || shared().wbApp?.currentPage !== 'requests') return
-      // 详情弹窗打开期间暂停自动刷新：重绘下层会让遮罩与弹窗重新合成，高负载下
-      // 表现为「弹窗一开就迟缓」；弹窗关闭后下一轮自然恢复（与账号页 / 日志页同一判据）。
-      if (isModalActive()) return
-      // 悬停面板开着时暂停这一轮：重绘会换掉锚点节点，用户正在读的浮层
-      // 不应被自动刷新抢走。面板收起后下一轮自然恢复。
-      if (shared().wbRequestHover?.isOpen?.()) return
-      if (polling || loadingRef.current > 0) return
-      polling = true
-      void loadPanel({ silent: true }).finally(() => { polling = false })
-    }, auto.ms)
-    return () => { window.clearInterval(timer) }
+    const controller = subscribeScopedLiveRefresh({
+      scope: 'requests',
+      enabled: auto.enabled,
+      intervalMs: auto.ms,
+      isActive: () => !document.hidden && shared().wbApp?.currentPage === 'requests',
+      open: (path, signal) => requestDirect(path, { method: 'GET', signal }),
+      onRefresh: async () => {
+        // 详情弹窗打开期间暂停刷新：重绘下层会让遮罩与弹窗重新合成，高负载下
+        // 表现为「弹窗一开就迟缓」；弹窗关闭后下一次事件或兜底节拍自然恢复。
+        if (isModalActive()) return
+        // 悬停面板开着时暂停这一轮：重绘会换掉锚点节点，用户正在读的浮层
+        // 不应被自动刷新抢走。
+        if (shared().wbRequestHover?.isOpen?.()) return
+        if (polling || loadingRef.current > 0) return
+        polling = true
+        try { await loadPanel({ silent: true }) } finally { polling = false }
+      },
+      windowEvents: ['wb:page'],
+    })
+    liveRef.current = controller
+    return () => {
+      liveRef.current = null
+      controller.stop()
+    }
   }, [auto.enabled, auto.ms, loadPanel])
 
   React.useLayoutEffect(() => {

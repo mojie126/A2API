@@ -114,7 +114,7 @@ const INFLIGHT_WAIT_MS: u64 = 45_000;
 /// Node 版靠 `pickNextAccount` 返回 null 收尾 —— 每次轮换都会往 triedIds 里
 /// 加一个账号，而账号上限是 20，所以必然收敛。这里额外加一个轮数上限兜底：
 /// 万一账号数据被手工改出「同一个 id 出现两次」之类的怪状，宁可报错也不要空转。
-pub(super) const MAX_ROUTE_ATTEMPTS: usize = 32;
+pub(super) const MAX_ROUTE_ATTEMPTS: usize = 100;
 
 /// 在途请求的完成信号（去重队列用）。
 ///

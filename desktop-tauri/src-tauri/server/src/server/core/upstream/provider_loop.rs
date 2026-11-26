@@ -674,6 +674,11 @@ async fn attempt_queue(
     // 同样顺延（粘性不等于无条件）。
     let conv_key = super::route_state::RouteState::conversation_key(ctx.client_headers, &ctx.body);
     let sticky_generation = service.route.sticky_generation();
+    let sticky = super::error_policy_finish::StickyContext {
+        key: &conv_key,
+        model: &model,
+        generation: sticky_generation,
+    };
     let sticky_source = super::route_state::RouteState::conversation_source(ctx.client_headers, &ctx.body);
     if !conv_key.is_empty() {
         let mut decision = json!({
@@ -851,12 +856,15 @@ async fn attempt_queue(
             match attempt_custom(service, ctx, target, slot, connections, degraded, &mut budget).await {
                 Ok(outcome) => {
                     if let Some(account_id) = custom_account_id.as_deref() {
+                        let clear_model = failed_target.account.as_ref()
+                            .map(|account| cooldown_keys.for_account(account))
+                            .unwrap_or_else(|| cooldown_keys.for_provider(&failed_target.provider));
                         service.route.sticky_bind(
                             &conv_key, &model, &attempt_key, sticky_source, logging::now_ms(),
                             ctx.routing.settings.sticky.ttl_ms().unwrap_or(0), sticky_generation,
                         );
                         service.route.backoff_clear(account_id);
-                        service.route.sink_clear(account_id);
+                        service.route.sink_clear_scoped(account_id, &failed_target.provider, &clear_model);
                     }
                     return Ok(outcome);
                 },
@@ -874,7 +882,7 @@ async fn attempt_queue(
                     }
                     let mut error = error;
                     if super::error_policy_finish::finish_failure(service, ctx, provider_ids, &cooldown_keys,
-                        &failed_target, &mut error, &mut tried_ids, &mut switches_left, switch_total) {
+                        &failed_target, &mut error, &mut tried_ids, &mut switches_left, switch_total, sticky) {
                         last_error = Some(error); continue 'accounts;
                     }
                     return Err(error);
@@ -937,12 +945,15 @@ async fn attempt_queue(
             {
                 Ok(outcome) => {
                     if let Some(account_id) = stateful_account_id.as_deref() {
+                        let clear_model = failed_target.account.as_ref()
+                            .map(|account| cooldown_keys.for_account(account))
+                            .unwrap_or_else(|| cooldown_keys.for_provider(provider_id));
                         service.route.sticky_bind(
                             &conv_key, &model, &attempt_key, sticky_source, logging::now_ms(),
                             ctx.routing.settings.sticky.ttl_ms().unwrap_or(0), sticky_generation,
                         );
                         service.route.backoff_clear(account_id);
-                        service.route.sink_clear(account_id);
+                        service.route.sink_clear_scoped(account_id, provider_id, &clear_model);
                     }
                     return Ok(crate::server::core::plugin_host::hold_adapter(outcome, adapter_handle));
                 },
@@ -971,7 +982,7 @@ async fn attempt_queue(
                     }
                     let mut error = error;
                     if super::error_policy_finish::finish_failure(service, ctx, provider_ids, &cooldown_keys,
-                        &failed_target, &mut error, &mut tried_ids, &mut switches_left, switch_total) {
+                        &failed_target, &mut error, &mut tried_ids, &mut switches_left, switch_total, sticky) {
                         last_error = Some(error); continue 'accounts;
                     }
                     return Err(error);
@@ -1233,7 +1244,7 @@ async fn attempt_queue(
                         if account_unavailable || error.status_code == 501 {
                             let mut error = error;
                             if super::error_policy_finish::finish_failure(service, ctx, provider_ids, &cooldown_keys,
-                                &target, &mut error, &mut tried_ids, &mut switches_left, switch_total) {
+                                &target, &mut error, &mut tried_ids, &mut switches_left, switch_total, sticky) {
                                 last_error = Some(error); continue 'accounts;
                             }
                             return Err(error);
@@ -1430,7 +1441,7 @@ async fn attempt_queue(
                                 .breaker_success(account_id, route_settings.breaker_success_threshold);
                         }
                         service.route.backoff_clear(account_id);
-                        service.route.sink_clear(account_id);
+                        service.route.sink_clear_scoped(account_id, provider_id, &wire_model);
                         // 这次转发成功 = 账号的登录态**此刻确实可用**：清掉可能
                         // 存在的「需要重新登录」标记（用户可能已经在别处重新登录
                         // 过，或者之前那次 401 是上游抖动）。
@@ -1685,7 +1696,7 @@ async fn attempt_queue(
                     if ctx.telemetry.replay_guard().blocked() { return Err(failure.error); }
                     let mut error = failure.error;
                     if super::error_policy_finish::finish_failure(service, ctx, provider_ids, &cooldown_keys,
-                        &target, &mut error, &mut tried_ids, &mut switches_left, switch_total) {
+                        &target, &mut error, &mut tried_ids, &mut switches_left, switch_total, sticky) {
                         last_error = Some(error); continue 'accounts;
                     }
                     return Err(error);
@@ -1790,7 +1801,7 @@ async fn attempt_queue(
                 super::error_policy::attach(&mut error, &decision);
                 ctx.telemetry.finish_last_attempt(Some(i64::from(error.status_code)), Some(&error.message));
                 if super::error_policy_finish::finish_failure(service, ctx, provider_ids, &cooldown_keys,
-                    &target, &mut error, &mut tried_ids, &mut switches_left, switch_total) {
+                    &target, &mut error, &mut tried_ids, &mut switches_left, switch_total, sticky) {
                     last_error = Some(error); continue 'accounts;
                 }
                 return Err(error);

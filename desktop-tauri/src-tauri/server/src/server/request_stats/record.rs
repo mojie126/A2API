@@ -157,7 +157,7 @@ pub struct RequestEntry {
     /// 「重试」列只能显示一个没有信息量的「重试」标记。本字段就是那段历史。
     ///
     /// 条数上限：采集侧保证 `attempt_details.len() <= attempts`，而 `attempts`
-    /// 的上界是 `MAX_ROUTE_ATTEMPTS + 1`（32+1）。采集侧另有
+    /// 的上界是 `MAX_ROUTE_ATTEMPTS + 1`（100+1）。采集侧另有
     /// `MAX_ATTEMPT_DETAILS`（24）的体积闸 —— 截断时明细会比 `attempts` 短，
     /// 前端据此显示「只保留前 N 条」（见 requests-panel）。
     ///
@@ -882,4 +882,52 @@ pub struct RequestQuery {
     pub start: Option<i64>,
     /// 结束毫秒时间戳（**开**区间上界）
     pub end: Option<i64>,
+    /// `view=list` 时只查列表展示列与轻量标记，大字段（路由回放 / 重试链 / 脱敏词 / 证据）点开详情再查
+    pub list_only: bool,
+}
+
+/// 列表页轻量行：不解码 `route` / `attempt_details` / `sensitive_hits` 大字段，
+/// 只保留展示列与摘要标记，识图信息从 `route` 里单独取出小对象。
+pub(super) struct RequestListRow {
+    pub row_id: i64,
+    pub id: String,
+    pub ts: i64,
+    pub model: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub status: i64,
+    pub duration_ms: i64,
+    pub first_response_ms: Option<i64>,
+    pub attempts: i64,
+    pub error: Option<String>,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub provider: String,
+    pub client_model: String,
+    pub upstream_model: String,
+    pub client_reasoning: String,
+    pub upstream_reasoning: String,
+    pub phase: String,
+    pub phase_started_at: Option<i64>,
+    pub is_test: bool,
+    pub client: String,
+    pub api_key_id: String,
+    pub api_key_name: String,
+    pub api_key_source: String,
+    pub credit: Option<f64>,
+    pub has_route: bool,
+    /// `route.visionCompatibility` 的小对象（没有时为 null）
+    pub vision: Value,
+    pub has_sensitive_hits: bool,
+    pub has_process_facts: bool,
+    pub internal_retries: i64,
+    pub client_evidence: String,
+    pub identified_client: String,
+    pub outbound_client: String,
+    pub outbound_user_agent: String,
+    pub protocol: String,
+    pub egress_kind: String,
+    pub egress_ip: String,
 }

@@ -20,14 +20,14 @@ export function errorScenarios(t: ErrorTranslate): ErrorScenario[] {
   ]
 }
 export type ErrorPreviewInput = { scenario: string; provider: string; model: string; started: boolean; uncertain: boolean; pinned: boolean; switchesUsed: number; resendsUsed: number; strikes: number }
-export type ErrorPreview = { title: string; stopped: boolean; cooldown: number; source: string; rule: ErrorRule; steps: { title: string; detail: string }[]; resendsLeft: number; switchesLeft: number }
+export type ErrorPreview = { title: string; stopped: boolean; cooldown: number; deprioritize: number; source: string; rule: ErrorRule; steps: { title: string; detail: string }[]; resendsLeft: number; switchesLeft: number }
 
 export function simulateError(settings: ErrorSettings, input: ErrorPreviewInput, t: ErrorTranslate): ErrorPreview {
   const scenario = errorScenarios(t).find(item => item.id === input.scenario) || errorScenarios(t)[0]
   const rule = settings.overrides.find(item => item.enabled && item.kind === scenario.kind && (item.provider === '*' || item.provider === input.provider)
     && (!item.model || item.model === input.model) && (!item.code || item.code === scenario.code) && (!item.statuses.length || item.statuses.includes(scenario.status)))
     || settings.rules.find(item => item.enabled && item.kind === scenario.kind) || settings.rules.find(item => item.kind === 'unknown')!
-  const result: ErrorPreview = { title: actionLabels(t)[rule.action], stopped: false, cooldown: 0, source: t('不冷却'), rule, steps: [],
+  const result: ErrorPreview = { title: actionLabels(t)[rule.action], stopped: false, cooldown: 0, deprioritize: 0, source: t('不冷却'), rule, steps: [],
     resendsLeft: Math.max(0, settings.resends - input.resendsUsed), switchesLeft: Math.max(0, settings.switches - input.switchesUsed) }
   const stop = (message: string) => { result.title = t('结束本次请求'); result.stopped = true; result.steps.push({ title: result.title, detail: message }); return result }
   if (input.started) return stop(t('回答已经交付给客户端，不从头重发或换号拼接另一份回答。'))
@@ -35,18 +35,28 @@ export function simulateError(settings: ErrorSettings, input: ErrorPreviewInput,
   if (scenario.local) return stop(t('错误来自网关自身缺少能力。换其他账号或提供商不能补齐宿主功能。'))
   result.steps.push({ title: t('识别错误'), detail: `HTTP ${scenario.status} · ${kindLabels(t)[scenario.kind]} · ${scenario.code}` })
   result.steps.push({ title: ruleLabel(rule, t), detail: actionLabels(t)[rule.action] })
-  if (scenario.kind === 'bad_request' || scenario.kind === 'content') return stop(t('保留原始状态码与原因，不消耗重试次数，也不把账号标记为额度不足。'))
   const scopeOrder = { auto: 0, model: 0, account: 1, provider: 2 }
   const scope = rule.scope === 'auto' || scopeOrder[rule.scope] < scopeOrder[scenario.scope] ? scenario.scope : rule.scope
-  let cooling = rule.cooldown === 'protection' ? settings.backoff ? settings.backoffSeconds : 0 : rule.cooldown === 'none' ? 0 : rule.fallbackSeconds
-  if (cooling && (rule.exponential || rule.cooldown === 'protection')) cooling = Math.min(cooling * 2 ** Math.max(0, input.strikes - 1), rule.cooldown === 'protection' ? settings.backoffCapSeconds : rule.fallbackCapSeconds)
-  const floor = scenario.kind === 'rate_limit' || scenario.kind === 'quota' ? settings.cooldownFloorSeconds : 0
-  result.cooldown = cooling ? Math.max(floor, scenario.seconds || 0, rule.cooldown === 'upstream' && scenario.seconds !== null ? 0 : cooling) : 0
-  result.source = result.cooldown ? scenario.seconds !== null ? t('上游恢复时间') : t('当前规则的兜底时间（不是上游重置时间）') : t('不冷却')
+  if (rule.cooldown === 'deprioritize') {
+    let deprioritizeSecs = rule.fallbackSeconds
+    if (rule.exponential) deprioritizeSecs = Math.min(deprioritizeSecs * 2 ** Math.max(0, input.strikes - 1), rule.fallbackCapSeconds)
+    result.deprioritize = deprioritizeSecs
+    result.source = t('优先级调到最低（成功一次提前恢复）')
+  } else {
+    let cooling = rule.cooldown === 'protection' ? settings.backoff ? settings.backoffSeconds : 0 : rule.cooldown === 'none' ? 0 : rule.fallbackSeconds
+    if (cooling && (rule.exponential || rule.cooldown === 'protection')) cooling = Math.min(cooling * 2 ** Math.max(0, input.strikes - 1), rule.cooldown === 'protection' ? settings.backoffCapSeconds : rule.fallbackCapSeconds)
+    const floor = scenario.kind === 'rate_limit' || scenario.kind === 'quota' ? settings.cooldownFloorSeconds : 0
+    result.cooldown = cooling ? Math.max(floor, scenario.seconds || 0, rule.cooldown === 'upstream' && scenario.seconds !== null ? 0 : cooling) : 0
+    result.source = result.cooldown ? scenario.seconds !== null ? t('上游恢复时间') : t('当前规则的兜底时间（不是上游重置时间）') : t('不冷却')
+  }
   const next = () => {
-    if (result.cooldown) result.steps.push({ title: t('记录 {time}冷却', { time: duration(result.cooldown, t) }), detail: `${scopeLabels(t)[scope]} · ${result.source}` })
-    if (rule.action === 'return_error') return stop(t('当前规则直接返回错误；必要的冷却记录保留，不再发送。'))
-    if (input.pinned) return stop(t('这份请求已明确指定账号，不擅自更换指定对象；冷却记录仍保留。'))
+    if (result.deprioritize) {
+      result.steps.push({ title: t('优先级调到最低（{time} 后恢复）', { time: duration(result.deprioritize, t) }), detail: `${scopeLabels(t)[scope]} · ${result.source}` })
+    } else if (result.cooldown) {
+      result.steps.push({ title: t('记录 {time}冷却', { time: duration(result.cooldown, t) }), detail: `${scopeLabels(t)[scope]} · ${result.source}` })
+    }
+    if (rule.action === 'return_error') return stop(t('当前规则直接返回错误；必要的状态记录保留，不再发送。'))
+    if (input.pinned) return stop(t('这份请求已明确指定账号，不擅自更换指定对象；状态记录仍保留。'))
     if (!result.switchesLeft) return stop(t('换号上限已经用完，429 同样受此上限约束。'))
     result.title = scope === 'provider' || rule.action === 'switch_provider' ? t('跳过提供商，继续选路') : t('换账号，继续请求')
     result.steps.push({ title: result.title, detail: t('选择当前路由中可用且不共享本次限制的对象，消耗 1 次换号次数，剩余 {n} 次。', { n: result.switchesLeft - 1 }) })

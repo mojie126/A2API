@@ -623,7 +623,7 @@
 - 数据库连接锁防重入（`00bfca65`）：`db/mod.rs` 新增线程本地持有栈 `ThreadLockGuard`，`with` / `with_mut` / `with_account_change` / `prepare_credential_source` / `commit_credential_source` / `plugin_state_transaction` 六处入口拦截同线程嵌套取锁，测试环境直接 panic 暴露调用点、生产环境安全降级返回 `None`；本地当前没有任何重入保护，同线程重入会自锁死等到超时
 - 挂起与冷却同时落库（`a4ea2c11`）：`error_policy_finish::persist_account_action` 把「挂起」与「冷却」合并为一个入口，`plugin_forward` 与 `provider_loop` 原先的 `if suspend … else if stop …` 分支互斥，账号既需挂起又需冷却时只落前者；本地两处仍是互斥写法
 - WorkBuddy 与 CatPaw 固定消息条数上限（`a6b551c7`、`c18c34ab`）：官方取消 `512` 条数护栏改由体积与节点上限约束，WorkBuddy 国内版正文上限提至 14 MiB 并支持 `body_resource` 正文通道；本地 `workbuddy_http.rs` 的 `MAX_MESSAGES = 2048` 与 `MAX_BODY = 8 MiB`、`catpaw_turn/input.rs` 的 `MAX_MESSAGES = 512` 均为本地补丁，上游方案更彻底，合并时须同时保留本地 2048 的放宽语义
-- 插件更新与缓存同步（`a4ea2c11`、`d98f21f6`）：脚本插件安装/更新成功后由 `updates::record_installed` 直接写入该条目的最新状态、卸载时 `remove_entry` 清理，替代原先 `wake(true)` 整轮强制重算；刷新期间若本地登记已变化则保留磁盘缓存结果，避免旧快照覆盖新装插件；安装 GitHub 插件时优先复用目录缓存的提交 SHA（`catalog::github_commit_for`），但更新与重装一律实时解析、绝不回退到旧缓存，防止静默装回旧提交后继续提示可更新
+- 插件更新与缓存同步（`a4ea2c11`、`d98f21f6`）：脚本插件安装/更新成功后由 `updates::record_installed` 直接写入该条目的最新状态、卸载时 `remove_entry` 清理，替代原先 `wake(true)` 整轮强制重算；刷新期间若本地登记已变化则保留磁盘缓存结果，避免旧快照覆盖新装插件；安装 GitHub 插件时优先复用目录缓存的提交 SHA（`catalog::github_commit_for`），但更新与重装一律实时解析、绝不回退到旧缓存，防止静默装回旧提交后继续提示可更新（2026-11-26 已实施即时写入与登记变化保护，GitHub 提交缓存复用仍按本地既有取舍不跟）
 - 单提供商插件启停归一（`a4ea2c11`）：包级 `enabled` 与唯一提供商子开关历史上可矛盾，读入、`set_pack_enabled`、`set_provider_enabled`、安装与脚本插件登记读写统一折合，避免打开包开关后被隐藏的子开关卡住
 - 凭证维护动态提前量（`d20e8501`）：新增 `maintenance_lead_ms`（维护间隔加 5 分钟缓冲）与适配器 `check_credentials_expiring_within`，解决默认 10 分钟间隔下各家 3～5 分钟临期窗口经常「上一轮嫌早、下一轮已过期」；转发按需续期仍走各家原窗口。同时 `refresh_checked` 的「记录未推进即失败」判定在本地被弱化为仅对声明过有效期的账号生效（`refresh_advanced`），合并时须保留本地这一豁免
 - 就绪闸门 1 毫秒时钟边界（`811a4f1d`）：官方把写侧改为注入时钟 `hold_at`；本仓库 2026-11-24 已用同一修法落地，无需再跟进
@@ -631,8 +631,8 @@
 
 第二优先（性能与内存，建议评估后合并）：
 
-- 请求日志轻量列表与按需详情（`26c38327`、`f0da2b5d`）：`RequestQuery` 新增 `view=list` 与 `RequestListRow`，列表查询跳过 `route`、`attempt_details`、`sensitive_hits` 与识别证据等大字段，详情走新接口 `/api/stats/requests/detail`；本地列表仍解码整行
-- 请求日志事件驱动与筛选缓存（`f0da2b5d`、`a4ea2c11`、`c445c90e`）：`panel_events` 新增 `notify_requests` / `subscribe_requests` 两个主题，写入点（收尾、起行、在途更新、清理）主动通知；新增 `request_stats/filters_cache.rs` 缓存模型、上游模型、提供商、客户端与 Key 的筛选候选，空闲时零轮询；本地仅有一个通用 `Change` 主题，请求页仍是 3 秒定时轮询
+- 请求日志轻量列表与按需详情（`26c38327`、`f0da2b5d`）：`RequestQuery` 新增 `view=list` 与列表轻量行，列表查询跳过重试链、敏感词与完整选路快照，详情走新接口 `/api/stats/requests/detail`；本地列表仍解码整行（2026-11-26 已实施，识图信息单独取 `route.visionCompatibility` 小对象，客户端证据保留）
+- 请求日志事件驱动与筛选缓存（`f0da2b5d`、`a4ea2c11`、`c445c90e`）：`panel_events` 新增 `notify_requests` / `subscribe_requests` 两个主题，写入点（收尾、起行、在途更新、清理）主动通知；新增 `request_stats/filters_cache.rs` 缓存模型、上游模型、提供商、客户端与 Key 的筛选候选，空闲时零轮询；本地仅有一个通用 `Change` 主题，请求页仍是 3 秒定时轮询（2026-11-26 已实施，前端 `page-live-refresh` 按事件刷新并保留断线兜底与弹窗期间暂停刷新的本地约束）
 - 日志查询与统计移入阻塞线程池（`b9c8fa05`）：`logs_api.rs` 的 `query_logs`、`stats_logs`、`download_logs` 与 `stats_api.rs` 的 `filter_options`、详情读取均改 `spawn_blocking`；本地 `logs_api.rs` 仍同步执行
 - 模型元数据启动预热（`aee0fb29`）：`model_meta::install` 在启动阶段直接读一次 `kv` 缓存并写入内存快照，读路径不再触碰数据库锁，避免历史费用回填等持锁链路重入；本地 `install` 只存句柄，首次访问才读库
 - 静态资源分档缓存（`a4ea2c11`）：入口页与 `sw.js` 改 `no-store` 且跳过 304，其余子资源保留 `no-cache` 与 ETag 304，并在服务入口页时给本地静态引用追加 `?v=<版本+指纹>`，破开反向代理与 CDN 的长 `max-age`；本地统一 `no-cache`
@@ -642,8 +642,8 @@
 
 第三优先（行为口径变化，需产品确认后再跟）：
 
-- 错误处理默认值与换号上限（`b9c8fa05`）：默认重发 3、换号由 5 提到 32，`MAX_SWITCHES = 100` 与 `MAX_ROUTE_ATTEMPTS = 100` 对齐；新增 `CooldownMode::Deprioritize`、`v1_default_rules` 到 `default_rules` 的未改动项迁移，以及「已识别请求错误与内容拒绝不再强制只返回错误」的校验放宽。本地为换号 5、`MAX_ROUTE_ATTEMPTS = 32`，整套改动依赖错误策略快照迁移，须整块评估
-- 会话粘滞失败解绑（`b9c8fa05`）：`StickySessions::forget` 按会话键、模型、候选与世代精确解绑，转发链路在重放保护、订阅、构造期失败、429、手动终止与重发预算耗尽等分支逐一调用；本地粘滞表没有解绑入口，失败候选会继续被粘住
+- 错误处理默认值与换号上限（`b9c8fa05`）：默认重发 3、换号由 5 提到 32，`MAX_SWITCHES = 100` 与 `MAX_ROUTE_ATTEMPTS = 100` 对齐；新增 `CooldownMode::Deprioritize`、`v1_default_rules` 到 `default_rules` 的未改动项迁移，以及「已识别请求错误与内容拒绝不再强制只返回错误」的校验放宽。本地为换号 5、`MAX_ROUTE_ATTEMPTS = 32`，整套改动依赖错误策略快照迁移，须整块评估（2026-11-26 已实施，未引入依赖插件申报的 `PluginErrorRule` 与 `resolve_with`，仅迁移全局规则与降权窗口）
+- 会话粘滞失败解绑（`b9c8fa05`）：`StickySessions::forget` 按会话键、模型、候选与世代精确解绑，转发链路在重放保护、订阅、构造期失败、429、手动终止与重发预算耗尽等分支逐一调用；本地粘滞表没有解绑入口，失败候选会继续被粘住（2026-11-26 已实施，统一在 `finish_failure` 入口解绑）
 - 选路排队候选（`b9c8fa05`）：`plan_route` 把「账号可用但并发已满」的候选由 `blocked` 移入 `ordered` 队尾并标 `concurrency`，本地容量准入已有等槽位循环，改动只影响面板展示口径与候选顺延
 - 插件登录文件字段与短信人机验证契约（`b9c8fa05`）：`LoginMethodMetadata` 新增 `file`（字段、接受类型、字节上限、二进制标记）与 `login.sms.alicom4.v1` 能力校验；本地已有短信人机验证链路，字段校验可单独移植
 
@@ -751,6 +751,14 @@
 - 根因二：请求日志首屏用 `silent` 加载，静默分支在弹窗或悬停面板活动时直接返回、失败也不落错误，被挡一次就没有重试机会
 - 处置：`DialogContent` / `SheetContent` 新增 `pauseBackground`（默认 true），三处 `keepMounted` 调用传实际打开状态；请求日志首屏改为非静默并承担筛选候选的首次拉取；账号页进入时先主动读一次连接数，弹窗关闭时立即消费积压的面板变更
 - 验证：页面岛 `tsc --noEmit` 无错误，`ui.js` / `login.js` 与手机端产物重建
+
+### 2026-11-26（修复弹窗活跃判定按住实时刷新）
+
+- 现象：上一轮修复后账号页连接数仍不出现；路由页的在途活动有时不流动，请求日志与日志页也不再自动更新
+- 排查：NAS 部署与仓库一致（容器内 `ui.js` 哈希等于 `abb50388` 产物）；本地隔离实例加 mock 流式上游复现，后端 `/api/accounts/connections` 在流期间持续返回非空，手动调用 `wbAccountsView.syncConnections()` 也能正常显示，而浏览器内 `isModalActive()` 返回 true 且页面没有打开中的弹窗
+- 根因：`isModalActive()` 只看 `holdModalActive` 的挂载计数。`DialogContent` / `SheetContent` 的 effect 跟随组件挂载，而调用方常把 `<Dialog open={open}>` 与内容常驻渲染，或 `keepMounted` 在关闭后不释放，计数一旦停在正数，所有以它门控的定时轮询与实时事件就被永久跳过（账号页连接数、路由在途、请求日志、日志页、报表页等）
+- 处置：`isModalActive()` 改为查询真实打开弹窗的 `data-open` 属性（`dialog-content` / `sheet-content` / `alert-dialog-content`），与计数脱钩；`sync` 增加 `documentElement` 就绪判断；没有打开中的弹窗时把计数归零，让后续开关重新对齐
+- 验证：本地同一环境修复后连接数在流开始后自动显示、流结束后自动清空，请求日志侧边徽标随在途请求实时变化
 
 ## 后续同步官方更新
 

@@ -1,6 +1,6 @@
 export type ErrorKind = 'rate_limit' | 'quota' | 'auth' | 'balance' | 'transient' | 'unsupported' | 'bad_request' | 'content' | 'unknown'
 export type ErrorAction = 'switch_account' | 'retry_then_switch' | 'refresh_then_switch' | 'switch_provider' | 'return_error'
-export type CooldownMode = 'upstream' | 'fixed' | 'protection' | 'none'
+export type CooldownMode = 'upstream' | 'fixed' | 'protection' | 'deprioritize' | 'none'
 export type CooldownScope = 'auto' | 'model' | 'account' | 'provider'
 export type ErrorRule = {
   id: string; name: string; kind: ErrorKind; statuses: number[]; code: string; provider: string; model: string; enabled: boolean
@@ -18,7 +18,7 @@ export type ErrorPolicyView = {
 }
 export type ErrorPolicyApi = { load(): Promise<ErrorPolicyView>; save(payload: { settings: ErrorSettings; revision: string }): Promise<ErrorPolicyView> }
 export type ErrorPolicyRecord = { ruleId?: string; ruleName?: string; kind?: ErrorKind; action?: ErrorAction; scope?: CooldownScope;
-  resetAt?: number | null; timeSource?: 'upstream' | 'fallback' | 'none'; exception?: boolean; reason?: string }
+  resetAt?: number | null; timeSource?: 'upstream' | 'fallback' | 'sink' | 'none'; exception?: boolean; reason?: string }
 export type ErrorTranslate = (key: string, variables?: Record<string, string | number>) => string
 export const ERROR_POLICY_CHANGED = 'wb:routing-errors-changed'
 
@@ -44,13 +44,14 @@ export function duration(seconds: number, t: ErrorTranslate): string {
 }
 export function cooldownSummary(rule: ErrorRule, settings: ErrorSettings, t: ErrorTranslate): string {
   if (rule.cooldown === 'none') return t('不冷却')
+  if (rule.cooldown === 'deprioritize') return t('优先级调到最低（{time} 后恢复）', { time: duration(rule.fallbackSeconds, t) })
   if (rule.cooldown === 'protection') return settings.backoff ? t('失败后休息 {time}', { time: duration(settings.backoffSeconds, t) }) : t('不冷却')
   if (rule.cooldown === 'fixed') return t('固定 {time}', { time: duration(rule.fallbackSeconds, t) })
   return t('上游时间，缺失用 {time}', { time: duration(rule.fallbackSeconds, t) })
 }
 export function errorPolicyValidation(settings: ErrorSettings, t: ErrorTranslate): string | null {
   const fields: [number, number, number, string][] = [
-    [settings.resends, 0, 10, t('原账号重发')], [settings.switches, 0, 10, t('最多再换账号')],
+    [settings.resends, 0, 10, t('原账号重发')], [settings.switches, 0, 100, t('最多再换账号')],
     [settings.intervalSeconds, 0, 300, t('重发间隔')], [settings.waitBudgetSeconds, 0, 300, t('累计等待上限')],
     [settings.cooldownFloorSeconds, 1, 60, t('最短限流冷却')], [settings.backoffSeconds, 1, 3600, t('首次休息时间')],
     [settings.backoffCapSeconds, settings.backoffSeconds, 3600, t('连续失败最长休息')], [settings.sinkSeconds, 30, 3600, t('最长保留时间')],

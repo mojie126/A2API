@@ -255,6 +255,11 @@ pub fn panel_router(state: ServerState) -> Router {
             "/api/stats/requests/filters",
             get(api::stats_api::stats_request_filters),
         )
+        // 单条请求的完整详情（轻量列表未返回的重试链 / 敏感词 / 选路快照）
+        .route(
+            "/api/stats/requests/detail",
+            get(api::stats_api::stats_request_detail),
+        )
         // 单条请求的原始正文（预览对话详情弹窗的数据源）。同样要排在通配之前
         .route(
             "/api/stats/requests/raw",

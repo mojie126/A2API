@@ -36,7 +36,7 @@ impl RequestStats {
         let plan = sql::FilterPlan::of(filter);
         // 删除会改变下拉候选清单（raw_only 其实不动明细，但统一标脏最稳），下一次拉取重算
         self.filters_cache.invalidate();
-        self.with_conn_mut(&self.guard(), |conn| {
+        let outcome = self.with_conn_mut(&self.guard(), |conn| {
             let tx = conn.transaction()?;
             let raw = sql::delete_raw_matching(&tx, &plan)?;
             let deleted = if raw_only {
@@ -55,7 +55,13 @@ impl RequestStats {
                 downstream_raw: raw.downstream,
                 upstream_raw: raw.upstream,
             })
-        })
+        });
+        if let Some(result) = &outcome {
+            if result.deleted > 0 || result.raw > 0 {
+                crate::server::core::panel_events::notify_requests();
+            }
+        }
+        outcome
     }
 
     pub fn clear_preview(&self, filter: &RequestQuery) -> Option<Value> {

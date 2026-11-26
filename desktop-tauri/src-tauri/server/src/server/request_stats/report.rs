@@ -602,6 +602,84 @@ pub(super) fn entry_json(entry: &RequestEntry) -> Value {
     value
 }
 
+/// 轻量列表行 → 前端列表契约。
+///
+/// 与 [`entry_json`] 的键名保持一致，省掉重试链、敏感词、完整选路快照等大字段；
+/// 识图标签从 `route.visionCompatibility` 的小对象重建，客户端证据只解析摘要字段。
+pub(super) fn list_entry_json(row: &super::record::RequestListRow) -> Value {
+    let evidence = serde_json::from_str::<crate::server::core::client::ClientEvidence>(&row.client_evidence).ok()
+        .filter(|evidence| !evidence.method.is_empty())
+        .map(|mut evidence| {
+            if evidence.client_id.is_empty() {
+                evidence.client_id = row.identified_client.clone();
+                evidence.client_name = crate::server::core::client::display_name(
+                    &evidence.client_id,
+                    &evidence.client_name,
+                );
+            }
+            evidence
+        });
+    let recorded_client_name = evidence.as_ref().map(|evidence| evidence.client_name.as_str()).unwrap_or("");
+    let mut object = serde_json::Map::with_capacity(40);
+    object.insert("rowId".into(), json!(row.row_id));
+    object.insert("id".into(), json!(row.id));
+    object.insert("ts".into(), json!(row.ts));
+    object.insert("model".into(), json!(row.model));
+    object.insert("accountId".into(), json!(row.account_id));
+    object.insert("accountName".into(), json!(row.account_name));
+    object.insert("status".into(), json!(row.status));
+    object.insert("durationMs".into(), json!(row.duration_ms));
+    object.insert("firstResponseMs".into(), json!(row.first_response_ms));
+    object.insert("attempts".into(), json!(row.attempts));
+    object.insert("error".into(), json!(row.error));
+    object.insert("promptTokens".into(), json!(row.prompt_tokens));
+    object.insert("completionTokens".into(), json!(row.completion_tokens));
+    object.insert("totalTokens".into(), json!(row.total_tokens));
+    object.insert("cacheReadTokens".into(), json!(row.cache_read_tokens));
+    object.insert("credit".into(), json!(row.credit));
+    object.insert("provider".into(), json!(row.provider));
+    object.insert("providerLabel".into(), Value::String(provider_label(&row.provider)));
+    object.insert("clientModel".into(), json!(row.client_model));
+    object.insert("upstreamModel".into(), json!(row.upstream_model));
+    object.insert("clientReasoning".into(), json!(row.client_reasoning));
+    object.insert("upstreamReasoning".into(), json!(row.upstream_reasoning));
+    object.insert("phase".into(), json!(row.phase));
+    object.insert("phaseStartedAt".into(), json!(row.phase_started_at));
+    object.insert("phaseElapsedMs".into(), match row.phase_started_at {
+        Some(started) => json!((now_ms() - started).max(0)),
+        None => Value::Null,
+    });
+    object.insert("isTest".into(), json!(row.is_test));
+    object.insert("client".into(), json!(row.client));
+    object.insert("clientLabel".into(), json!(crate::server::core::client::display_name(
+        &row.client,
+        recorded_client_name,
+    )));
+    object.insert("apiKeyId".into(), json!(row.api_key_id));
+    object.insert("apiKeyName".into(), json!(row.api_key_name));
+    object.insert("apiKeySource".into(), json!(row.api_key_source));
+    object.insert("detailsLoaded".into(), Value::Bool(false));
+    object.insert("hasRoute".into(), Value::Bool(row.has_route));
+    if !row.vision.is_null() {
+        object.insert("route".into(), json!({ "visionCompatibility": row.vision }));
+    }
+    object.insert("hasSensitiveHits".into(), Value::Bool(row.has_sensitive_hits));
+    object.insert("hasProcessFacts".into(), Value::Bool(row.has_process_facts));
+    if row.internal_retries > 0 {
+        object.insert("internalRetries".into(), json!(row.internal_retries));
+    }
+    if let Some(evidence) = evidence {
+        object.insert("clientEvidence".into(), serde_json::to_value(evidence).unwrap_or(Value::Null));
+    }
+    object.insert("identifiedClient".into(), json!(row.identified_client));
+    object.insert("outboundClient".into(), json!(row.outbound_client));
+    object.insert("outboundUserAgent".into(), json!(row.outbound_user_agent));
+    object.insert("protocol".into(), json!(row.protocol));
+    object.insert("egressKind".into(), json!(row.egress_kind));
+    object.insert("egressIp".into(), json!(row.egress_ip));
+    Value::Object(object)
+}
+
 /// 区间级 topModel：按 `tokens` 降序，并列比 `requests`，再并列比名字
 /// （名字兜底是为了结果稳定，不受聚合行内部顺序影响）。
 /// 无数据或所有记录都没带模型名时返回 `null`。

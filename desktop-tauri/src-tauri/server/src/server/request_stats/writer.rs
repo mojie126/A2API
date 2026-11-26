@@ -83,6 +83,9 @@ impl RequestStats {
                 Ok(row_id)
             })
         };
+        if outcome.is_some() {
+            crate::server::core::panel_events::notify_requests();
+        }
         if let Some(event) = limiter_event {
             match outcome {
                 Some(Some(row_id)) => event.committed(row_id),
@@ -117,7 +120,7 @@ impl RequestStats {
         let bounds = self.retention_bounds();
         let maintain = self.should_maintain();
         let guard = self.guard();
-        let _ = self.with_conn_mut(&guard, |conn| {
+        let ok = self.with_conn_mut(&guard, |conn| {
             let tx = conn.transaction()?;
             sql::insert_started_request(&tx, id, ts, model, client_model, client_reasoning, source, is_test)?;
             lifecycle::finish_stale(&tx, stale_cutoff(), now_ms())?;
@@ -126,18 +129,24 @@ impl RequestStats {
                 retention::trim_requests(&tx, bounds.request_count)?;
             }
             tx.commit()
-        });
+        }).is_some();
+        if ok {
+            crate::server::core::panel_events::notify_requests();
+        }
     }
 
     pub fn sweep_stale_running(&self) {
         let bounds = self.retention_bounds();
         let guard = self.guard();
-        let _ = self.with_conn_mut(&guard, |conn| {
+        let ok = self.with_conn_mut(&guard, |conn| {
             let tx = conn.transaction()?;
             lifecycle::finish_stale(&tx, stale_cutoff(), now_ms())?;
             daily::delete_daily_before(&tx, &bounds.daily_key)?;
             tx.commit()
-        });
+        }).is_some();
+        if ok {
+            crate::server::core::panel_events::notify_requests();
+        }
     }
 
     pub fn update_running(&self, id: &str, progress: &RunningProgress) {
@@ -147,6 +156,10 @@ impl RequestStats {
         // 在途进度会刷新上游模型名与提供商：同样核对下拉候选是否出现新值
         self.filters_cache.note_written("", &progress.upstream_model, &progress.provider, "", "");
         let guard = self.guard();
-        let _ = self.with_conn_mut(&guard, |conn| sql::update_running_progress(conn, id, progress));
+        let updated = self.with_conn_mut(&guard, |conn| sql::update_running_progress(conn, id, progress))
+            .unwrap_or(0);
+        if updated > 0 {
+            crate::server::core::panel_events::notify_requests();
+        }
     }
 }

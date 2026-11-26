@@ -31,8 +31,35 @@ pub(super) fn persist_account_action(
     }
 }
 
+/// 一次请求的会话粘滞身份：失败换号后按会话键、模型与世代精确解绑。
+#[derive(Clone, Copy)]
+pub(super) struct StickyContext<'a> {
+    pub key: &'a str,
+    pub model: &'a str,
+    pub generation: u64,
+}
+
+/// 候选失败后立即解除会话粘性绑定（固定指定账号测试时不改动正常会话粘性）。
+pub(super) fn forget_sticky(
+    service: &UpstreamService,
+    ctx: &ProviderContext<'_>,
+    sticky: StickyContext<'_>,
+    candidate: Option<&str>,
+) {
+    if ctx.pinned_account.is_some() {
+        return;
+    }
+    if let Some(candidate) = candidate.filter(|value| !value.is_empty()) {
+        service.route.sticky_forget(sticky.key, sticky.model, candidate, sticky.generation);
+    }
+}
+
 pub(super) fn finish_failure(service: &UpstreamService, ctx: &ProviderContext<'_>, providers: &[&str], keys: &rotate::CooldownKeys<'_>,
-    target: &RouteTarget, error: &mut GatewayError, tried: &mut Vec<String>, switches_left: &mut usize, switch_total: usize) -> bool {
+    target: &RouteTarget, error: &mut GatewayError, tried: &mut Vec<String>, switches_left: &mut usize, switch_total: usize,
+    sticky: StickyContext<'_>) -> bool {
+    // 失败的候选不应继续被粘住：先解绑再走冷却与换号判断，手动终止等提前返回
+    // 的分支同样生效
+    forget_sticky(service, ctx, sticky, target.attempt_key().as_deref());
     let model = error.routing_error.as_ref().map(|decision| decision.model.clone()).unwrap_or_else(|| {
         target.account.as_ref().map(|account| keys.for_account(account)).unwrap_or_else(|| keys.for_provider(&target.provider))
     });
@@ -40,14 +67,23 @@ pub(super) fn finish_failure(service: &UpstreamService, ctx: &ProviderContext<'_
     let decision = error.routing_error.clone().unwrap_or_else(|| error_policy::for_error_with(&ctx.error_policy, &target.provider, &model, error, false));
     error_policy::attach(error, &decision);
     error_policy::note(ctx.telemetry, &decision, None);
-    if decision.hard_stop || ctx.telemetry.replay_guard().blocked() || ctx.telemetry.is_cancelled() || ctx.telemetry.response_started() { return false; }
+    // 已开始输出 / 重放保护只禁止换号，不跳过冷却与降权记账：这一轮的上游
+    // 结果已经确定，失败候选该沉底就要沉底
+    let replay_or_started = ctx.telemetry.replay_guard().blocked() || ctx.telemetry.response_started();
+    if decision.hard_stop || ctx.telemetry.is_cancelled() { return false; }
     if let Some(account) = target.account_id.as_deref() {
-        if let Some(entry) = error_policy::remember_cooldown(service, settings, account, &model, error, &decision) {
+        if decision.deprioritizes() {
+            let until = service.route.deprioritize_mark_scoped(account, &target.provider, &model, decision.scope, &decision.rule, logging::now_ms());
+            if until > logging::now_ms() {
+                error.retry_after_secs.get_or_insert(until.saturating_sub(logging::now_ms()).max(0) as u64 / 1000 + 1);
+            }
+            ctx.telemetry.note_error_policy(json!({ "resetAt": until, "timeSource": "sink" }));
+        } else if let Some(entry) = error_policy::remember_cooldown(service, settings, account, &model, error, &decision) {
             let reset = entry["resetAt"].as_i64().unwrap_or(0);
             if reset > logging::now_ms() { error.retry_after_secs = Some(reset.saturating_sub(logging::now_ms()).max(0) as u64 / 1000 + 1); }
             ctx.telemetry.note_error_policy(json!({ "resetAt": entry["resetAt"], "timeSource": entry["timeSource"] }));
         }
-        if matches!(decision.kind, ErrorKind::RateLimit | ErrorKind::Quota) && settings.sink && ctx.pinned_account.is_none() {
+        if !decision.deprioritizes() && matches!(decision.kind, ErrorKind::RateLimit | ErrorKind::Quota) && settings.sink && ctx.pinned_account.is_none() {
             service.route.sink_mark_for(account, logging::now_ms(), settings.sink_seconds);
         }
         if decision.kind == ErrorKind::Transient && decision.rule.cooldown == crate::server::config::error_policy::CooldownMode::Protection {
@@ -60,6 +96,7 @@ pub(super) fn finish_failure(service: &UpstreamService, ctx: &ProviderContext<'_
             ctx.telemetry.note_error_policy(json!({ "reason": "该账号需要重新登录" }));
         }
     }
+    if replay_or_started { return false; }
     if !decision.switches() { return false; }
     if decision.scope == crate::server::config::error_policy::CooldownScope::Account {
         if let Some(id) = target.account_id.as_deref() {
