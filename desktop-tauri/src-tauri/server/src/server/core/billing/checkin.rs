@@ -98,9 +98,12 @@ pub fn supports_checkin(account: &Value) -> bool {
         }
         // `daily: false` = 这家申报的是签到中心里的**别的卡**，没有每日签到。
         // 不给这一位留出口的话，申报本身就会被当成「有签到」，那张卡之外的
-        // 账号也要被拉进来每天落一条失败。（ZCode 就是这一档：只有「活动
-        // 福利」，每日赠送套餐活动已下架。）
-        return declared.daily;
+        // 账号也要被拉进来每天落一条失败。
+        //
+        // `daily_checkin_enabled` 是 ZCode 两地的运行期开关（设置 `dailyCheckin`）：
+        // 申报的 `daily` 是静态能力，开关是用户此刻的选择，两者都成立才参与
+        return declared.daily
+            && crate::server::core::auto_checkin::daily_checkin_enabled(provider);
     }
     // ── 插件家先分流 ────────────────────────────────────────────
     // 下面那些判据（edition / isGuest / accio 家族）全是**按内置记录形态**
@@ -389,8 +392,10 @@ pub async fn checkin_for(
         // `checkin`），走上面那条插件分支。
         // 智谱清言的签到（每日登录积分 + 活动领取 + 每日任务）已随实现搬到插件，
         // 走上面那条插件分支（`plugin_checkin_capability`）。
-        // ZCode 两地的每日赠送套餐活动已下架，不再参与每日签到；活动福利入口
-        // 继续由签到中心的「活动福利」卡片承载（插件申报 `daily: false`、`plans: true`）。
+        // ZCode 两地的每日赠送套餐活动恢复，签走上面那条插件分支
+        // （`plugin_checkin_capability`）；参与与否由插件设置 `dailyCheckin`
+        // 运行期控制，活动福利入口照常由签到中心的「活动福利」卡片承载
+        // （插件申报 `daily: true`、`plans: true`）。
         // 访客的排除仍在
         // `supports_checkin` 的 `isGuest` 分支里 —— 那是网关侧的集合划分。
         // ModelScope（魔搭）的两个站点：签到 = 调一次登录信息接口

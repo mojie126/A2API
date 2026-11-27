@@ -93,14 +93,18 @@ fn account_display_name(account: &Value) -> String {
 fn out_of_scope_reason(account: &Value) -> &'static str {
     let provider = account_text(account, "provider");
     let guest = account.get("isGuest").and_then(Value::as_bool) == Some(true);
-    // 申报过的家：只有「访客排除」一种情况会让它的账号落到范围外
+    // 申报过的家：访客排除与运行期开关关闭两种情况会让它的账号落到范围外
     // （其余排除条件都是网关侧的内置特判，申报家不会走到）
     if let Some(declared) = crate::server::core::plugin_host::checkin_of(&provider) {
         if declared.exclude_guest && guest {
             return "访客账号没有积分体系";
         }
-        // 申报了 `plans` / `onboarding` / `growth` 但没申报每日签到的家
-        // （ZCode 只有「活动福利」）：理由要说准，别让人以为这家整个没接。
+        // 申报了每日签到、但用户在插件设置里关掉了运行期开关（ZCode 两地）
+        if declared.daily && !crate::server::core::auto_checkin::daily_checkin_enabled(&provider) {
+            return "已在本家设置中关闭每日签到";
+        }
+        // 申报了 `plans` / `onboarding` / `growth` 但没申报每日签到的家：
+        // 理由要说准，别让人以为这家整个没接。
         if !declared.daily && (declared.plans || declared.onboarding || declared.growth) {
             return "本家没有每日签到，请到对应活动或任务标签查看";
         }

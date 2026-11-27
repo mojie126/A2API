@@ -88,13 +88,14 @@ pub fn default_time() -> String {
 ///     见 `providers::modelscope::checkin`。两个站点各打各的网页站，令牌不通用
 ///     （打错得 401）。链路依据是 CPA 的 `modelscope-ratelimit` 插件源码，
 ///     2026-10 实测复核。
-///   - **ZCode 国内版 / 国际版**：上游每日赠送套餐活动已下架，两个 id 已从本清单
-///     移除，仅保留活动福利入口供偶发活动使用，不再参与每日签到
+///   - **ZCode 国内版 / 国际版**：每日赠送套餐活动恢复，参与每日签到。
+///     运行期开关由插件设置 `dailyCheckin` 控制（见 `daily_checkin_enabled`），
+///     关闭后不进入清单也不执行，活动福利入口照常可用
 ///
 /// 这是「有签到或每日活跃任务」的清单，不是「有积分概念」的清单：CatPaw 有积分
 /// 查询但没有签到，因此不在此列 —— 它的账号在批量签到里被算作 `skipped`。
 /// 加一家之前先确认它的签到链路真的存在（一个点了必然报错的复选框比没有更糟）。
-pub const CHECKIN_PROVIDERS: [&str; 17] = [
+pub const CHECKIN_PROVIDERS: [&str; 19] = [
     "workbuddy",
     "workbuddy-intl",
     "raccoon",
@@ -130,6 +131,11 @@ pub const CHECKIN_PROVIDERS: [&str; 17] = [
     // check_in），实测 +100 积分/号/天。幂等靠客户端（idempotencyKey + 上游
     // 的 `claimedToday` 预检），见 `lobsterai::checkin` 的模块头。
     "lobsterai",
+    // ZCode 国内版 / 国际版：每日赠送套餐活动恢复，重新纳入每日签到。
+    // 活动是否有、要不要参与由插件设置 `dailyCheckin` 运行期控制，
+    // 无需为开关发版（见 `daily_checkin_enabled`）。
+    "zcode",
+    "zcode-intl",
 ];
 
 /// 缺省的签到提供商集合（全选 = **已知**清单，不是「此刻可用」清单）。
@@ -153,6 +159,23 @@ pub(crate) fn plugin_supports_daily_checkin(id: &str) -> bool {
     crate::server::core::providers::adapter::adapter_by_id(id)
         .and_then(|adapter| adapter.plugin_checkin_capability())
         == Some(true)
+}
+
+/// ZCode 两地的「参与每日签到」运行期开关（插件设置 `dailyCheckin` 的存储键
+/// `plugin.zcode.dailyCheckin`，两个地区共用）。
+///
+/// 缺省（没有这一格、或值不是布尔）= 开：活动恢复后默认参与。关闭后
+/// [`available_checkin_providers`] 不再列出这家，签到范围判定也返回 false，
+/// 定时与批量签到会跳过它；活动福利入口不受影响。
+/// 读取的是配置内存快照，设置页保存后立即生效，不需要重载插件或发版。
+pub(crate) fn daily_checkin_enabled(id: &str) -> bool {
+    if !matches!(id, "zcode" | "zcode-intl") {
+        return true;
+    }
+    crate::server::config::with_raw(|raw| raw.get("plugin.zcode.dailyCheckin").cloned())
+        .flatten()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
 }
 
 /// 当前**实际可用**的签到提供商清单：内置常量表 + 已装入且申报了签到能力的插件家。
@@ -235,6 +258,7 @@ pub fn available_checkin_providers(_store: &AccountStore) -> Vec<String> {
         .filter(|id| {
             crate::server::core::plugin_host::serves_provider(id)
                 && plugin_supports_daily_checkin(id)
+                && daily_checkin_enabled(id)
         })
         .collect()
 }
@@ -245,15 +269,16 @@ pub fn available_checkin_providers(_store: &AccountStore) -> Vec<String> {
 /// 会让这一家的勾选框再也取消不掉（读完就补回来，界面上表现为「取消勾选没反应」）。
 /// 所以补齐只做一次，靠配置里的版本号记账；版本一旦写上去，用户之后再取消勾选
 /// 就真的生效了。执行点见 `checkin_schedules::extend_providers_once`。
-pub const PROVIDERS_VERSION: i64 = 6;
+pub const PROVIDERS_VERSION: i64 = 7;
 
 /// 「哪一版加入的家」——条目清单的版本低于它 = 这家还没被提供过 ⇒ 补进去。
 /// 版本 1 = 多条目改造上线时的形态（9 家；`qoder-intl` 由 `normalize_providers`
 /// 的存量兼容规则跟着 `qoder` 带上，不在这里重复登记）。
 /// 版本 3 = 智谱清言；版本 4 = ModelScope 的两个站点与 AtomCode；
 /// 版本 5 = LobsterAI（两条 provider PR 各自用了一个号，合起来取并集）；
-/// 版本 6 曾用于 ZCode 两站点，现已因每日赠送套餐活动下架从签到清单移除
-const PROVIDERS_ADDED_IN: [(&str, i64); 7] = [
+/// 版本 6 曾用于 ZCode 两站点但随后活动下架、清单移除；版本 7 = 活动恢复后
+/// 重新补入 ZCode 两站点（参与与否由设置 `dailyCheckin` 运行期控制）
+const PROVIDERS_ADDED_IN: [(&str, i64); 9] = [
     ("officeace", 2),
     ("codearts", 2),
     ("chatglm", 3),
@@ -261,6 +286,8 @@ const PROVIDERS_ADDED_IN: [(&str, i64); 7] = [
     ("modelscope-intl", 4),
     ("atomcode", 4),
     ("lobsterai", 5),
+    ("zcode", 7),
+    ("zcode-intl", 7),
 ];
 
 /// 版本 `version` 之后才加入清单的家（按注册顺序）。空数组 = 这一版没有新家，
@@ -726,5 +753,20 @@ pub fn init_global(service: AutoCheckin) -> AutoCheckin {
 pub fn stop_global() {
     if let Some(service) = GLOBAL.get() {
         service.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{providers_added_after, CHECKIN_PROVIDERS};
+
+    /// 版本 7 重新纳入 ZCode 两站，且确实会补进低于 7 的存量条目
+    #[test]
+    fn zcode_returns_as_a_version_seven_addition() {
+        assert!(CHECKIN_PROVIDERS.contains(&"zcode"));
+        assert!(CHECKIN_PROVIDERS.contains(&"zcode-intl"));
+        let added = providers_added_after(6);
+        assert!(added.iter().any(|id| id == "zcode"));
+        assert!(added.iter().any(|id| id == "zcode-intl"));
     }
 }
