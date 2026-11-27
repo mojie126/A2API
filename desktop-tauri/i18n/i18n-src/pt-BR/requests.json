@@ -174,6 +174,7 @@
   "模型映射：{from} → {to}": "",
   "模型测试": "Teste de modelo",
   "模型管理页操作列那颗「测试」发起的请求：与真实请求同一条转发链路，但不计入报表统计": "Requisição iniciada pelo “Teste” na coluna de ações da página de gerenciamento de modelos: usa a mesma rota de encaminhamento das requisições reais, mas não entra nas estatísticas dos relatórios",
+  "正在加载详情…": "Carregando detalhes…",
   "正在加载明细…": "",
   "正在加载请求日志…": "Carregando logs de requisições…",
   "正在加载请求详情…": "",
